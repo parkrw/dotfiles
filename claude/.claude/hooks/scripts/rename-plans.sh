@@ -38,7 +38,9 @@ while IFS= read -r f; do
     [[ -n "$slug" ]] || continue
 
     base="$(basename "$f" .md)"
-    [[ "$base" == "$slug" ]] && continue
+    # A -N suffix from an earlier collision rename still counts as "already
+    # named": without this, same-heading files reshuffle every session.
+    [[ "$base" == "$slug" || "$base" =~ ^"$slug"-[0-9]+$ ]] && continue
 
     target="$PLANS_DIR/$slug.md"
     if [[ -e "$target" ]]; then
