@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # review-branch.sh <checkout-path> — adversarial fresh-context review of a
-# branch's PR diff (<base>...HEAD) via headless `claude -p`. The sole writer of
-# a review approval, consumed by pre-push's review_gate().
+# branch's PR diff (<base>...HEAD) via a headless agent CLI: `claude -p` by
+# default, `codex exec` with --engine codex. The sole writer of a review
+# approval, consumed by pre-push's review_gate().
 #
 # Why the branch diff and not the staged diff: a squash-merged PR lands as one
 # commit, so the branch diff IS the artifact that ships. Reviewing per commit
@@ -23,12 +24,21 @@
 # session never writes its own approval. Fail-closed: a missing or garbled
 # verdict counts as FAIL.
 #
-# Reviewer model: opus by default. The alias tracks the newest Opus, so a
-# sonnet, opus-4.6, or opus-4.8 author all draw the same top-tier reviewer
-# instead of one weaker than themselves. --model <name> or CLAUDE_REVIEW_MODEL
-# overrides.
+# Reviewer model, claude engine: opus by default. The alias tracks the newest
+# Opus, so a sonnet, opus-4.6, or opus-4.8 author all draw the same top-tier
+# reviewer instead of one weaker than themselves. --model <name> or
+# CLAUDE_REVIEW_MODEL overrides.
+# Reviewer model, codex engine: gpt-5.5, pinned for the same reason as opus —
+# a review must not weaken because a config was retuned for other work. Not
+# gpt-5.5-codex: a ChatGPT-account login is refused that model outright.
+# --model <name> or CODEX_REVIEW_MODEL overrides.
 # Reviewer effort: one level above the author's (low→medium→high→xhigh),
-# capped at xhigh — never max. --bump doubles the step (+2 instead of +1).
+# capped at xhigh — never max. --bump doubles the step (+2 instead of +1). Both
+# CLIs take the same ladder, so the level crosses engines unchanged.
+#
+# A second engine is worth the branching because the two fail differently: a
+# reviewer sharing the author's model and training shares its blind spots, and
+# the whole point of this gate is a reader that is not the author.
 set -euo pipefail
 
 # ---- pure helpers (unit-tested via REVIEW_BRANCH_LIB_ONLY) ----
@@ -68,8 +78,11 @@ cli_model=""   # --model <m>: explicit reviewer model (highest precedence)
 cli_base=""    # --base <ref>: override the resolved default branch
 bump=""        # --bump: double the effort step (+2 instead of +1)
 dry_run=""     # --dry-run: print base/tip/hash/sentinel and stop
+engine="${CLAUDE_REVIEW_ENGINE:-claude}"  # --engine: which CLI reviews
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --engine)  engine="${2:?--engine needs a value}"; shift 2 ;;
+    --engine=*) engine="${1#--engine=}"; shift ;;
     --model)   cli_model="${2:?--model needs a value}"; shift 2 ;;
     --model=*) cli_model="${1#--model=}"; shift ;;
     --base)    cli_base="${2:?--base needs a value}"; shift 2 ;;
@@ -82,7 +95,14 @@ while [[ $# -gt 0 ]]; do
                repo="$1"; shift ;;
   esac
 done
-[[ -n "$repo" ]] || { echo "usage: review-branch.sh <checkout-path> [--base <ref>] [--model <model>] [--bump] [--dry-run]" >&2; exit 1; }
+[[ -n "$repo" ]] || { echo "usage: review-branch.sh <checkout-path> [--engine claude|codex] [--base <ref>] [--model <model>] [--bump] [--dry-run]" >&2; exit 1; }
+
+case "$engine" in
+  claude|codex) ;;
+  *) echo "review-branch: unknown engine '$engine' — claude or codex" >&2; exit 1 ;;
+esac
+command -v "$engine" >/dev/null 2>&1 ||
+  { echo "review-branch: '$engine' is not installed or not on PATH" >&2; exit 1; }
 
 worktree=$(git -C "$repo" rev-parse --show-toplevel)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -114,14 +134,17 @@ done < <(git -C "$worktree" diff --name-only "$base...$tip")
 state="$HOME/.claude/hooks/state"; mkdir -p "$state"
 # Content-keyed: the approval belongs to the diff, not to a checkout path.
 sentinel="$state/review-ok-branch-$hash"
-# Report and live log stay path-keyed so a repo has one readable latest report.
+# Report, live log, and per-engine scratch stay path-keyed so a repo has one
+# readable latest report.
 repokey=$(printf '%s' "$worktree" | shasum -a 256 | awk '{print $1}')
 report="$state/review-branch-$repokey.md"
 live="/tmp/claude-review-branch-$repokey.log"
+stream="$state/review-branch-$repokey.stream.jsonl"
+codex_last="$state/review-branch-$repokey.last"
 
 if [[ -n "$dry_run" ]]; then
-  printf 'worktree=%s\nbase=%s\ntip=%s\ndiff=%s\nsentinel=%s\nlines=%s\ndocs_only=%s\n' \
-    "$worktree" "$base" "$tip" "$hash" "$sentinel" "$branch_lines" "$docs_only"
+  printf 'worktree=%s\nbase=%s\ntip=%s\ndiff=%s\nsentinel=%s\nlines=%s\ndocs_only=%s\nengine=%s\n' \
+    "$worktree" "$base" "$tip" "$hash" "$sentinel" "$branch_lines" "$docs_only" "$engine"
   exit 0
 fi
 
@@ -195,9 +218,14 @@ if [[ -n "${CLAUDE_CODE_SESSION_ID:-}" ]] && command -v jq >/dev/null 2>&1; then
   fi
 fi
 
-# Precedence: --model > CLAUDE_REVIEW_MODEL > opus (default).
+# Precedence, claude: --model > CLAUDE_REVIEW_MODEL > opus (default).
+# Precedence, codex:  --model > CODEX_REVIEW_MODEL > gpt-5.5 (default).
+# The two engines do not share a model namespace, so each carries its own env
+# override; CLAUDE_REVIEW_MODEL=opus would be meaningless to codex.
 if [[ -n "$cli_model" ]]; then
   review_model="$cli_model"
+elif [[ "$engine" == codex ]]; then
+  review_model="${CODEX_REVIEW_MODEL:-gpt-5.5}"
 elif [[ -n "${CLAUDE_REVIEW_MODEL:-}" ]]; then
   review_model="$CLAUDE_REVIEW_MODEL"
 else
@@ -211,17 +239,18 @@ else
   review_effort=$(auto_effort "$base_effort")
 fi
 
-echo "review-branch: author='${caller_model:-?}' effort='${caller_effort:-? (defaulting to medium)}' reviewer='$review_model' review_effort='$review_effort' base=$base ${branch_lines}L docs_only=$docs_only" >&2
+echo "review-branch: author='${caller_model:-?}' effort='${caller_effort:-? (defaulting to medium)}' engine='$engine' reviewer='${review_model:-<codex config default>}' review_effort='$review_effort' base=$base ${branch_lines}L docs_only=$docs_only" >&2
 
 # fable falls back to opus when unavailable rather than erroring out (which
 # under set -e would kill the review and block the push).
 review_fallback=""
 [[ "$review_model" == "fable" ]] && review_fallback="opus"
 
-run_review() {
-  # </dev/null: the prompt is passed as an arg, so claude needs no stdin. Left
-  # open (as under Claude's Bash tool, where fd0 is a non-EOF pipe) the child
-  # can block on a stdin read forever — a silent hang with zero output.
+# </dev/null on both: the prompt is passed as an arg, so neither CLI needs
+# stdin. Left open (as under Claude's Bash tool, where fd0 is a non-EOF pipe)
+# the child blocks on a stdin read forever — codex even announces "Reading
+# additional input from stdin..." and then hangs with no further output.
+run_review_claude() {
   cd "$worktree" && claude -p "$prompt" \
     ${review_model:+--model "$review_model"} \
     ${review_effort:+--effort "$review_effort"} \
@@ -231,37 +260,78 @@ run_review() {
     </dev/null
 }
 
-# stream-json is the SAME generation as the default output — rendering each
-# event as a terse step line costs no extra tokens, it just unbuffers what -p
-# otherwise withholds until the end. No jq -> blocking capture, no live steps.
+# -s read-only is the analogue of the claude side's tool allowlist, and the two
+# are strict in opposite directions: codex may run any command, but the OS
+# sandbox denies every write, so the reviewer cannot edit the tree it judges.
+# -o is codex's documented final-message file. The JSONL stream carries the
+# same text, but only -o is a contract, so the verdict is read from there.
+run_review_codex() {
+  : > "$codex_last"
+  codex exec "$prompt" \
+    -C "$worktree" \
+    -s read-only \
+    ${review_model:+-m "$review_model"} \
+    ${review_effort:+-c model_reasoning_effort="$review_effort"} \
+    -o "$codex_last" \
+    "$@" \
+    </dev/null
+}
+
+# The streaming output is the SAME generation as the default — rendering each
+# event as a terse step line costs no extra tokens, it just unbuffers what the
+# CLIs otherwise withhold until the end. No jq -> blocking capture, no live
+# steps. An empty or garbled capture needs no special case: it carries no
+# VERDICT line, and the verdict check below fails closed on that.
 if command -v jq >/dev/null 2>&1; then
-  stream="$state/review-branch-$repokey.stream.jsonl"
   set +e
-  run_review --output-format stream-json --verbose \
-    | tee "$stream" \
-    | jq -rj --unbuffered '
-        if .type=="system" and .subtype=="init" then
-          "▶ reviewing branch (model=\(.model // "?"))\n"
-        elif .type=="assistant" then
-          (.message.content[]? |
-            if .type=="tool_use" then
-              "  → \(.name) \(.input.file_path // .input.pattern // .input.command // .input.path // "")\n"
-            elif .type=="text" and ((.text|length)>0) then
-              "  ✎ \(.text | gsub("\\s+";" ") | .[0:100])\n"
-            else empty end)
-        elif .type=="result" then "◀ review complete\n"
-        else empty end' \
-    | tee -a "$live" >&2
-  cstat=${PIPESTATUS[0]}
+  if [[ "$engine" == codex ]]; then
+    run_review_codex --json \
+      | tee "$stream" \
+      | jq -rj --unbuffered '
+          if .type=="thread.started" then "▶ reviewing branch (codex)\n"
+          elif .type=="item.started" and .item.type=="command_execution" then
+            "  → \(.item.command | gsub("\\s+";" ") | .[0:100])\n"
+          elif .type=="item.completed" and .item.type=="agent_message" then
+            "  ✎ \(.item.text | gsub("\\s+";" ") | .[0:100])\n"
+          elif .type=="turn.completed" then "◀ review complete\n"
+          else empty end' \
+      | tee -a "$live" >&2
+    cstat=${PIPESTATUS[0]}
+  else
+    run_review_claude --output-format stream-json --verbose \
+      | tee "$stream" \
+      | jq -rj --unbuffered '
+          if .type=="system" and .subtype=="init" then
+            "▶ reviewing branch (model=\(.model // "?"))\n"
+          elif .type=="assistant" then
+            (.message.content[]? |
+              if .type=="tool_use" then
+                "  → \(.name) \(.input.file_path // .input.pattern // .input.command // .input.path // "")\n"
+              elif .type=="text" and ((.text|length)>0) then
+                "  ✎ \(.text | gsub("\\s+";" ") | .[0:100])\n"
+              else empty end)
+          elif .type=="result" then "◀ review complete\n"
+          else empty end' \
+      | tee -a "$live" >&2
+    cstat=${PIPESTATUS[0]}
+  fi
   set -e
-  [[ $cstat -eq 0 ]] || { echo "review-branch: claude exited $cstat" >&2; exit "$cstat"; }
-  out=$(jq -r 'select(.type=="result") | .result // empty' "$stream")
+  [[ $cstat -eq 0 ]] || { echo "review-branch: $engine exited $cstat" >&2; exit "$cstat"; }
+  if [[ "$engine" == codex ]]; then
+    out=$(cat "$codex_last")
+  else
+    out=$(jq -r 'select(.type=="result") | .result // empty' "$stream")
+  fi
+elif [[ "$engine" == codex ]]; then
+  run_review_codex >&2
+  out=$(cat "$codex_last")
 else
-  out=$(run_review)
+  out=$(run_review_claude)
 fi
 
 { echo "# Branch review — $worktree"
   echo "- reviewed: $(date '+%Y-%m-%d %H:%M:%S')"
+  echo "- engine: $engine${review_model:+ ($review_model)}"
   echo "- base: $base"
   echo "- tip: $tip"
   echo "- diff sha256: $hash"

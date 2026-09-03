@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# claude-review — review this worktree's PR diff, after showing the cost and asking.
+#
+#   claude-review                    summarise, confirm, then review
+#   claude-review -C <path>          review that checkout instead of this one
+#   claude-review --branch <name>    review the checkout where <name> lives
+#   claude-review --status           summarise and stop (no review, no prompt)
+#   claude-review --engine codex     review with codex exec, not claude -p
+#   claude-review --yes              review without asking
+#   claude-review --base <ref> --model <m> --bump    passed through to review-branch.sh
+#
+# Why a wrapper: review-branch.sh spends tokens and minutes, and everything
+# that decides whether the spend is worth it — the base it resolved, the size
+# of the diff, whether this exact diff is already approved — is only visible
+# from its --dry-run. This puts that in front of the spend and makes pre-push
+# able to offer the review instead of printing a command to paste.
+#
+# The prompt reads /dev/tty rather than stdin, because pre-push's stdin IS the
+# ref list it is still looping over: a read on it would swallow a ref and
+# silently skip that branch's gate.
+set -euo pipefail
+
+REVIEW="$HOME/.claude/hooks/scripts/review-branch.sh"
+
+die() { echo "claude-review: $1" >&2; exit 1; }
+
+assume_yes=""
+status_only=""
+target=""      # -C <path>: the checkout to review, instead of the one we are in
+branch=""      # --branch <name>: the checkout that holds <name>
+engine=""      # --engine <name>: skip the engine question and use this one
+pass=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -y|--yes)    assume_yes=1; shift ;;
+    --status)    status_only=1; shift ;;
+    -C)          target="${2:?-C needs a path}"; shift 2 ;;
+    --worktree)  target="${2:?--worktree needs a path}"; shift 2 ;;
+    --worktree=*) target="${1#--worktree=}"; shift ;;
+    --branch)    branch="${2:?--branch needs a name}"; shift 2 ;;
+    --branch=*)  branch="${1#--branch=}"; shift ;;
+    --engine)    engine="${2:?--engine needs a value}"; shift 2 ;;
+    --engine=*)  engine="${1#--engine=}"; shift ;;
+    -h|--help)   sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --dry-run)   die "use --status" ;;
+    *)           pass+=("$1"); shift ;;
+  esac
+done
+
+[[ -x "$REVIEW" ]] || die "review-branch.sh not found at $REVIEW"
+[[ -n "$target" && -n "$branch" ]] && die "pass -C <path> or --branch <name>, not both"
+
+# Checked here, not left to review-branch.sh: --status returns before the exec,
+# so a bad engine named with --status would otherwise print a clean summary and
+# exit 0, and the user would learn of the typo only on the run that spends.
+if [[ -n "$engine" ]]; then
+  case "$engine" in
+    claude|codex) ;;
+    *) die "unknown engine '$engine' — claude or codex" ;;
+  esac
+  command -v "$engine" >/dev/null 2>&1 || die "'$engine' is not installed or not on PATH"
+fi
+
+# A branch is reviewed in the checkout that holds it, never by pointing the
+# diff at a ref from elsewhere. review-branch.sh pins the tip to that
+# checkout's HEAD and the reviewer reads files off disk, so a diff of one
+# branch against another branch's files would have it reviewing text the diff
+# does not contain — and writing an approval named for that diff.
+if [[ -n "$branch" ]]; then
+  git rev-parse --git-dir >/dev/null 2>&1 || die "--branch has to run inside the repo that holds '$branch'"
+  # substr, not fields: porcelain prints raw paths, which may contain spaces.
+  target=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '
+    /^worktree / { p = substr($0, 10) }
+    /^branch /   { if (substr($0, 8) == b) { print p; exit } }')
+  [[ -n "$target" ]] ||
+    die "'$branch' is not checked out in any worktree — 'git worktree add <path> $branch' first"
+fi
+
+if [[ -n "$target" ]]; then
+  worktree=$(git -C "$target" rev-parse --show-toplevel 2>/dev/null) || die "not a git worktree: $target"
+else
+  worktree=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repo"
+fi
+
+# --dry-run exits non-zero for an empty diff or an unresolvable base, and its
+# message on stderr is the whole explanation — let it through and stop.
+info=$("$REVIEW" "$worktree" ${engine:+--engine "$engine"} ${pass[@]+"${pass[@]}"} --dry-run) || exit $?
+
+base="" tip="" hash="" sentinel="" lines="" docs_only=""
+while IFS='=' read -r k v; do
+  case "$k" in
+    base)      base="$v" ;;
+    tip)       tip="$v" ;;
+    diff)      hash="$v" ;;
+    sentinel)  sentinel="$v" ;;
+    lines)     lines="$v" ;;
+    docs_only) docs_only="$v" ;;
+  esac
+done <<<"$info"
+[[ -n "$sentinel" ]] || die "could not read the review summary for $worktree"
+
+branch=$(git -C "$worktree" rev-parse --abbrev-ref HEAD)
+printf 'worktree: %s\nbranch:   %s (base %s, tip %.12s)\ndiff:     %s net lines%s, sha256 %.12s\n' \
+  "$worktree" "$branch" "$base" "$tip" \
+  "$lines" "$([[ "$docs_only" == 1 ]] && echo ', docs only')" "$hash"
+
+# Approval is keyed by the diff's own hash, so an unchanged branch needs no
+# second review — and a caller (pre-push) that only tests the sentinel would
+# otherwise pay for one it already has.
+if [[ -f "$sentinel" ]]; then
+  echo "already approved — this diff has a passing review; nothing to do"
+  exit 0
+fi
+
+[[ -n "$status_only" ]] && exit 0
+
+# The engine is asked at the same moment as the spend, because it IS part of
+# the spend: a codex review bills a different account from a claude one, and
+# which reviewer read the diff is worth choosing per branch rather than once in
+# a config file. A reviewer on the author's own model shares its blind spots.
+declined() { echo "claude-review: declined — no review run, no approval written" >&2; exit 1; }
+
+if [[ -z "$engine" && -z "$assume_yes" ]]; then
+  { : >/dev/tty; } 2>/dev/null || die "no terminal to ask on — rerun with --yes, or name --engine"
+  if command -v codex >/dev/null 2>&1; then
+    read -r -p "review this diff? [c]laude / co[d]ex / [N]o " ans </dev/tty || ans=""
+    case "$ans" in
+      c|C|claude) engine=claude ;;
+      d|D|codex)  engine=codex ;;
+      *)          declined ;;
+    esac
+  else
+    read -r -p "review this diff with claude? [y/N] " ans </dev/tty || ans=""
+    [[ "$ans" =~ ^[Yy] ]] || declined
+    engine=claude
+  fi
+elif [[ -z "$assume_yes" ]]; then
+  { : >/dev/tty; } 2>/dev/null || die "no terminal to ask on — rerun with --yes"
+  read -r -p "review this diff with $engine? [y/N] " ans </dev/tty || ans=""
+  [[ "$ans" =~ ^[Yy] ]] || declined
+fi
+
+exec "$REVIEW" "$worktree" --engine "${engine:-claude}" ${pass[@]+"${pass[@]}"}

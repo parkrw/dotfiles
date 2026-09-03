@@ -155,9 +155,34 @@ review_gate() {
         # path, NOT of the diff) so the paths named below are the ones it will
         # write. Path-keyed on purpose: one readable latest report per worktree.
         repokey=$(printf '%s' "$top" | shasum -a 256 | cut -d' ' -f1)
+
+        # Offer the review here instead of printing a command to paste: the
+        # wrapper asks on /dev/tty first, so a terminal push can approve the
+        # spend inline and then proceed on PASS.
+        #
+        # Still deny-only. The wrapper cannot write an approval — only
+        # review-branch.sh does, and only on VERDICT: PASS — so the sentinel
+        # test below is what lets the push through, exactly as before. A
+        # decline, a FAIL, or a crash all fall through to the message.
+        #
+        # Skipped under CLAUDECODE: an agent has no terminal to answer on, and
+        # a `read` against an inherited tty would hang the push with nothing on
+        # screen. Claude gets the message and runs claude-review itself.
+        # env -u: git exports GIT_DIR (and friends) into hooks, and an exported
+        # GIT_DIR beats `git -C <path>`, so review-branch.sh would resolve its
+        # own git calls against this hook's repo instead of the worktree it was
+        # handed. Strip them and let discovery run.
+        review_cli="$HOME/.local/bin/claude-review"
+        if [ -z "$CLAUDECODE" ] && [ -x "$review_cli" ] &&
+           { : >/dev/tty; } 2>/dev/null; then
+            echo "pre-push: $remote_ref has no passing review of its PR diff." >&2
+            env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX \
+                "$review_cli" >&2 </dev/null || true
+            [ -f "$hooks_dir/state/review-ok-branch-$diff_hash" ] && continue
+        fi
         {
             echo "pre-push: blocked — $remote_ref has no passing review of its PR diff."
-            echo "pre-push: run   ~/.claude/hooks/scripts/review-branch.sh $top"
+            echo "pre-push: run   claude-review   (or ~/.claude/hooks/scripts/review-branch.sh $top)"
             echo "pre-push: base $base, diff sha256 ${diff_hash}"
             echo "pre-push: findings -> $hooks_dir/state/review-branch-$repokey.md"
             echo "pre-push: live log -> /tmp/claude-review-branch-$repokey.log (tail -f it from another terminal)"
