@@ -6,6 +6,9 @@
 #   create NEW file                 -> allow (no prompt)
 #   git pull --ff-only              -> allow (no prompt)
 #   local git writes (add, commit)  -> ask
+#   new branch whose name is taken
+#     on origin, or whose issue is
+#     someone else's                -> deny (always)
 #   LOCAL merge/rebase              -> ask (default) or deny (.claude-merge-off)
 #   overwrite/modify EXISTING file  -> ask
 #   remote git writes (push), gh    -> ask (default) or deny (.claude-remote-off)
@@ -240,6 +243,101 @@ If YOU run this yourself: git rewrites your local commits on top of the remote r
   [[ "$merge_off" == 1 ]] &&
     emit deny "Local git $op blocked — this repo is opted out (.claude-merge-off). Re-enable with: claude-gate merge on"
   emit ask "Local git $op — needs approval."
+fi
+
+# ── creating a branch that already exists on the remote ──
+#
+# Two people picking up one issue produce two branches with one name: yours
+# local, theirs on origin with a PR already open. Nothing is lost until someone
+# force-pushes, and by then the work is duplicated. Deny at creation instead.
+#
+# Placed before the dirty-tree block below so a collision denies rather than
+# asks. The git-hook halves are post-checkout (a warning, because git cannot
+# veto a branch) and ownership_gate in pre-push (the clobber denial itself).
+#
+# Fails closed: an origin it cannot reach is an `ask`, not an `allow`.
+nb_args=""
+if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+worktree[[:space:]]+add\b'; then
+  nb_args=$(echo "$cmd" | sed -E 's/.*worktree[[:space:]]+add([[:space:]]|$)//')
+elif echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+(switch|checkout)([[:space:]]|$)'; then
+  # Args are taken from after the subcommand, so a leading `git -c key=val`
+  # cannot be mistaken for `switch -c <branch>`.
+  nb_args=$(echo "$cmd" | sed -E 's/.*[[:space:]](switch|checkout)([[:space:]]|$)//')
+fi
+
+new_branch=""
+if [[ -n "$nb_args" ]]; then
+  new_branch=$(printf '%s' "$nb_args" | tr ' \t' '\n\n' | awk '
+    /^(-b|-B|-c|-C|--create|--force-create|--create-branch)=/ { sub(/^[^=]*=/, ""); print; exit }
+    /^(-b|-B|-c|-C|--create|--force-create|--create-branch)$/ { take = 1; next }
+    take && length($0) { print; exit }')
+  new_branch=${new_branch%%[;\|\&]*}
+  new_branch=$(echo "$new_branch" | tr -d "\"'")
+fi
+
+if [[ -n "$new_branch" && -n "$repo_root" ]]; then
+  gh_here=0; command -v gh >/dev/null 2>&1 && gh_here=1
+  gh_in_repo(){ ( cd "$gitdir" >/dev/null 2>&1 && gh "$@" ) 2>/dev/null; }
+
+  ls_rc=0
+  ls_out=$(git -C "$gitdir" ls-remote --exit-code --heads origin "$new_branch" 2>/dev/null) || ls_rc=$?
+
+  if [[ "$ls_rc" == 0 ]]; then
+    sha=$(printf '%s\n' "$ls_out" | awk '{print $1; exit}')
+    who=""
+    if git -C "$gitdir" cat-file -e "$sha^{commit}" 2>/dev/null; then
+      who=$(git -C "$gitdir" log -1 --format='%an <%ae>, %ad' --date=short "$sha" 2>/dev/null) || who=""
+    fi
+    prs=""
+    if [[ "$gh_here" == 1 ]]; then
+      prs=$(gh_in_repo pr list --head "$new_branch" --state open --json number,author,title \
+            --jq '.[] | "  #\(.number) by \(.author.login) — \(.title)"') || prs=""
+    fi
+    # The remote tip's author names the owner when the commit has been fetched
+    # here; otherwise the PR line below is the only attribution available.
+    emit deny "origin already has a branch named '$new_branch'${who:+, remote tip by $who}.
+${prs:+Open PR on that head:
+$prs
+}Creating a local branch of the same name duplicates work that already exists, and the two copies can only be reconciled by a force-push that discards one side.
+To work on theirs:  git fetch origin && git switch $new_branch
+Otherwise pick a branch name that is yours alone."
+
+  elif [[ "$ls_rc" != 2 ]]; then
+    # 2 means the remote simply has no such branch. Anything else — no network,
+    # no such remote, auth failure — leaves the question unanswered.
+    emit ask "Could not reach origin to check whether '$new_branch' already exists there (git ls-remote exited $ls_rc).
+Approve only if you know that name is free. A duplicate of a teammate's branch is reconcilable only by a force-push."
+  fi
+
+  # A branch named for an issue claims that issue. Someone else's open PR or
+  # assignment on it means the work is already taken.
+  issue=$(printf '%s' "$new_branch" | sed -nE 's#^([0-9]+)([^0-9].*)?$#\1#p')
+  if [[ -n "$issue" && "$gh_here" == 1 ]]; then
+    ipr=$(gh_in_repo pr list --search "$issue" --state open --json number,author,title,headRefName \
+          --jq '.[] | "  #\(.number) on \(.headRefName) by \(.author.login) — \(.title)"') || ipr=""
+    [[ -n "$ipr" ]] && emit deny "issue #$issue already has an open PR:
+$ipr
+Starting '$new_branch' duplicates it. Review or build on that PR's head instead:
+  git fetch origin && git switch <the head branch above>"
+
+    iv_rc=0
+    iv=$(gh_in_repo issue view "$issue" --json state,assignees \
+         --jq '.state + "\t" + ([.assignees[].login] | join(","))') || iv_rc=$?
+    if [[ "$iv_rc" == 0 && -n "$iv" ]]; then
+      istate=${iv%%$'\t'*}; iassign=${iv#*$'\t'}
+      if [[ "$istate" == "OPEN" ]]; then
+        me=$(gh_in_repo api user --jq .login) || me=""
+        if [[ -z "$iassign" ]]; then
+          emit ask "issue #$issue is open and unassigned. Assign yourself first so nobody else picks it up:
+  gh issue edit $issue --add-assignee @me
+Approve to create '$new_branch' anyway."
+        elif [[ -z "$me" ]] || ! printf '%s' "$iassign" | tr ',' '\n' | grep -qxF "$me"; then
+          emit deny "issue #$issue is assigned to $iassign, not you${me:+ ($me)}.
+Starting '$new_branch' duplicates their work. Ask them, or take an issue that is yours."
+        fi
+      fi
+    fi
+  fi
 fi
 
 # ── branch switch with a dirty tree ──

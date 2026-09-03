@@ -1,0 +1,89 @@
+#!/bin/sh
+# Global post-checkout (core.hooksPath): warn when the branch you just created
+# already exists on origin, so you learn it now instead of at push time.
+#
+# git has no veto for branch creation — post-checkout runs after the branch
+# exists and its exit status is ignored — so this only ever warns. The denial
+# lives in two other places: ownership_gate in pre-push, which refuses a push
+# that would discard someone else's commits, and the branch-creation check in
+# ~/.claude/hooks/scripts/bash-write-gate.sh, which denies a Claude session
+# before the branch is made at all.
+#
+# Runs for everyone, not only Claude sessions: duplicating a teammate's branch
+# is as easy from a terminal as from an agent.
+#
+# Args: $1 = previous HEAD, $2 = new HEAD, $3 = 1 for a branch checkout.
+#
+# Known gaps: `git branch <name>` creates a branch without checking it out, so
+# no post-checkout runs; a repo-local core.hooksPath (e.g. husky) overrides the
+# global one for that repo. Switching away from a new branch and back warns
+# again, because a plain switch adds nothing to the branch's reflog — the
+# collision is still unresolved at that point, and the first commit ends it.
+
+flag=$3
+
+# Never prompt for credentials — this runs on an interactive checkout, and a
+# credential prompt inside a hook would hang it with nothing on screen.
+GIT_TERMINAL_PROMPT=0
+export GIT_TERMINAL_PROMPT
+
+duplicate_warning() {
+    [ "$flag" = 1 ] || return 0
+
+    branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || return 0
+    [ -n "$branch" ] || return 0
+    git remote get-url origin >/dev/null 2>&1 || return 0
+
+    # Only a branch that was just created. The BRANCH's reflog is the one that
+    # records creation, as "branch: Created from <start-point>", for switch -c,
+    # checkout -b and worktree add -b alike. HEAD's reflog — what a bare
+    # `git reflog -1` reads — says "checkout: moving from X to Y" for every one
+    # of them, so it can never identify a creation. Because post-checkout runs
+    # immediately after the branch appears, the newest entry IS the creation.
+    created=$(git reflog -1 --format=%gs "$branch" 2>/dev/null)
+    case "$created" in
+        "branch: Created from"*) ;;
+        *) return 0 ;;
+    esac
+
+    # `git switch <name>` on a branch that exists only on a remote creates a
+    # local branch tracking it, and that is the RIGHT way to join someone's
+    # work — the start point is the matching remote-tracking ref. Warning there
+    # would fire on exactly the action this hook recommends.
+    for r in $(git remote 2>/dev/null); do
+        [ "$created" = "branch: Created from refs/remotes/$r/$branch" ] && return 0
+    done
+
+    line=$(git ls-remote --exit-code --heads origin "$branch" 2>/dev/null) || return 0
+    sha=$(printf '%s\n' "$line" | awk '{print $1; exit}')
+    [ -n "$sha" ] || return 0
+
+    {
+        echo
+        echo "post-checkout: heads up — origin already has a branch named '$branch'."
+        if git cat-file -e "$sha^{commit}" 2>/dev/null; then
+            echo "post-checkout:   remote tip $(git log -1 --format='%h  %an <%ae>  %ad' --date=short "$sha")"
+        else
+            echo "post-checkout:   remote tip $sha (not fetched here)"
+        fi
+        if command -v gh >/dev/null 2>&1; then
+            prs=$(gh pr list --head "$branch" --state open 2>/dev/null) || prs=""
+            if [ -n "$prs" ]; then
+                echo "post-checkout:   open PR(s) on that head:"
+                printf '%s\n' "$prs" | sed 's/^/post-checkout:     /'
+            fi
+        fi
+        echo "post-checkout: your '$branch' is a different branch that happens to share the name."
+        echo "post-checkout: pushing it later would collide, and reconciling the two costs a force-push."
+        echo "post-checkout: to work on theirs:  git branch -m <a-name-of-your-own> && git fetch origin && git switch $branch"
+        echo "post-checkout: to keep yours:     git branch -m <a-name-of-your-own>"
+        echo
+    } >&2
+}
+
+duplicate_warning
+
+# core.hooksPath replaces .git/hooks entirely — chain to the repo's own hook.
+repo_hook="$(git rev-parse --git-dir)/hooks/post-checkout"
+[ -x "$repo_hook" ] && exec "$repo_hook" "$@"
+exit 0

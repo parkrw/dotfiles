@@ -9,6 +9,12 @@
 # bash-write-gate.sh reads). Trunk, tags, deletions, and non-fast-forward
 # pushes stay human-only regardless of the marker.
 #
+# Two gates below run for EVERYONE, agent and terminal alike:
+#   ownership_gate — denies a push that would discard commits someone else
+#                    wrote. Its warning half is post-checkout; its Claude-side
+#                    half is the branch-creation check in bash-write-gate.sh.
+#   review_gate    — the pre-PR review turnstile.
+#
 # Decisions are made from the ref list on stdin, not the current branch:
 # `git push origin HEAD:<trunk>` pushes a ref that is not the branch you are on.
 #
@@ -17,6 +23,10 @@
 # Known bypasses: `git push --no-verify` skips all pre-push hooks (the
 # Claude-side bash-write-gate denies that flag), and a repo-local
 # core.hooksPath (e.g. husky) overrides the global one in that repo.
+
+# $1 is the remote name (or a URL when the push names no remote); the
+# ownership gate fetches through it to identify the commits a push would drop.
+push_remote="${1:-origin}"
 
 # The ref list is consumed by the checks below and replayed for the repo hook.
 refs=$(cat)
@@ -93,6 +103,78 @@ if [ -n "$CLAUDECODE" ]; then
 $refs
 EOF
 fi
+
+# ---- ownership gate: never discard a teammate's commits ----
+# Runs for ALL pushes, not just Claude's, and before review_gate so it denies
+# first. Every ref check above sits inside the CLAUDECODE block, so for a
+# terminal push this is the only one that runs.
+#
+# A push whose remote sha is not an ancestor of the sha being pushed discards
+# every remote commit it cannot reach. That is fine when those commits are
+# yours — rebasing your own branch and force-pushing it stays allowed. It is
+# not fine when they belong to someone else, which is the case this denies.
+#
+# Deny-only, like the rest of this file: nothing here can approve a push.
+ownership_gate() {
+    self=$(git config user.email 2>/dev/null)
+    if [ -z "$self" ]; then
+        echo "pre-push: blocked — git config user.email is unset, so commit ownership cannot be checked." >&2
+        echo "pre-push: set it (git config --global user.email you@example.com) and push again." >&2
+        exit 1
+    fi
+
+    while read -r local_ref local_sha remote_ref remote_sha; do
+        [ -z "$remote_ref" ] && continue
+
+        # An all-zero remote sha is a new branch: nothing exists to discard.
+        case "$remote_sha" in *[!0]*) ;; *) continue ;; esac
+        # An all-zero local sha is a deletion. Out of scope: it removes a
+        # branch rather than rewriting one, so there is no local sha to
+        # compare against. Claude sessions are already denied deletions above;
+        # a terminal deletion of someone else's branch is still possible.
+        case "$local_sha" in *[!0]*) ;; *) continue ;; esac
+
+        # The remote commit is normally absent for a branch you never fetched,
+        # and ancestry is unknowable without it. git has already talked to the
+        # server to learn remote_sha, so this fetch should succeed.
+        if ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+            git fetch --quiet "$push_remote" "$remote_ref" 2>/dev/null || true
+        fi
+        if ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+            # Only reachable when the push is already NOT a fast-forward: a
+            # push you built on has its remote commit locally by definition.
+            {
+                echo "pre-push: blocked — $remote_ref on $push_remote is at $remote_sha, which $local_ref does not build on,"
+                echo "pre-push: and that commit could not be fetched, so its authors are unknown."
+                echo "pre-push: run   git fetch $push_remote $remote_ref   and push again."
+            } >&2
+            exit 1
+        fi
+
+        git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null && continue
+
+        # Commits on the remote that this push cannot reach are exactly what it
+        # would throw away.
+        theirs=$(git log --format='%ae%x09%an' "$remote_sha" "^$local_sha" 2>/dev/null |
+                 awk -F'\t' -v me="$self" '$1 != me { print $2 " <" $1 ">" }')
+        [ -z "$theirs" ] && continue
+
+        n=$(printf '%s\n' "$theirs" | wc -l | tr -d ' ')
+        {
+            echo "pre-push: blocked — this push would discard $n commit(s) on $remote_ref written by someone else:"
+            printf '%s\n' "$theirs" | sort | uniq -c | sort -rn |
+                while read -r count who; do
+                    echo "pre-push:   $count commit(s)  $who"
+                done
+            echo "pre-push: $push_remote $remote_ref is at $remote_sha; your $local_ref is not built on it."
+            echo "pre-push: to add to their branch:   git fetch $push_remote && git rebase $push_remote/${remote_ref#refs/heads/}"
+            echo "pre-push: to keep your work apart:  git push $push_remote $local_ref:refs/heads/<a-name-of-your-own>"
+        } >&2
+        exit 1
+    done <<EOF
+$refs
+EOF
+}
 
 # ---- review gate: the pre-PR turnstile ----
 # Runs for ALL pushes, not just Claude's (no CLAUDECODE guard), so a branch
@@ -195,6 +277,7 @@ $refs
 EOF
 }
 
+ownership_gate
 review_gate
 
 # core.hooksPath replaces .git/hooks entirely — chain to the repo's own
