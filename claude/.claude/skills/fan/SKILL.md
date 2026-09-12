@@ -93,7 +93,7 @@ Read-only. Record the result as the `## Voice` block. Re-measure when the block 
 | --- | --- | --- |
 | rules | `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md` | the template to fill; anything the rules say about issues, branches, PRs |
 | lead | `git shortlog -sn --no-merges \| head -3` | the login to measure |
-| issues | `gh issue list --author <lead> --state all --limit 20 --json title,body,labels,assignees` | title case and length; body shape (paragraph, headings, checklist); labels in use; whether assignees are used; whether any body holds `- [ ] #N` (then a tracking issue is in voice; otherwise never) |
+| issues | `gh issue list --author <lead> --state all --limit 20 --json title,body,labels,assignees` | title case and length; body shape (paragraph, headings, checklist); labels in use; whether any body holds `- [ ] #N` (then a tracking issue is in voice; otherwise never) |
 | labels | `gh label list` | the set; a label the lead does not put on similar issues is not used |
 | PRs | `gh pr list --author <lead> --state merged --limit 20 --json title,body,headRefName,mergeCommit` | title shape; body shape; how the issue is linked (`closes #N`, `fixes #N`, `#N` in the title, none); branch naming; squash or merge |
 | commits | `git log --author=<lead> --no-merges --format='%s%n%b%n---' -30` | subject case, length, prefix; body prose or bullets; issue reference form |
@@ -103,7 +103,7 @@ Everything the skill writes publicly is checked against this block before the co
 
 ## Never
 
-- Create a label, pin an issue, add a milestone the repo does not have, or assign anyone but yourself.
+- Create a label, pin an issue, add a milestone the repo does not have, or assign anyone, yourself included. Several self-assignments in one minute is the tell a PR is not. When the gate asks about an unassigned issue at worktree creation, approve.
 - Comment on an issue or PR for progress, status, or reports. The only comment is the one a teammate would leave: a one-line reason when closing an issue without a PR.
 - Close an issue that has a PR. The PR closes it, in the measured form, when the lead merges. Never `gh pr merge`.
 - Put `Owns`, `Deps`, `Tracker`, `Branch`, `Verify`, or `Done when` lines in an issue body. They live in the brief.
@@ -130,9 +130,9 @@ Guard: a `$FAN/plan.md` with any row not `landed`/`dropped` → stop and ask: `-
 
 The head stays in this checkout and does not implement during a batch.
 
-1. **Size.** Ready rows: `status ready`, every dep `landed` or its issue closed (`gh issue view N --json state -q .state`). Batch = ready rows with pairwise-disjoint `owns`; compare the globs, and containment is overlap (`src/api/**` contains `src/api/auth/**`, so those two serialize). `N = min(disjoint ready, 4)`, 2 when any row is `~L`. Explicit numbers override the pick up to 5, never the disjointness rule. One ready row → Inline below, not a batch. Report the pick (`Fanning 3: #12 #15 #18; deferred #14 (dep #12), #16 (owns overlaps #15)`), one OK.
+1. **Size.** Issue numbers that have no row yet get one first: read the issue, set `est` and `owns` from it and the code, measure Voice if the block is missing. Ready rows: `status ready`, every dep `landed` or its issue closed (`gh issue view N --json state -q .state`). Batch = ready rows with pairwise-disjoint `owns`; compare the globs, and containment is overlap (`src/api/**` contains `src/api/auth/**`, so those two serialize). `N = min(disjoint ready, 4)`, 2 when any row is `~L`. Explicit numbers override the pick up to 5, never the disjointness rule. One ready row → Inline below, not a batch. Report the pick (`Fanning 3: #12 #15 #18; deferred #14 (dep #12), #16 (owns overlaps #15)`), one OK.
 2. **Brief.** Write `$FAN/briefs/NN.md` per row, for a zero-context reader: goal; the `owns` globs; sub-tasks as behaviors, each with the test it proves and the files; exact verify commands; done-when; the Voice block verbatim; grep-verified names, never assumed ones.
-3. **Claim.** Branch `<issue>-<slug>` unless Voice measured another shape. Per row: `git ls-remote --exit-code --heads origin <branch>` exits 2, `gh pr list --search <N> --state open` is empty, then `gh issue edit N --add-assignee @me` (approval-gated) when the repo uses assignees. The gate re-checks all three at worktree creation; doing it here keeps the prompts in one pane.
+3. **Claim.** Branch `<issue>-<slug>` unless Voice measured another shape. Per row: `git ls-remote --exit-code --heads origin <branch>` exits 2, `gh pr list --search <N> --state open` is empty. The gate re-checks both at worktree creation; doing it here keeps the prompts in one pane.
 4. **Worktrees.** `git pull --ff-only` in this checkout (allowed outright; it fetches everything, and the fast-forward applies only to the current branch). Then per row, approval-gated:
 
    ```bash
@@ -202,7 +202,7 @@ One issue, no worktree. Brief it (Fan out 2), claim it (3), `git switch -c <bran
 ## `--adjust`
 
 1. **Reconcile.** Per `inflight`/`review`/`shipped` row: `gh pr list --head <branch> --state all --json state,number`. `MERGED` → `landed`; `CLOSED` unmerged → ask. A `landed` row's worktree and local branch go, approval-gated: `git worktree remove ../<wt>`, `git branch -d <branch>`. Remote branches are the lead's or the repo's auto-delete, never yours.
-2. **Replan.** Reorder, resize, add, drop, split. A new row is a new issue in Voice (approval-gated). A dropped row's issue closes only if it is yours and untouched, with a one-line reason in Voice; otherwise it stays open and you unassign (`gh issue edit N --remove-assignee @me`).
+2. **Replan.** Reorder, resize, add, drop, split. A new row is a new issue in Voice (approval-gated). A dropped row's issue closes only if it is yours and untouched, with a one-line reason in Voice; otherwise it stays open.
 3. Log the change. Route next.
 
 ## Close
