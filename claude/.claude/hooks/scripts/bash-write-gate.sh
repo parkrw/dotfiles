@@ -24,8 +24,9 @@
 # permits `gh pr merge`. Those are human-only, permanently.
 # Flip both with `claude-gate`.
 #
-# A compound line is judged segment by segment: it can be auto-approved only
-# when every segment is itself in the allow tier. Command substitution, process
+# A compound line is judged segment by segment, wherever the git or gh segment
+# sits: it can be auto-approved only when every segment is itself in the allow
+# tier and nothing is redirected into a file. Command substitution, process
 # substitution, backgrounding and newlines can hide an arbitrary command, so
 # they block `allow` and the line falls through to the ask/deny rules.
 set -e
@@ -71,56 +72,149 @@ remote_gate(){
 # ── segment analysis ──
 #
 # A compound line is allowable when every one of its segments is independently
-# allowable, so `git merge x | tail -6` and `git add -A && git commit -m x`
-# auto-approve while anything unrecognised still falls through to ask/deny.
+# allowable, wherever the git or gh segment sits: `cd $C && git log -3`,
+# `echo ---; gh pr view 7 | head` and `for n in 1 2; do gh issue view $n; done`
+# all auto-approve, while anything unrecognised falls through to ask/deny.
 # Command substitution, process substitution, backgrounding and embedded
 # newlines can hide an arbitrary command inside a segment, so they block
 # `allow` outright.
+#
+# Quoted text is blanked before the line is split or searched, so a jq
+# filter's `|` and `;` cannot pass for shell syntax and its `>` cannot pass
+# for a redirect. Only single quotes are fully literal to the shell — `$(`
+# inside "…" still runs — so the substitution check keeps double-quoted text.
+
+blank_quotes(){ # $1=line $2=1 keeps double-quoted text
+  printf '%s\n' "$1" | awk -v keepdq="${2:-0}" '
+    BEGIN { q = "" }
+    { s = $0; out = ""; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (q == "") {
+          if (c == "\047" || c == "\"") { q = c; out = out c }
+          else if (c == "\\") { out = out c substr(s, i + 1, 1); i++ }
+          else out = out c
+        } else if (q == "\047") {
+          if (c == "\047") { q = ""; out = out c }
+        } else {
+          if (c == "\\") { if (keepdq) out = out c substr(s, i + 1, 1); i++ }
+          else if (c == "\"") { q = ""; out = out c }
+          else if (keepdq) out = out c
+        }
+      }
+      print out }'
+}
+bare=$(blank_quotes "$cmd")
+bare_dq=$(blank_quotes "$cmd" 1)
 
 opaque=0
-echo "$cmd" | grep -Eq '\$\(|`|>\(|<\('     && opaque=1
-echo "$cmd" | grep -Eq '(^|[^&>])&([^&]|$)' && opaque=1
+echo "$bare_dq" | grep -Eq '\$\(|`'              && opaque=1
+echo "$bare"    | grep -Eq '>\(|<\('             && opaque=1
+echo "$bare"    | grep -Eq '(^|[^&>])&([^&>]|$)' && opaque=1
 [[ "$cmd" == *$'\n'* ]] && opaque=1
 
-is_simple=1
-[[ "$opaque" == 1 ]] && is_simple=0
-echo "$cmd" | grep -Eq '&&|\|\||[;|]' && is_simple=0
+segments(){ echo "$bare" | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}'; }
 
-word_of(){ echo "$1" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//' | awk '{print $1}'; }
-git_sub_of(){ echo "$1" | sed -E 's/^[[:space:]]*git[[:space:]]+//' \
-  | sed -E 's/^((-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+|--no-pager|--paginate|-p)[[:space:]]+)*//' \
-  | awk '{print $1}'; }
+word_of(){ echo "$1" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*([[:space:]]+|$))*//' | awk '{print $1}'; }
+git_global='(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+|--no-pager|--paginate|-p)[[:space:]]+'
+git_sub_of(){ echo "$1" | sed -E "s/^[[:space:]]*git[[:space:]]+(${git_global})*//" | awk '{print $1}'; }
+# Arguments after the subcommand, redirections removed so `2>&1` is not a
+# positional word.
+git_args_of(){ echo "$1" | sed -E "s/^[[:space:]]*git[[:space:]]+(${git_global})*[^[:space:]]+[[:space:]]*//" \
+  | sed -E 's/[[:space:]]*[0-9]*>>?(&[0-9]+|[^[:space:]]*)//g; s/[[:space:]]*<[^[:space:]]+//g'; }
 
 first=$(word_of "$cmd")
 
 # Segments that read or filter — the only ones auto-allowed in compound commands.
-# Excludes all git writes (they ask individually), push/pull/tag/reset/clean,
-# and anything that runs a command handed to it (xargs, eval, sh, find -exec).
-seg_filters='cat|head|tail|less|more|grep|egrep|fgrep|rg|jq|yq|wc|sort|uniq|cut|tr|awk|sed|column|nl|fold|rev|tac|echo|printf|true|date|basename|dirname|pbcopy|cd|pwd|ls'
-seg_git='status|log|diff|show|reflog|shortlog|whatchanged|blame|describe|rev-parse|rev-list|merge-base|name-rev|symbolic-ref|var|cat-file|ls-files|ls-tree|for-each-ref|count-objects|grep|fetch'
+# Excludes anything that runs a command handed to it (xargs, eval, sh, find -exec)
+# and anything that writes (tee, mv, cp, export). sed and yq lose the exemption
+# under -i, find under -exec or -delete.
+seg_filters='cat|head|tail|less|more|grep|egrep|fgrep|rg|jq|yq|wc|sort|uniq|cut|tr|awk|sed|column|nl|fold|rev|tac|echo|printf|true|false|date|basename|dirname|realpath|readlink|pbcopy|cd|pwd|ls|file|stat|du|df|which|type|test|\[|\[\[|read|seq|diff|cmp|comm|paste|shasum|sleep|find'
+seg_git='status|log|diff|show|reflog|shortlog|whatchanged|blame|describe|rev-parse|rev-list|merge-base|name-rev|symbolic-ref|var|cat-file|ls-files|ls-tree|ls-remote|for-each-ref|count-objects|grep|fetch|show-ref|check-ignore'
 # A block that has already validated its own subcommand against the remote and
 # marker rules adds it here before asking whether the rest of the line is safe.
 seg_extra_git=''
 
+git_segment_ok(){
+  local sub args
+  sub=$(git_sub_of "$1"); args=$(git_args_of "$1")
+  # --output sends log/diff/show output to a file.
+  echo "$args" | grep -Eq -- '(^|[[:space:]])--output(=|[[:space:]])' && return 1
+  [[ -n "$seg_extra_git" && "$sub" == "$seg_extra_git" ]] && return 0
+  echo "$sub" | grep -Eq "^(${seg_git})$" && return 0
+  case "$sub" in
+    worktree) echo "$args" | grep -Eq '^list([[:space:]]|$)' ;;
+    # Any positional word is a branch to create, move or delete.
+    branch)   ! echo "$args" | grep -Eq -- '(^|[[:space:]])([^-[:space:]]|--edit-description|--unset-upstream)' ;;
+    tag)      [[ -z "$args" ]] || echo "$args" | grep -Eq '^(-l|--list|-n)' ;;
+    config)   echo "$args" | grep -Eq -- '(^|[[:space:]])(--get(-all|-regexp)?|--list|-l|get|list)([[:space:]]|$)' ;;
+    remote)   echo "$args" | grep -Eq '^(-v|show|get-url)?([[:space:]]|$)' ;;
+    stash)    echo "$args" | grep -Eq '^(list|show)([[:space:]]|$)' ;;
+    *)        return 1 ;;
+  esac
+}
+
+gh_segment_ok(){
+  [[ "$remote_off" == 1 ]] && return 1
+  local rest sub act
+  rest=$(echo "$1" | sed -E 's/^[[:space:]]*gh[[:space:]]+((-R|--repo|--hostname)[[:space:]]+[^[:space:]]+[[:space:]]+)*//')
+  sub=$(echo "$rest" | awk '{print $1}'); act=$(echo "$rest" | awk '{print $2}')
+  case "$sub" in
+    pr|issue)                  case "$act" in view|list|diff|checks|status) return 0 ;; esac ;;
+    run|repo|workflow|release) case "$act" in view|list) return 0 ;; esac ;;
+    label)                     case "$act" in list|"") return 0 ;; esac ;;
+    auth)                      [[ "$act" == status ]] && return 0 ;;
+    search|status|version|--version|help) return 0 ;;
+    # gh api defaults to GET; a field, an input file or another method turns
+    # it into a write.
+    api)
+      echo "$rest" | grep -Eq -- '(^|[[:space:]])(-f|-F|--field|--raw-field|--input)([[:space:]=]|$)' && return 1
+      if echo "$rest" | grep -Eq -- '(^|[[:space:]])(-X|--method)([[:space:]]+|=)'; then
+        echo "$rest" | grep -Eq -- '(^|[[:space:]])(-X|--method)([[:space:]]+|=)GET([[:space:]]|$)' && return 0
+        return 1
+      fi
+      return 0 ;;
+  esac
+  return 1
+}
+
 segment_ok(){
   local seg="$1" w
   echo "$seg" | grep -Eq -- '--no-verify\b' && return 1
+  # An assignment that redirects which binaries or hooks the rest of the line
+  # runs is not a read.
+  echo "$seg" | grep -Eq '^[[:space:]]*(PATH|GIT_[A-Z_]+|LD_[A-Z_]+|DYLD_[A-Z_]+|BASH_ENV|ENV)=' && return 1
+  seg=$(echo "$seg" | sed -E 's/^[[:space:]]*[({][[:space:]]*//; s/[[:space:]]*[)}][[:space:]]*$//')
   w=$(word_of "$seg")
-  [[ -z "$w" ]] && return 0
-  if [[ "$w" == git ]]; then
-    git_sub_of "$seg" | grep -Eq "^(${seg_git}${seg_extra_git:+|$seg_extra_git})$"
-    return
-  fi
+  case "$w" in
+    ""|for|done|fi|esac|continue|break|:) return 0 ;;
+    case) segment_ok "$(echo "$seg" | sed -E 's/^[[:space:]]*case[[:space:]]+[^[:space:]]+[[:space:]]+in[[:space:]]*//')"; return ;;
+    # Control-flow words run the command that follows them.
+    do|then|else|if|elif|while|until|!|time)
+      segment_ok "$(echo "$seg" | sed -E "s/^[[:space:]]*$w[[:space:]]*//")"; return ;;
+    git) git_segment_ok "$seg"; return ;;
+    gh)  gh_segment_ok "$seg"; return ;;
+    sed|yq) echo "$seg" | grep -Eq -- '(^|[[:space:]])(-i|--in-place)' && return 1 ;;
+    find)   echo "$seg" | grep -Eq -- '(^|[[:space:]])-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)([[:space:]]|$)' && return 1 ;;
+  esac
   echo "$w" | grep -Eq "^(${seg_filters})$"
+}
+
+# A redirect into a file turns a read line into a write. /dev/null and the
+# temp dirs are exempt, as in the redirect block at the end.
+writes_a_file(){
+  echo "$bare" | grep -oE '[0-9]?>>?[[:space:]]*[^[:space:]&|;<>]+' \
+    | sed -E 's/^[0-9]?>>?[[:space:]]*//' \
+    | grep -vE '^(/dev/|/tmp/|/private/tmp/|/var/tmp/|/var/folders/)' | grep -q .
 }
 
 can_allow(){
   [[ "$opaque" == 1 ]] && return 1
-  [[ "$is_simple" == 1 ]] && return 0
+  writes_a_file && return 1
   local seg
   while IFS= read -r seg; do
     segment_ok "$seg" || return 1
-  done < <(echo "$cmd" | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}')
+  done < <(segments)
   return 0
 }
 
@@ -172,49 +266,27 @@ fi
 echo "$cmd" | grep -Eq '\bgh\b.*\bpr\b.*\bmerge\b' && emit deny "gh pr merge is denied permanently — no marker file enables it.
 If YOU run this yourself: GitHub merges the PR head into its base branch ON THE SERVER, immediately, and with --delete-branch also deletes the head branch. There is no local undo — reversing it needs a revert PR."
 echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+tag\b' \
-  && ! echo "$cmd" | grep -Eq '\btag\b[[:space:]]+(-l|--list|-n|$)' \
+  && ! echo "$cmd" | grep -Eq '\btag\b([[:space:]]+(-l|--list|-n)|[[:space:]]*($|[|;&]))' \
   && emit deny "creating tags is the prod deploy trigger — human-only."
 echo "$cmd" | grep -Eq '\bgit\b.*\breset\b.*--hard'          && emit deny "git reset --hard discards work — run it yourself."
 echo "$cmd" | grep -Eq '\bgit\b.*\bclean\b.*-[a-zA-Z]*f'     && emit deny "git clean -f deletes untracked files — run it yourself."
 echo "$cmd" | grep -Eq '\brm\b[^|;&]*-[a-zA-Z]*(rf|fr)'      && emit deny "rm -rf is not allowed."
 echo "$cmd" | grep -Eq '\bshred\b'                           && emit deny "shred irreversibly destroys files — run it yourself."
 
-# ── read-only gh commands ──
-
-if echo "$cmd" | grep -Eq '\bgh\b'; then
-  # Only auto-allow read-only gh when gh is the verb. Command substitution still
-  # blocks allow (opaque), but a pipe into a filter does not — the gh segment is
-  # skipped and every other segment must pass segment_ok, mirroring the git path.
-  # Extract the subcommand and action from positional words to avoid matching
-  # gh substrings inside quoted arguments.
-  if [[ "$first" == "gh" && "$opaque" == 0 && "$remote_off" == 0 ]]; then
-    gh_sub=$(echo "$cmd" | awk '{for(i=1;i<=NF;i++){if($i=="gh"){print $(i+1); exit}}}')
-    gh_action=$(echo "$cmd" | awk '{for(i=1;i<=NF;i++){if($i=="gh"){print $(i+2); exit}}}')
-    gh_read=0
-    case "$gh_sub" in
-      pr|issue|run|repo)
-        case "$gh_action" in view|list|diff|checks|status) gh_read=1 ;; esac ;;
-      label)
-        case "$gh_action" in list|"") gh_read=1 ;; esac ;;
-      # `gh api` can POST, but the deny backstop catches `gh pr merge` and
-      # remote_gate catches the rest, so convenience wins for read-mostly usage.
-      api) gh_read=1 ;;
-    esac
-    if [[ "$gh_read" == 1 ]] && ! echo "$cmd" | grep -Eq '>[^&]|^>|>$'; then
-      if [[ "$is_simple" == 1 ]]; then
-        emit allow "Read-only gh command."
-      else
-        ok=1; skipped=0
-        while IFS= read -r seg; do
-          if [[ "$skipped" == 0 && "$(word_of "$seg")" == gh ]]; then skipped=1; continue; fi
-          segment_ok "$seg" || { ok=0; break; }
-        done < <(echo "$cmd" | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}')
-        [[ "$ok" == 1 ]] && emit allow "Read-only gh command piped to filters."
-      fi
-    fi
-  fi
-  remote_gate "gh CLI command"
+# ── read-only lines ──
+#
+# Every segment reads (git, gh or a filter) and nothing is redirected into a
+# file: allow, whatever the line starts with. Lines without git or gh are left
+# to Claude Code's own permission rules.
+if echo "$bare" | grep -Eq '(^|[[:space:]&|;(`])(git|gh)([[:space:]]|$)' && can_allow; then
+  emit allow "Read-only git/gh command."
 fi
+
+# ── gh ──
+#
+# A gh line not allowed above is a remote write or a shape the segment
+# analysis does not recognise, such as `$(gh …)`.
+echo "$bare" | grep -Eq '(^|[[:space:]&|;(`])gh([[:space:]]|$)' && remote_gate "gh CLI command"
 
 # ── merge / rebase ──
 #
@@ -388,50 +460,17 @@ Approve only if the uncommitted changes are meant to move."
 fi
 
 # ── git classification ──
+#
+# Read-only lines were allowed above; what is left is a local write or a read
+# in a shape the segment analysis could not clear.
 
 if [[ "$first" == "git" ]]; then
-  sub=$(echo "$cmd" | sed -E 's/^[[:space:]]*git[[:space:]]+//' \
-        | sed -E 's/^((-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+|--no-pager|--paginate|-p)[[:space:]]+)*//' \
-        | awk '{print $1}')
+  sub=$(git_sub_of "$bare")
   case "$sub" in
-    status|log|diff|show|reflog|shortlog|whatchanged|blame|describe|rev-parse|rev-list|\
-    merge-base|name-rev|symbolic-ref|var|cat-file|ls-files|ls-tree|ls-remote|for-each-ref|count-objects|grep|fetch)
-      can_allow && emit allow "Read-only git command." ;;
     add|commit|switch|checkout|restore|reset|cherry-pick|revert|rm|mv|am|apply|submodule|clean)
       emit ask "Local git write ($sub) — needs approval." ;;
-    worktree)
-      if echo "$cmd" | grep -Eq 'worktree[[:space:]]+(list)([[:space:]]|[|;&]|$)'; then
-        can_allow && emit allow "git worktree listing."
-      else
-        emit ask "Local git write ($sub) — needs approval."
-      fi ;;
-    branch)
-      if echo "$cmd" | grep -Eq '\-(d|D|m|M|-delete|-force)\b'; then
-        emit ask "Local git branch mutation — needs approval."
-      elif echo "$cmd" | grep -Eq 'branch[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[^-]'; then
-        emit ask "Local git branch create — needs approval."
-      else
-        can_allow && emit allow "git branch listing."
-      fi ;;
-    tag)     can_allow && emit allow "git tag listing." ;;
-    config)
-      if echo "$cmd" | grep -Eq 'config[[:space:]].*(--get|--list|-l|(^| )get( |$))'; then
-        can_allow && emit allow "git config (read)."
-      else
-        emit ask "Local git config write — needs approval."
-      fi ;;
-    remote)
-      if echo "$cmd" | grep -Eq 'remote([[:space:]]+(-v|show|get-url))?([[:space:]]*$|[[:space:]]*[|;&])'; then
-        can_allow && emit allow "git remote (read)."
-      else
-        emit ask "Local git remote mutation — needs approval."
-      fi ;;
-    stash)
-      if echo "$cmd" | grep -Eq 'stash[[:space:]]+(list|show)'; then
-        can_allow && emit allow "git stash (read)."
-      else
-        emit ask "Local git stash write — needs approval."
-      fi ;;
+    worktree|branch|config|remote|stash)
+      git_segment_ok "$(segments | head -1)" || emit ask "Local git write ($sub) — needs approval." ;;
   esac
   exit 0
 fi
