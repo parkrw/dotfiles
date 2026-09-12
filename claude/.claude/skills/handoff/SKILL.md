@@ -17,7 +17,7 @@ verbatim and **stop — do not execute the skill**.
   REVISIT / BLOCKED, replaces the stale handoff rather than appending,
   and routes recurring knowledge out to TODO/notes/ and unowned problems
   to ISSUES.md. Ends by recommending the one command to run next
-  (e.g. /cycle --spawn 4), picked from the plan's remaining task graph.
+  (e.g. /fan), picked from the plan's remaining task graph.
 
   /handoff                       handoff into the live task file
   /handoff NN                    force task NN as the target
@@ -28,7 +28,6 @@ verbatim and **stop — do not execute the skill**.
   See also:
     /spawn         open a new session that picks up the handoff
     /slice         invokes /handoff at end of each slice
-    /cycle         invokes /handoff at end of session
 ```
 
 ---
@@ -135,7 +134,7 @@ than adding a second one, and flip `Status:` when a session fixes it.
 note, not a gotcha. Environment quirks, how to run a thing locally, an
 upstream API's real shape, a debugging recipe. Write it, then reference it from
 the task file (`see TODO/notes/keycloak-realm-import.md`) rather than restating
-it. Link the note from `TODO/README.md`'s Refs block so `/cycle` workers pick it
+it. Link the note from `TODO/README.md`'s Refs block so later sessions pick it
 up.
 
 ## 5. Print the paste-ready prompt

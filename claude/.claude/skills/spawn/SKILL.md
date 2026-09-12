@@ -22,7 +22,7 @@ verbatim and **stop — do not execute the skill**.
 
   See also:
     /handoff       write the handoff before spawning
-    /cycle --spawn fan out concurrent tasks in worktrees
+    /fan           fan issues out to concurrent sessions in worktrees
 ```
 
 ---
@@ -59,7 +59,7 @@ The new session always starts with an initial prompt composed of, in order:
 
 3. **Next command** — when `$ARGUMENTS` is empty, route via
    `~/.claude/skills/shared/next-command.md` and append the resulting command
-   as the task (`Start with: /cycle --spawn 4.`). A seeded session that has to
+   as the task (`Start with: /fan.`). A seeded session that has to
    re-derive which command to run burns context on a decision this session
    already has the state for. Omit only when the routing finds no plan store.
 4. **`$ARGUMENTS`** — if non-empty, appended last as the actual task, and it

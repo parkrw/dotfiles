@@ -25,8 +25,7 @@ verbatim and **stop — do not execute the skill**.
   See also:
     /handoff       invoked at end of each slice
     /delib         deliberate a decision before implementing
-    /cycle         rolling plan-and-execute alternative for multi-task work
-    /cycle --contest NN  same competitive pattern driven by a TODO/ task file
+    /fan           issue-per-worktree fan-out for multi-task work
 ```
 
 ---
@@ -99,7 +98,7 @@ That `Next:` block almost always leads with `/clear` — the handoff is written
 for zero context on purpose; a fresh context implements and reviews better than
 a compacted one carrying this slice's assumptions. It may name something other
 than `/slice`: with several related tasks left, per
-`~/.claude/skills/shared/next-command.md`, a `/cycle` is cheaper than slicing
+`~/.claude/skills/shared/next-command.md`, a `/fan` is cheaper than slicing
 them one at a time. Let the routing decide; don't override it here.
 
 ## `--contest` flow (competitive selection)
@@ -122,8 +121,8 @@ coin flip.
    is mechanical and cannot run without a test runner. Then fix the **task
    spec** every seed prompt below opens with: if §1 resolved the argument to
    a task file (`TODO/taskNN-<slug>.md` or wherever this repo keeps specs),
-   the spec is `Read <task-file>` — workers read it themselves, like
-   `/cycle --contest`. Otherwise distil §1's scope pass into a **task brief**
+   the spec is `Read <task-file>` — workers read it themselves.
+   Otherwise distil §1's scope pass into a **task brief**
    (goal, acceptance criteria, grep-verified names) and embed it verbatim.
 2. **Branch + spec agent — alone, first.** Propose `git switch -c
    <type>/<slug>` (approval-gated); this is the feature branch, and the spec
