@@ -1,6 +1,6 @@
 ---
-name: wwld
-description: What would the lead do. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/wwld <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/wwld` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. Read-only - never commits, pushes, branches, stashes, or calls gh. e.g. /wwld "zerto logout url #282", /wwld, /wwld --help.
+name: ftl
+description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. Read-only - never fetches, commits, pushes, branches, stashes, or calls gh. e.g. /ftl "zerto logout url #282", /ftl, /ftl --help.
 ---
 
 ## Help
@@ -8,23 +8,23 @@ description: What would the lead do. Working method for a repo someone else owns
 If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verbatim and **stop - do not execute the skill**.
 
 ```
-/wwld - work the way the repo's lead does
+/ftl - follow the leader: work the way the repo's lead does
 
   Derives the conventions from the repo you are in: rules file, docs index,
-  CI, the lead's commits. Never runs a git write or a gh command.
+  CI, the lead's commits. Never runs a git write, a fetch, or a gh command.
 
-  /wwld <task>     orient: index docs/ by heading, read the sections the
+  /ftl <task>     orient: index docs/ by heading, read the sections the
                    task touches, measure the lead's conventions, print state
-  /wwld            pre-handoff checklist on the staged diff (falls back to
+  /ftl            pre-handoff checklist on the staged diff (falls back to
                    the working tree), then the commands for the human
-  /wwld --help     show this help
+  /ftl --help     show this help
 ```
 
 ---
 
 Run from the repo root. Every step prints the line that shows its result, so the next step can rely on what is on screen.
 
-# Orient - `/wwld <task>`
+# Orient - `/ftl <task>`
 
 ## 1. Rules
 
@@ -59,7 +59,16 @@ If memory holds a profile of this lead, correct it where the measurement disagre
 
 ## 4. State
 
-`git status --short`, `git branch --show-current`, then `git fetch origin` and `git log --oneline HEAD..origin/HEAD`. If the log prints anything, the branch is behind: say so, and re-run the repo's checkers after the human rebases, because the rules move. If `origin/HEAD` is unset, print `git remote set-head origin -a` for the human.
+`git status --short`, `git branch --show-current`. Print `git fetch origin` for the human; never run it. Then, against whatever the last fetch left, `git log --oneline HEAD..origin/HEAD`. If `origin/HEAD` is unset, print `git remote set-head origin -a` for the human.
+
+If the log prints anything the branch is behind. Say by how many commits, and name the files both sides touch (`git diff --name-only HEAD...origin/HEAD` against `git diff --name-only origin/HEAD...HEAD`): those are where a rebase will conflict. Then recommend one, with its consequence:
+
+- Behind only in files this branch does not touch: nothing now; rebase before the PR.
+- Unpushed branch: `git pull --ff-only` in the checkout holding the default branch, then `git rebase <default>` here. New shas, nothing else changes. Re-run the checkers after, because the rules move.
+- Pushed, not yet reviewed: the same, then a `--force-with-lease` push from the human's own terminal. The pre-push hook denies a non-fast-forward push from Claude.
+- Pushed and under review: `git merge <default>` instead, so review comments stay anchored to their shas. The squash merge drops the merge commit.
+
+Print the chosen commands as one sequence and wait.
 
 Never edit on the default branch. If you are on it, print `git switch -c <branch>` for the human and wait.
 
@@ -67,13 +76,13 @@ Never edit on the default branch. If you are on it, print `git switch -c <branch
 
 These win over the lead's habits.
 
-- The human runs every git write and every `gh` command. You produce the diff and print the command. `commit`, `push`, `switch`, `branch`, `stash`, `gh`: never.
+- The human runs every git write and every `gh` command. You produce the diff and print the command. `fetch`, `commit`, `push`, `switch`, `branch`, `stash`, `gh`: never.
 - No `Co-authored-by` and no `Claude-Session` trailer.
 - Repo-tracked Claude config (`.claude/`, `CLAUDE.md`, skills) is the lead's decision. Tooling lives in `~/.claude/` and the untracked `.claude/settings.local.json`.
 - A runbook is unverified until you have run it. Run a procedure against dev before extending it, and frame the change as "run against dev on <date>, here is what changed".
 - Work lands as a PR. An issue writeup gets absorbed into the lead's commits; a PR gets reviewed and stays attributable.
 
-# Check - `/wwld`
+# Check - `/ftl`
 
 Every item is pass or fail with the output line that shows it. Do not hand off with an open item: fix it, or name it as left out and why.
 
@@ -82,7 +91,7 @@ Every item is pass or fail with the output line that shows it. Do not hand off w
 - `git status --short` and `git diff --cached --stat`. The diff is one behavior. A second behavior is a second PR.
 - If the repo keeps a CHANGELOG, write its line first (section 5). If the line cannot say what a customer or staffer now gets, the change is not shaped yet.
 - An adjacent smell becomes one line at the end of the handoff.
-- `git fetch origin && git log --oneline HEAD..origin/HEAD`. Output means the branch is behind: say so.
+- Print `git fetch origin` for the human, then `git log --oneline HEAD..origin/HEAD`. Output means the branch is behind: apply Orient step 4.
 
 ## 2. Definition of done
 

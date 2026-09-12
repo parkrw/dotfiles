@@ -35,6 +35,7 @@ alias vim="nvim"
 alias v="nvim"
 alias cl="claude"
 alias clog="cl --model=claude-opus-4-6\[1m\]" # OG claude opus 4.6 1M context
+alias clog8="cl --model=claude-opus-4-8\[1m\]"
 alias clsog="cl --model=claude-sonnet\[4-6\]" # OG claude sonnet 4.6 1M context
 alias cx="codex"
 alias py="python3"

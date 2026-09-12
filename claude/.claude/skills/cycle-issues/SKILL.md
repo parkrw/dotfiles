@@ -25,7 +25,7 @@ verbatim and **stop — do not execute the skill**.
   See also:
     /cycle         same workflow backed by TODO/ files
     /delib         settle an architecture question before planning
-    /handoff       invoked at end of session
+    /newchat       hand the next task to a fresh session
 ```
 
 ---
@@ -166,9 +166,12 @@ After completing a task:
    to the tracker and update the body (reorder, resize, add/drop tasks;
    create new task issues if adding).
 4. Offer push + `gh pr create` per repo git policy.
-5. **Decision point** — same as `/cycle`: route via
+5. **Bugs found in passing** — the tracker is the only backing store, so a
+   problem nobody is fixing now becomes its own GitHub issue instead of an
+   `ISSUES.md` block. Print the `gh issue create` line; don't run it unasked.
+6. **Decision point** — same as `/cycle`: route via
    `~/.claude/skills/shared/next-command.md` and propose exactly one of
-   continue, `--spawn`, or handoff. Recommendations name issue numbers, not
+   continue, `--spawn`, or `newchat`. Recommendations name issue numbers, not
    task file ids.
 
 ## `--adjust` flow
@@ -189,14 +192,17 @@ so the head's monitor fires. Seed prompt:
 
 ```
 Read issue #<number> (gh issue view <number>). Execute all sub-tasks (approval-gated
-commits). When done: push the branch, offer gh pr create,
-close the issue with a summary comment, then run /handoff.
+commits). When done: push the branch, offer gh pr create, and
+close the issue with a summary comment.
 Then report to the supervisor: comment on the issue with branch, commits, files
 touched, verify output, surprises, PR number — then, only once that comment is
 posted, touch <main-path>/.cycle-reports/NN.done. If the supervisor sends
 rework, address it, re-comment, and re-touch the marker.
 Context budget: 15% nudge, never exceed 20%.
 ```
+
+A worker writes no prompt of its own: the report comment is its handoff, and
+only the head opens the next session.
 
 Reconvene: `/cycle-issues --adjust` reconciles — checks which task issues
 are closed, updates the tracker, cleans up worktrees.
@@ -209,12 +215,16 @@ When all task checkboxes are checked and all task issues are closed:
 
 1. Add a final comment to the tracker: `Cycle complete — all tasks landed.`
 2. Close the tracker issue (`--reason completed`).
-3. Invoke **`handoff`**.
+3. Invoke **`newchat`**. The tracker and its closed issues are the durable
+   record, so the prompt carries only what reading them misses. Its task line
+   is the command step 6 routed to — `/cycle-issues NN`, the next tracker, or
+   the next goal.
 
 ## Context budget
 
-Same as `/cycle` — 15% nudge, never exceed 20%, hand off with a concrete
-resume point.
+Same as `/cycle` — 15% nudge, never exceed 20%. At the budget, invoke
+`newchat` mid-cycle. The tracker's checkboxes already hold the resume point,
+so the prompt needs only the task line and the facts the tracker cannot state.
 
 ## When NOT to use
 

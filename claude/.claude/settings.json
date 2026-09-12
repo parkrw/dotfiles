@@ -9,7 +9,10 @@
   "permissions": {
     "allow": [
       "Read",
-      "Artifact"
+      "Artifact",
+      "Bash(gh list:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh pr view:*)"
     ],
     "deny": [
       "mcp__clickup",
@@ -27,21 +30,18 @@
       "Bash(git pull:*)",
       "Bash(git commit:*)",
       "Bash(git add:*)",
-      "Bash(git branch:*)",
-      "Bash(git switch:*)",
-      "Bash(git checkout:*)",
       "Bash(git merge:*)",
       "Bash(git rebase:*)",
       "Bash(git stash:*)",
       "Bash(git reset:*)",
       "Bash(git cherry-pick:*)",
       "Bash(git revert:*)",
-      "Bash(gh:*)",
       "Bash(rm:*)",
       "Bash(rmdir:*)"
     ],
     "defaultMode": "auto"
   },
+  "model": "claude-fable-5-1[1m]",
   "disableClaudeAiConnectors": true,
   "hooks": {
     "Stop": [
@@ -153,9 +153,9 @@
     "command": "bash ~/.claude/statusline-command.sh"
   },
   "enabledPlugins": {
-    "gopls-lsp@claude-plugins-official": true,
+    "gopls-lsp@claude-plugins-official": false,
     "js-lsp@local-plugins": true,
-    "iso-24495-plain-language@iso-24495": true
+    "iso-24495-plain-language@iso-24495": false
   },
   "extraKnownMarketplaces": {
     "iso-24495": {
@@ -175,6 +175,9 @@
       "effortLevel": "xhigh"
     },
     "claude-opus-4-6": {
+      "effortLevel": "xhigh"
+    },
+    "claude-fable-5-1": {
       "effortLevel": "xhigh"
     }
   },
