@@ -182,19 +182,35 @@ echo "$cmd" | grep -Eq '\bshred\b'                           && emit deny "shred
 # ── read-only gh commands ──
 
 if echo "$cmd" | grep -Eq '\bgh\b'; then
-  # Only auto-allow read-only gh when gh is the verb in a simple command.
+  # Only auto-allow read-only gh when gh is the verb. Command substitution still
+  # blocks allow (opaque), but a pipe into a filter does not — the gh segment is
+  # skipped and every other segment must pass segment_ok, mirroring the git path.
   # Extract the subcommand and action from positional words to avoid matching
   # gh substrings inside quoted arguments.
-  if [[ "$first" == "gh" && "$is_simple" == 1 && "$remote_off" == 0 ]]; then
+  if [[ "$first" == "gh" && "$opaque" == 0 && "$remote_off" == 0 ]]; then
     gh_sub=$(echo "$cmd" | awk '{for(i=1;i<=NF;i++){if($i=="gh"){print $(i+1); exit}}}')
     gh_action=$(echo "$cmd" | awk '{for(i=1;i<=NF;i++){if($i=="gh"){print $(i+2); exit}}}')
     gh_read=0
     case "$gh_sub" in
       pr|issue|run|repo)
         case "$gh_action" in view|list|diff|checks|status) gh_read=1 ;; esac ;;
+      label)
+        case "$gh_action" in list|"") gh_read=1 ;; esac ;;
+      # `gh api` can POST, but the deny backstop catches `gh pr merge` and
+      # remote_gate catches the rest, so convenience wins for read-mostly usage.
+      api) gh_read=1 ;;
     esac
     if [[ "$gh_read" == 1 ]] && ! echo "$cmd" | grep -Eq '>[^&]|^>|>$'; then
-      emit allow "Read-only gh command."
+      if [[ "$is_simple" == 1 ]]; then
+        emit allow "Read-only gh command."
+      else
+        ok=1; skipped=0
+        while IFS= read -r seg; do
+          if [[ "$skipped" == 0 && "$(word_of "$seg")" == gh ]]; then skipped=1; continue; fi
+          segment_ok "$seg" || { ok=0; break; }
+        done < <(echo "$cmd" | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}')
+        [[ "$ok" == 1 ]] && emit allow "Read-only gh command piped to filters."
+      fi
     fi
   fi
   remote_gate "gh CLI command"

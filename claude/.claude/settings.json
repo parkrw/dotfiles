@@ -166,7 +166,7 @@
     }
   },
   "outputStyle": "iso-24495-plain-language:ISO 24495",
-  "effortLevel": "high",
+  "effortLevel": "xhigh",
   "modelSettings": {
     "claude-fable-5": {
       "effortLevel": "xhigh"
