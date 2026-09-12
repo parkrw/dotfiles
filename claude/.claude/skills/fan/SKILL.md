@@ -14,12 +14,14 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
   lead does, and runs one Claude session per issue in a sibling worktree:
   one tmux window per batch, one pane per worker, in this tmux session.
   Nothing on GitHub or in the repo tree marks the work as tool-driven.
+  State is one lane per head, so two sessions can fan the same repo at once.
 
   /fan "goal"          plan: decompose, create the issues, run the first batch
   /fan                 fan out the ready batch (disjoint write scopes, cap 4)
   /fan NN              one issue, inline in this checkout - no worktree
   /fan NN MM [..]      exactly these issues, one worktree each (cap 5)
-  /fan --adjust        reconcile landed PRs, prune worktrees, replan
+  /fan --adjust        reconcile landed PRs, prune worktrees, replan; adopts a
+                       dead head's lane when this session has none
   /fan --help          show this help
 
   See also:
@@ -45,8 +47,18 @@ All repo rules and the user's git gates apply. This skill sequences them and nev
 
 ```bash
 repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)   # owner/name
-FAN=~/.local/state/claude/fan/${repo/\//-}; mkdir -p "$FAN"/{briefs,reports}
+LANES=~/.local/state/claude/fan/${repo/\//-}                   # one lane per head
+FAN=$LANES/${FAN_LANE:-${CLAUDE_CODE_SESSION_ID:?}}; mkdir -p "$FAN"/{briefs,reports}
+others() {   # other heads' live rows: lane, issue, owns, status
+  for p in "$LANES"/*/plan.md; do
+    [ "$p" = "$FAN/plan.md" ] && continue
+    lane=${p%/plan.md}; lane=${lane##*/}
+    grep -E '\| (inflight|review|shipped) \|' "$p" | cut -d'|' -f2,5,7 | sed "s/^/ ${lane%%-*} |/"
+  done 2>/dev/null
+}
 ```
+
+Two heads on one repo share nothing in `$LANES`: neither renames the other's markers or completes a batch on the other's rows. They do share the tree, so a pick is checked against `others` (Fan out 1) the same way it is checked against its own batch, and `others` is printed with every guard and pick. A lane outlives its session: `--adjust` adopts one, and the `newchat` prompt at the context ceiling carries `$FAN` so the next head adopts this one.
 
 | File | Holds |
 | --- | --- |
@@ -112,7 +124,7 @@ Everything the skill writes publicly is checked against this block before the co
 
 ## Plan - `/fan "goal"`
 
-Guard: a `$FAN/plan.md` with any row not `landed`/`dropped` → stop and ask: `--adjust`, or start over (the old plan moves to `plan-<date>.md`).
+Guard: a `$FAN/plan.md` with any row not `landed`/`dropped` → stop and ask: `--adjust`, or start over (the old plan moves to `plan-<date>.md`). Print `others`; another head's live rows inform the split, they do not block it.
 
 1. Read the rules file; light scan of the tree. Measure Voice if the block is missing.
 2. Decompose into tasks with `est` and `owns`. Seek seams: prefer tasks that own disjoint directories, even at the cost of one more task, because disjointness is what makes a batch safe. Stop when the split stops being real: a task carved out for parallelism that then needs a shared signature, one migration, or another task's output is worse than one sequential task. Overlapping globs are legal; they serialize. A file every row must touch (a CHANGELOG, a registry, an index) is shared by design: it stays in every `owns`, each worker adds only its own line, and the head expects every PR merged after the first to need a rebase the human runs.
@@ -130,7 +142,7 @@ Guard: a `$FAN/plan.md` with any row not `landed`/`dropped` → stop and ask: `-
 
 The head stays in this checkout and does not implement during a batch.
 
-1. **Size.** Issue numbers that have no row yet get one first: read the issue, set `est` and `owns` from it and the code, measure Voice if the block is missing. Ready rows: `status ready`, every dep `landed` or its issue closed (`gh issue view N --json state -q .state`). Batch = ready rows with pairwise-disjoint `owns`; compare the globs, and containment is overlap (`src/api/**` contains `src/api/auth/**`, so those two serialize). `N = min(disjoint ready, 4)`, 2 when any row is `~L`. Explicit numbers override the pick up to 5, never the disjointness rule. One ready row → Inline below, not a batch. Report the pick (`Fanning 3: #12 #15 #18; deferred #14 (dep #12), #16 (owns overlaps #15)`), one OK.
+1. **Size.** Issue numbers that have no row yet get one first: read the issue, set `est` and `owns` from it and the code, measure Voice if the block is missing. Ready rows: `status ready`, every dep `landed` or its issue closed (`gh issue view N --json state -q .state`). Batch = ready rows with pairwise-disjoint `owns`; compare the globs, and containment is overlap (`src/api/**` contains `src/api/auth/**`, so those two serialize). `N = min(disjoint ready, 4)`, 2 when any row is `~L`. Explicit numbers override the pick up to 5, never the disjointness rule. Then across lanes: a row whose `owns` overlaps an `inflight` or `review` row in `others` defers the same way, because that file is under another worker's hands right now; a `shipped` row there is an open PR, so it is a rebase for whoever merges second, not a block, exactly as within a lane. One ready row → Inline below, not a batch. Report the pick (`Fanning 3: #12 #15 #18; deferred #14 (dep #12), #16 (owns overlaps #15), #19 (owns overlaps #40, lane 8ae991)`) with `others` under it, one OK.
 2. **Brief.** Write `$FAN/briefs/NN.md` per row, for a zero-context reader: goal; the `owns` globs; sub-tasks as behaviors, each with the test it proves and the files; exact verify commands; done-when; the Voice block verbatim; grep-verified names, never assumed ones.
 3. **Claim.** Branch `<issue>-<slug>` unless Voice measured another shape. Per row: `git ls-remote --exit-code --heads origin <branch>` exits 2, `gh pr list --search <N> --state open` is empty. The gate re-checks both at worktree creation; doing it here keeps the prompts in one pane.
 4. **Worktrees.** `git pull --ff-only` in this checkout (allowed outright; it fetches everything, and the fast-forward applies only to the current branch). Then per row, approval-gated:
@@ -144,7 +156,7 @@ The head stays in this checkout and does not implement during a batch.
 
    ```bash
    m="claude --model <worker-model> --effort <worker-effort>"   # drop --effort if unknown
-   win=$(tmux new-window -P -F '#{window_id}' -n fan -c ../<wt-1> "$m")
+   win=$(tmux new-window -P -F '#{window_id}' -n "fan-${CLAUDE_CODE_SESSION_ID%%-*}" -c ../<wt-1> "$m")
    p1=$(tmux list-panes -t "$win" -F '#{pane_id}')
    p2=$(tmux split-window -P -F '#{pane_id}' -t "$win" -c ../<wt-2> "$m")
    w=$(tmux display-message -t "$win" -p '#{window_width}')
@@ -201,6 +213,8 @@ One issue, no worktree. Brief it (Fan out 2), claim it (3), `git switch -c <bran
 
 ## `--adjust`
 
+No `plan.md` in `$FAN` → adopt a lane: `head -1 "$LANES"/*/plan.md`, ask which (one whose head still runs is not a candidate), then `FAN=$LANES/<id>`. A `newchat` prompt that names the lane path skips the question.
+
 1. **Reconcile.** Per `inflight`/`review`/`shipped` row: `gh pr list --head <branch> --state all --json state,number`. `MERGED` → `landed`; `CLOSED` unmerged → ask. A `landed` row's worktree and local branch go, approval-gated: `git worktree remove ../<wt>`, `git branch -d <branch>`. Remote branches are the lead's or the repo's auto-delete, never yours.
 2. **Replan.** Reorder, resize, add, drop, split. A new row is a new issue in Voice (approval-gated). A dropped row's issue closes only if it is yours and untouched, with a one-line reason in Voice; otherwise it stays open.
 3. Log the change. Route next.
@@ -215,7 +229,7 @@ After a batch completes, after an inline issue ships, and at close: route via `~
 
 ## Context budget
 
-15% of the context window is the nudge, 20% the ceiling. At the nudge, finish the current step, make sure `plan.md` says what is in flight, and invoke `newchat`. The plan holds the resume point, so the prompt carries only the task line and what the plan cannot state.
+15% of the context window is the nudge, 20% the ceiling. At the nudge, finish the current step, make sure `plan.md` says what is in flight, and invoke `newchat`. The plan holds the resume point, so the prompt carries the task line, `$FAN` for the next head to adopt, and what the plan cannot state.
 
 ## When not to use
 
