@@ -33,8 +33,9 @@
 # gpt-5.5-codex: a ChatGPT-account login is refused that model outright.
 # --model <name> or CODEX_REVIEW_MODEL overrides.
 # Reviewer effort: one level above the author's (low→medium→high→xhigh),
-# capped at xhigh — never max. --bump doubles the step (+2 instead of +1). Both
-# CLIs take the same ladder, so the level crosses engines unchanged.
+# capped at xhigh — never max. --bump doubles the step (+2 instead of +1), and
+# --effort <level> sets it outright; max is refused either way. Both CLIs take
+# the same ladder, so the level crosses engines unchanged.
 #
 # A second engine is worth the branching because the two fail differently: a
 # reviewer sharing the author's model and training shares its blind spots, and
@@ -77,6 +78,7 @@ repo=""
 cli_model=""   # --model <m>: explicit reviewer model (highest precedence)
 cli_base=""    # --base <ref>: override the resolved default branch
 bump=""        # --bump: double the effort step (+2 instead of +1)
+cli_effort=""  # --effort <level>: explicit reviewer effort (highest precedence)
 dry_run=""     # --dry-run: print base/tip/hash/sentinel and stop
 engine="${CLAUDE_REVIEW_ENGINE:-claude}"  # --engine: which CLI reviews
 while [[ $# -gt 0 ]]; do
@@ -87,6 +89,8 @@ while [[ $# -gt 0 ]]; do
     --model=*) cli_model="${1#--model=}"; shift ;;
     --base)    cli_base="${2:?--base needs a value}"; shift 2 ;;
     --base=*)  cli_base="${1#--base=}"; shift ;;
+    --effort)  cli_effort="${2:?--effort needs a value}"; shift 2 ;;
+    --effort=*) cli_effort="${1#--effort=}"; shift ;;
     --bump)    bump=1; shift ;;
     --dry-run) dry_run=1; shift ;;
     --)        shift; break ;;
@@ -95,7 +99,7 @@ while [[ $# -gt 0 ]]; do
                repo="$1"; shift ;;
   esac
 done
-[[ -n "$repo" ]] || { echo "usage: review-branch.sh <checkout-path> [--engine claude|codex] [--base <ref>] [--model <model>] [--bump] [--dry-run]" >&2; exit 1; }
+[[ -n "$repo" ]] || { echo "usage: review-branch.sh <checkout-path> [--engine claude|codex] [--base <ref>] [--model <model>] [--effort low|medium|high|xhigh] [--bump] [--dry-run]" >&2; exit 1; }
 
 case "$engine" in
   claude|codex) ;;
@@ -103,6 +107,11 @@ case "$engine" in
 esac
 command -v "$engine" >/dev/null 2>&1 ||
   { echo "review-branch: '$engine' is not installed or not on PATH" >&2; exit 1; }
+case "$cli_effort" in
+  ""|low|medium|high|xhigh) ;;
+  max) echo "review-branch: --effort max is never used — xhigh is the ceiling" >&2; exit 1 ;;
+  *)   echo "review-branch: unknown effort '$cli_effort' — low, medium, high or xhigh" >&2; exit 1 ;;
+esac
 
 worktree=$(git -C "$repo" rev-parse --show-toplevel)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -233,7 +242,9 @@ else
 fi
 
 base_effort="${caller_effort:-medium}"
-if [[ -n "$bump" ]]; then
+if [[ -n "$cli_effort" ]]; then
+  review_effort="$cli_effort"
+elif [[ -n "$bump" ]]; then
   review_effort=$(auto_effort "$(auto_effort "$base_effort")")
 else
   review_effort=$(auto_effort "$base_effort")

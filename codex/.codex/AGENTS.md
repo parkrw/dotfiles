@@ -27,7 +27,7 @@
 ## Source control
 
 - **Never integrate from a remote.** No `git merge origin/…`, no `git rebase origin/…`, no `git pull` or `git pull --rebase`, no `gh pr merge`. These are denied permanently and no toggle enables them. If one is genuinely needed, stop and tell me the exact command and what it will do to my tree — I will run it.
-- All local git mutations — staging, committing, branching, stashing, merging, rebasing — ask before running. Committing on `main`/`master` is denied — branch first.
+- `git add` and `git commit` run without a prompt: they write only the local index and history. Committing on `main`/`master` is denied — branch first. `--amend`, `--no-verify`, and a commit on a detached HEAD still ask. Branching, stashing, merging, rebasing ask before running.
 - Read-only git and gh commands (log, diff, status, show, blame, pr view, issue list, etc.) run without a prompt.
 - `git push` and mutating `gh` commands ask every time. `git pull --ff-only` is allowed outright: it advances a branch pointer or fails, so it can neither write a merge commit nor rewrite a sha.
 - Never work around a gate. `--no-verify`, a repo-local `core.hooksPath`, and hand-writing or deleting a marker file are all off limits; ask me instead.

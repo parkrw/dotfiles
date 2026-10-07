@@ -1,6 +1,6 @@
 ---
 name: ftl
-description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. Read-only - never fetches, commits, pushes, branches, stashes, or calls gh. e.g. /ftl "zerto logout url #282", /ftl, /ftl --help.
+description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. `/ftl ship` fetches, commits, runs `claude-review` in a loop until it reports zero findings, then prints the rebase, push and `gh pr create` commands. Read-only otherwise - no fetch, push, branch, stash, or gh. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl --help.
 ---
 
 ## Help
@@ -11,18 +11,23 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
 /ftl - follow the leader: work the way the repo's lead does
 
   Derives the conventions from the repo you are in: rules file, docs index,
-  CI, the lead's commits. Never runs a git write, a fetch, or a gh command.
+  CI, the lead's commits. Runs no git write except ship's add and commit,
+  and no fetch except ship's; never a push or a gh command.
 
   /ftl <task>     orient: index docs/ by heading, read the sections the
                    task touches, measure the lead's conventions, print state
   /ftl            pre-handoff checklist on the staged diff (falls back to
                    the working tree), then the commands for the human
+  /ftl ship       fetch, check, commit, then claude-review (opus, xhigh)
+                   in a loop - fix, commit, re-review - until zero
+                   findings; then print the rebase, push and gh pr create
+                   commands
   /ftl --help     show this help
 ```
 
 ---
 
-Run from the repo root. Every step prints the line that shows its result, so the next step can rely on what is on screen.
+Run from the repo root. Every step prints the line that shows its result, so the next step can rely on what is on screen. `$ARGUMENTS` of exactly `ship` runs Ship; empty runs Check; anything else is the task for Orient.
 
 # Orient - `/ftl <task>`
 
@@ -76,7 +81,7 @@ Never edit on the default branch. If you are on it, print `git switch -c <branch
 
 These win over the lead's habits.
 
-- The human runs every git write and every `gh` command. You produce the diff and print the command. `fetch`, `commit`, `push`, `switch`, `branch`, `stash`, `gh`: never.
+- The human runs every git write and every `gh` command, with one exception: Ship runs `git fetch`, `git add` and `git commit` in its own worktree. You produce the diff and print the command. `push`, `switch`, `branch`, `stash`, `merge`, `rebase`, `gh`: never; `fetch` only in Ship.
 - No `Co-authored-by` and no `Claude-Session` trailer.
 - Repo-tracked Claude config (`.claude/`, `CLAUDE.md`, skills) is the lead's decision. Tooling lives in `~/.claude/` and the untracked `.claude/settings.local.json`.
 - A runbook is unverified until you have run it. Run a procedure against dev before extending it, and frame the change as "run against dev on <date>, here is what changed".
@@ -137,3 +142,67 @@ gh pr create --title '<subject>' --body '<body>'
 ```
 
 Then one line per adjacent smell found, and nothing else.
+
+# Ship - `/ftl ship`
+
+Fetch, check, commit, review, fix, repeat, until the reviewer reports no findings. Ship runs three git commands itself - `git fetch`, `git add`, `git commit` - all in the worktree resolved in step 1; the write gate allows them without a prompt. Every other write is printed for the human at the end.
+
+## 1. Worktree
+
+- `worktree=$(git rev-parse --show-toplevel)` and `branch=$(git branch --show-current)`. Print both.
+- Empty `branch` (detached HEAD) or `main`/`master`: print `git worktree add ../<repo>-<name> -b <name>` for the human and stop.
+- `git worktree list`: if `branch` is checked out at another path, that path is `worktree`. One checkout holds the files, the commits and the review.
+- From here every command is `git -C "$worktree" …` and `claude-review -C "$worktree" …`. No bare `git`: a bare call runs in the session cwd, which may be another checkout.
+
+## 2. Fetch
+
+Before any edit:
+
+```
+git -C "$worktree" fetch origin
+git -C "$worktree" log --oneline HEAD..origin/HEAD
+```
+
+If `origin/HEAD` is unset, apply Orient step 4's `set-head` line first. No output from the log: up to date, go on. Output: the branch is behind. Say by how many commits, then compare `git -C "$worktree" diff --name-only HEAD...origin/HEAD` with `git -C "$worktree" diff --name-only origin/HEAD...HEAD`.
+
+- No file on both lists: go on. The rebase in step 5 applies cleanly.
+- A file on both lists: stop. A review of this diff would judge code the rebase is about to change. Print the rebase sequence from Orient step 4 for the human and wait; rerun `/ftl ship` after.
+
+## 3. Check and commit
+
+Run Check sections 1 to 6 against the working tree and fix what fails. Then:
+
+```
+git -C "$worktree" add -A && git -C "$worktree" commit -m '<subject>'
+```
+
+The review reads `<base>...HEAD`, so an uncommitted fix is invisible to it. Every round commits before it reviews.
+
+## 4. Review loop
+
+Round 1 of at most 10:
+
+```
+claude-review -C "$worktree" --yes --engine claude --model opus --effort xhigh
+```
+
+Run it in the background and wait for it; a review takes minutes and a foreground timeout would kill it mid-run. It prints the report, then a `review-branch: PASS` or `FAIL` line naming the report file.
+
+- `## Findings` is exactly `none`: the loop is done. `VERDICT: PASS` alone is not enough, since PASS can carry minors.
+- `already approved`: this exact diff passed earlier. Read the report file (`~/.claude/hooks/state/review-branch-<key>.md`); if its `diff sha256` matches the one printed and its findings are `none`, done. Otherwise fix those findings; the next commit changes the hash and the next round reviews afresh.
+- Anything else: print `round N: <count> findings`. Fix each finding in `"$worktree"`, most severe first. A finding that is wrong gets its reason in the commit body instead of a code change. Then `git -C "$worktree" add -A && git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
+
+After round 10 with findings still open, stop: print each as `path:line - defect`, then hand off anyway. The human decides.
+
+## 5. Hand off
+
+Pick rebase or merge by Orient step 4, fill the placeholders, print the block, and nothing else - no smell line, no summary:
+
+```
+git -C <default-checkout> pull --ff-only
+git -C "$worktree" rebase <default>
+git -C "$worktree" push -u origin <branch>
+gh pr create --title '<subject>' --body '<body>'
+```
+
+`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `merge <default>` in place of `rebase`. Subject and body follow Check step 6; a PR that finishes an issue ends its body with `Closes #N`.
