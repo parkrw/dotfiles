@@ -43,6 +43,7 @@
   },
   "model": "claude-fable-5-1[1m]",
   "disableClaudeAiConnectors": true,
+  "syncClaudeAiSkills": false,
   "hooks": {
     "Stop": [
       {
