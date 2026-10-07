@@ -7,7 +7,7 @@
 #   claude-review --status           summarise and stop (no review, no prompt)
 #   claude-review --engine codex     review with codex exec, not claude -p
 #   claude-review --yes              review without asking
-#   claude-review --base <ref> --model <m> --bump    passed through to review-branch.sh
+#   claude-review --base <ref> --model <m> --effort <level> --bump    passed through to review-branch.sh
 #
 # Why a wrapper: review-branch.sh spends tokens and minutes, and everything
 # that decides whether the spend is worth it — the base it resolved, the size
