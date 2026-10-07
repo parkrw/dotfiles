@@ -5,7 +5,9 @@
 #   reads + read-only git/gh        -> allow (no prompt)
 #   create NEW file                 -> allow (no prompt)
 #   git pull --ff-only              -> allow (no prompt)
-#   local git writes (add, commit)  -> ask
+#   git add / git commit (local)    -> allow (no prompt); --amend, --no-verify,
+#                                      detached HEAD or an opaque line -> ask
+#   other local git writes          -> ask
 #   new branch whose name is taken
 #     on origin, or whose issue is
 #     someone else's                -> deny (always)
@@ -140,7 +142,7 @@ git_segment_ok(){
   sub=$(git_sub_of "$1"); args=$(git_args_of "$1")
   # --output sends log/diff/show output to a file.
   echo "$args" | grep -Eq -- '(^|[[:space:]])--output(=|[[:space:]])' && return 1
-  [[ -n "$seg_extra_git" && "$sub" == "$seg_extra_git" ]] && return 0
+  [[ -n "$seg_extra_git" ]] && echo "$sub" | grep -Eq "^(${seg_extra_git})$" && return 0
   echo "$sub" | grep -Eq "^(${seg_git})$" && return 0
   case "$sub" in
     worktree) echo "$args" | grep -Eq '^list([[:space:]]|$)' ;;
@@ -456,6 +458,23 @@ If they belong to ${cur:-the branch you are on}, leave them here and give the ne
   git worktree add ../$(basename "$repo_root")-${target//\//-} -b $target
 Approve only if the uncommitted changes are meant to move."
     fi
+  fi
+fi
+
+# ── local add / commit ──
+#
+# Staging and committing touch only this checkout's index and history: nothing
+# reaches a remote, and `git reset --soft HEAD~` undoes a commit. They run
+# without a prompt so a review loop can commit each fix and re-review
+# unattended. Commit on main/master was denied above. What is not a plain
+# local write still asks: --amend rewrites a sha, --no-verify skips the repo's
+# own hooks, a detached HEAD has no branch to hold the commit, and an opaque or
+# redirecting line may hide another command.
+if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+(add|commit)([[:space:]]|$)'; then
+  if [[ -n "$cur" ]] && ! echo "$bare" | grep -Eq -- '(^|[[:space:]])--amend\b'; then
+    seg_extra_git='add|commit'
+    can_allow && emit allow "Local git add/commit — writes only this checkout's index and history."
+    seg_extra_git=''
   fi
 fi
 
