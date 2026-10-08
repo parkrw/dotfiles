@@ -1,6 +1,6 @@
 ---
 name: ftl
-description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `claude-review` in a loop until it reports zero findings, then prints the rebase, push and `gh pr create` commands. Read-only otherwise - no fetch, push, branch, stash, or gh outside Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl --help.
+description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `claude-review` in a loop until it reports zero findings, then prints the push and `gh pr create` commands, with a rebase first only when behind. Read-only otherwise - no fetch, push, branch, stash, or gh outside Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl --help.
 ---
 
 ## Help
@@ -21,8 +21,8 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
   /ftl ship       worktree (created on main/detached), fetch, check,
                    commit, then claude-review (opus, xhigh)
                    in a loop - fix, commit, re-review - until zero
-                   findings; then print the rebase, push and gh pr create
-                   commands
+                   findings; then print the push and gh pr create
+                   commands, with a rebase first only when behind
   /ftl --help     show this help
 ```
 
