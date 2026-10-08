@@ -74,6 +74,10 @@ branch_diff() {
 }
 [[ -n "${REVIEW_BRANCH_LIB_ONLY:-}" ]] && return 0
 
+# Everything below runs inside main so bash parses the whole file before the
+# minutes-long review pipeline starts. Bash otherwise reads a script by byte
+# offset as it goes, and an edit landing mid-run gets executed as shell.
+main() {
 repo=""
 cli_model=""   # --model <m>: explicit reviewer model (highest precedence)
 cli_base=""    # --base <ref>: override the resolved default branch
@@ -389,3 +393,6 @@ else
   echo "review-branch: FAIL ($(( cur_fails + 1 )) consecutive on this diff) — fix findings, commit, rerun. report: $report"
   exit 2
 fi
+}
+
+main "$@"
