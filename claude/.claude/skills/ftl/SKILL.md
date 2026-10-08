@@ -202,7 +202,7 @@ After round 10 with findings still open, stop: print each as `path:line - defect
 
 ## 5. Hand off
 
-Pick rebase or merge by Orient step 4, fill the placeholders, print the block, and nothing else - no smell line, no summary:
+First rerun step 2's `fetch` and `log --oneline HEAD..origin/HEAD`, since the review loop can outlast a merge to the default branch. No output: the branch is current, so drop the `pull --ff-only` and `rebase`/`merge` lines and print only `push` and `gh pr create`. Output: pick rebase or merge by Orient step 4. Fill the placeholders, print the block, and nothing else - no smell line, no summary:
 
 ```
 git -C <default-checkout> pull --ff-only
