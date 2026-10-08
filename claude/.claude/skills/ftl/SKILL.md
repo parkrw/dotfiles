@@ -1,6 +1,6 @@
 ---
 name: ftl
-description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. `/ftl ship` fetches, commits, runs `claude-review` in a loop until it reports zero findings, then prints the rebase, push and `gh pr create` commands. Read-only otherwise - no fetch, push, branch, stash, or gh. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl --help.
+description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `claude-review` in a loop until it reports zero findings, then prints the rebase, push and `gh pr create` commands. Read-only otherwise - no fetch, push, branch, stash, or gh outside Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl --help.
 ---
 
 ## Help
@@ -11,14 +11,15 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
 /ftl - follow the leader: work the way the repo's lead does
 
   Derives the conventions from the repo you are in: rules file, docs index,
-  CI, the lead's commits. Runs no git write except ship's add and commit,
-  and no fetch except ship's; never a push or a gh command.
+  CI, the lead's commits. Runs no git write except ship's worktree add,
+  add and commit, and no fetch except ship's; never a push or a gh command.
 
   /ftl <task>     orient: index docs/ by heading, read the sections the
                    task touches, measure the lead's conventions, print state
   /ftl            pre-handoff checklist on the staged diff (falls back to
                    the working tree), then the commands for the human
-  /ftl ship       fetch, check, commit, then claude-review (opus, xhigh)
+  /ftl ship       worktree (created on main/detached), fetch, check,
+                   commit, then claude-review (opus, xhigh)
                    in a loop - fix, commit, re-review - until zero
                    findings; then print the rebase, push and gh pr create
                    commands
@@ -81,7 +82,7 @@ Never edit on the default branch. If you are on it, print `git switch -c <branch
 
 These win over the lead's habits.
 
-- The human runs every git write and every `gh` command, with one exception: Ship runs `git fetch`, `git add` and `git commit` in its own worktree. You produce the diff and print the command. `push`, `switch`, `branch`, `stash`, `merge`, `rebase`, `gh`: never; `fetch` only in Ship.
+- The human runs every git write and every `gh` command, with one exception: Ship runs `git worktree add -b`, `git fetch`, `git add` and `git commit` in its own worktree. You produce the diff and print the command. `push`, `switch`, `branch`, `stash`, `merge`, `rebase`, `gh`: never; `fetch` and `worktree add` only in Ship.
 - No `Co-authored-by` and no `Claude-Session` trailer.
 - Repo-tracked Claude config (`.claude/`, `CLAUDE.md`, skills) is the lead's decision. Tooling lives in `~/.claude/` and the untracked `.claude/settings.local.json`.
 - A runbook is unverified until you have run it. Run a procedure against dev before extending it, and frame the change as "run against dev on <date>, here is what changed".
@@ -145,14 +146,19 @@ Then one line per adjacent smell found, and nothing else.
 
 # Ship - `/ftl ship`
 
-Fetch, check, commit, review, fix, repeat, until the reviewer reports no findings. Ship runs three git commands itself - `git fetch`, `git add`, `git commit` - all in the worktree resolved in step 1; the write gate allows them without a prompt. Every other write is printed for the human at the end.
+Fetch, check, commit, review, fix, repeat, until the reviewer reports no findings. Ship runs four git commands itself - `git worktree add -b` (step 1, only when needed; the write gate asks), then `git fetch`, `git add`, `git commit` in the worktree resolved in step 1, which the gate allows without a prompt. Every other write is printed for the human at the end.
 
 ## 1. Worktree
 
 - `worktree=$(git rev-parse --show-toplevel)` and `branch=$(git branch --show-current)`. Print both.
-- Empty `branch` (detached HEAD) or `main`/`master`: print `git worktree add ../<repo>-<name> -b <name>` for the human and stop.
+- Empty `branch` (detached HEAD) or `main`/`master`: create the worktree.
+  - `name`: a 2-4 word kebab-case slug of the change in the diff. Print it. `name` already a branch or `../<repo>-<name>` already exists: stop and ask.
+  - `git worktree add -b <name> ../<repo>-<name> HEAD`. `worktree` is the absolute path of `../<repo>-<name>`; `branch` is `name`.
+  - Uncommitted work in the original checkout: carry it over, tracked then untracked - `git diff --binary HEAD | git -C "$worktree" apply --index`, then `git ls-files -z -o --exclude-standard | rsync -a --from0 --files-from=- ./ "$worktree"/`. Either fails: stop, and leave both checkouts as they are.
+  - Never clean the original checkout. Its copy of the changes stays; step 5 tells the human to discard it once the worktree is verified.
 - `git worktree list`: if `branch` is checked out at another path, that path is `worktree`. One checkout holds the files, the commits and the review.
-- From here every command is `git -C "$worktree" …` and `claude-review -C "$worktree" …`. No bare `git`: a bare call runs in the session cwd, which may be another checkout.
+- `worktree` differs from the session cwd: call the `EnterWorktree` tool with `path: "$worktree"` (load it via ToolSearch first). A plain `cd` to a checkout outside the launch directory is reset after the call; EnterWorktree moves the session itself, so edits, reads and fixes land in `worktree`. Then run `pwd` and print it; anything other than `worktree`: stop.
+- From here every command is still `git -C "$worktree" …` and `claude-review -C "$worktree" …`. No bare `git`: if the cwd drifts, `-C` keeps each command on the right checkout.
 
 ## 2. Fetch
 
@@ -205,4 +211,4 @@ git -C "$worktree" push -u origin <branch>
 gh pr create --title '<subject>' --body '<body>'
 ```
 
-`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `merge <default>` in place of `rebase`. Subject and body follow Check step 6; a PR that finishes an issue ends its body with `Closes #N`.
+`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `merge <default>` in place of `rebase`. When step 1 carried uncommitted work over, the block opens with `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy, before `pull --ff-only`, which a dirty tree would block. Subject and body follow Check step 6; a PR that finishes an issue ends its body with `Closes #N`.
