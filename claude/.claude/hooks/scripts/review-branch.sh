@@ -165,6 +165,13 @@ would show: `git diff '"$base"'...HEAD`. Work through this scope in order — a
 reviewer who just "reviews the code" returns style notes and misses the
 contract breaks.
 
+Scope: a finding is a defect this diff introduces or changes — in its added
+and edited lines, or in behaviour that changes because of them (a caller a
+changed signature breaks, a test the change invalidates). Code the diff does
+not touch is out of scope for Findings even when it is wrong: it is not this
+PR'\''s to fix, and a FAIL on it blocks a change that did not cause it.
+Every bullet below is judged against the diff, not the repo.
+
 - Correctness. Every finding carries a concrete failure: the input or state
   that produces a wrong result, a crash, or a hang. No scenario, no finding.
 - Security, data integrity, reliability. Injection; secrets or tokens in the
@@ -191,9 +198,21 @@ than incomplete.
 
 ACCEPTED_RISKS_PLACEHOLDER
 
+Adjacent smells: advisory, for code the diff did not touch. Emergency grade
+only — a live secret, data loss or a security hole reachable on the normal
+path, today. Nothing less: no style, naming, dead code, or missing tests in
+untouched files. "none" is the expected content.
+
+VERDICT is decided by Findings alone. Adjacent smells and Unverified never
+move it.
+
 Output exactly this shape:
 ## Findings
 path:line — blocker|major|minor — defect (most severe first; "none" if none)
+  Evidence: quoted text or command output
+  Effect: the concrete failure
+## Adjacent smells
+path:line — defect in code the diff did not touch (emergency only; "none" otherwise)
   Evidence: quoted text or command output
   Effect: the concrete failure
 ## Unverified

@@ -194,7 +194,7 @@ claude-review -C "$worktree" --yes --engine claude --model opus --effort xhigh
 
 Run it in the background and wait for it; a review takes minutes and a foreground timeout would kill it mid-run. It prints the report, then a `review-branch: PASS` or `FAIL` line naming the report file.
 
-- `## Findings` is exactly `none`: the loop is done. `VERDICT: PASS` alone is not enough, since PASS can carry minors.
+- `## Findings` is exactly `none`: the loop is done. `VERDICT: PASS` alone is not enough, since PASS can carry minors. `## Adjacent smells` never counts: it is advisory, outside the diff, and not this PR's to fix.
 - `already approved`: this exact diff passed earlier. Read the report file (`~/.claude/hooks/state/review-branch-<key>.md`); if its `diff sha256` matches the one printed and its findings are `none`, done. Otherwise fix those findings; the next commit changes the hash and the next round reviews afresh.
 - Anything else: print `round N: <count> findings`. Fix each finding in `"$worktree"`, most severe first. A finding that is wrong gets its reason in the commit body instead of a code change. Then `git -C "$worktree" add -A && git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
 
