@@ -21,8 +21,8 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
   /ftl ship       worktree (created on main/detached), fetch, check,
                    commit, then claude-review (opus, xhigh)
                    in a loop - fix, commit, re-review - until zero
-                   findings; then print the push and gh pr create
-                   commands, with a rebase first only when behind
+                   findings; then print cd, push and gh pr create,
+                   with a rebase first only when behind
   /ftl --help     show this help
 ```
 
@@ -157,7 +157,7 @@ Fetch, check, commit, review, fix, repeat, until the reviewer reports no finding
   - Uncommitted work in the original checkout: carry it over, tracked then untracked - `git diff --binary HEAD | git -C "$worktree" apply --index`, then `git ls-files -z -o --exclude-standard | rsync -a --from0 --files-from=- ./ "$worktree"/`. Either fails: stop, and leave both checkouts as they are.
   - Never clean the original checkout. Its copy of the changes stays; step 5 tells the human to discard it once the worktree is verified.
 - `git worktree list`: if `branch` is checked out at another path, that path is `worktree`. One checkout holds the files, the commits and the review.
-- `worktree` differs from the session cwd: call the `EnterWorktree` tool with `path: "$worktree"` (load it via ToolSearch first). A plain `cd` to a checkout outside the launch directory is reset after the call; EnterWorktree moves the session itself, so edits, reads and fixes land in `worktree`. Then run `pwd` and print it; anything other than `worktree`: stop.
+- `worktree` differs from the session cwd: call the `EnterWorktree` tool with `path: "$worktree"` (load it via ToolSearch first) without asking the human; entering is part of Ship, not a decision. A plain `cd` to a checkout outside the launch directory is reset after the call; EnterWorktree moves the session itself, so edits, reads and fixes land in `worktree`. Then run `pwd` and print it; anything other than `worktree`: stop.
 - From here every command is still `git -C "$worktree" …` and `claude-review -C "$worktree" …`. No bare `git`: if the cwd drifts, `-C` keeps each command on the right checkout.
 
 ## 2. Fetch
@@ -202,13 +202,24 @@ After round 10 with findings still open, stop: print each as `path:line - defect
 
 ## 5. Hand off
 
-First rerun step 2's `fetch` and `log --oneline HEAD..origin/HEAD`, since the review loop can outlast a merge to the default branch. No output: the branch is current, so drop the `pull --ff-only` and `rebase`/`merge` lines and print only `push` and `gh pr create`. Output: pick rebase or merge by Orient step 4. Fill the placeholders, print the block, and nothing else - no smell line, no summary:
+First rerun step 2's `fetch`, then `git -C "$worktree" rev-list --count HEAD..origin/HEAD`, since the review loop can outlast a merge to the default branch. The human pastes into a shell that sits in some other directory and has no `$worktree`, so every path is a literal absolute path and the block opens with `cd`. Print exactly one of the two blocks below, placeholders filled, and nothing else - no smell line, no summary.
+
+Count `0` - current. No `pull`, no `rebase`:
 
 ```
-git -C <default-checkout> pull --ff-only
-git -C "$worktree" rebase <default>
-git -C "$worktree" push -u origin <branch>
+cd <worktree>
+git push -u origin <branch>
 gh pr create --title '<subject>' --body '<body>'
 ```
 
-`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `merge <default>` in place of `rebase`. When step 1 carried uncommitted work over, the block opens with `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy, before `pull --ff-only`, which a dirty tree would block. Subject and body follow Check step 6; a PR that finishes an issue ends its body with `Closes #N`.
+Count above `0` - behind:
+
+```
+cd <worktree>
+git -C <default-checkout> pull --ff-only
+git rebase <default>
+git push -u origin <branch>
+gh pr create --title '<subject>' --body '<body>'
+```
+
+`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `git merge <default>` in place of `git rebase <default>`. When step 1 carried uncommitted work over, either block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy before a `pull --ff-only` that a dirty tree would block. Subject and body follow Check step 6; a PR that finishes an issue ends its body with `Closes #N`.

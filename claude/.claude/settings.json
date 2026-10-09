@@ -10,6 +10,7 @@
     "allow": [
       "Read",
       "Artifact",
+      "EnterWorktree",
       "Bash(gh list:*)",
       "Bash(gh issue view:*)",
       "Bash(gh pr view:*)"
