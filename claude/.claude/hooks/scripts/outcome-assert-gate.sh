@@ -22,22 +22,25 @@ case "$path" in
   *) exit 0 ;;
 esac
 
-if [[ -f "$OFF_REPOS" ]]; then
-  cwd=$(jq -r '.cwd // ""' <<<"$INPUT"); [[ -z "$cwd" ]] && cwd=$PWD
-  # Keyed on the main checkout so linked worktrees share the opt-out.
-  if common=$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
-    grep -Fxq "$(cd "$(dirname "$common")" && pwd -P)" "$OFF_REPOS" && exit 0
-  fi
+dir=$(dirname "$path")
+while [[ ! -d "$dir" ]]; do dir=$(dirname "$dir"); done
+
+# Keyed on the main checkout of the file's repo, so linked worktrees share the
+# opt-out and the session's cwd does not decide it.
+if [[ -f "$OFF_REPOS" ]] && common=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  grep -Fxq "$(cd "$(dirname "$common")" && pwd -P)" "$OFF_REPOS" && exit 0
 fi
 
-# Edit's new_string repeats its old_string anchor lines and Write resends the
-# whole file, so subtract what is already there: legacy lines must not block.
-added=$(jq -r '(.tool_input.edits // [.tool_input | select(.new_string)])[] | ((.new_string | split("\n")) - ((.old_string // "") | split("\n")))[]' <<<"$INPUT")
-content=$(jq -r '.tool_input.content // ""' <<<"$INPUT")
-if [[ -n "$content" ]]; then
-  [[ -f "$path" ]] && content=$(grep -vxFf "$path" <<<"$content" || true)
-  added+=$'\n'"$content"
-fi
+# Edit's new_string repeats its old_string anchor and Write resends the whole
+# file. A line already in the file or in HEAD is legacy, so re-anchoring or
+# moving it across edits must not block; only lines new to both are judged.
+proposed=$(jq -r '.tool_input.content // empty, ((.tool_input.edits // [.tool_input | select(.new_string)])[] | .new_string)' <<<"$INPUT")
+legacy() {
+  jq -r '(.tool_input.edits // [.tool_input])[] | .old_string // empty' <<<"$INPUT"
+  [[ -f "$path" ]] && cat "$path"
+  git -C "$(dirname "$path")" show "HEAD:./$(basename "$path")" 2>/dev/null || true
+}
+added=$(grep -vxFf <(legacy) <<<"$proposed" || true)
 
 pat='toHaveBeenCalled|toBeCalled|calledWith|calledOnce|callCount|call_count|assert_called|assert_has_calls|assert_not_called|AssertCalled|AssertNumberOfCalls|AssertExpectations|\.EXPECT\(\)|\.Times\(|to receive\(|have_received|(jest|vi)\.(fn|mock|spyOn)|sinon\.|MagicMock|mock\.patch|@patch|(^|[^[:alnum:]_])(it|test|describe)\.skip|(^|[^[:alnum:]_])x(it|describe|test)\(|pytest\.mark\.skip|unittest\.skip|t\.Skip\('
 hits=$(grep -E "$pat" <<<"$added" || true)
