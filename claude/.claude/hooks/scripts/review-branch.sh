@@ -189,8 +189,12 @@ Every bullet below is judged against the diff, not the repo.
 - Patterns and style. Match the surrounding code and each file'\''s own
   prevailing convention: naming, error handling, comment policy, prose wrap.
 - Tests. Changed behaviour with no test is a finding. Judge by READING the test
-  files. A stub that neuters the path under test is a finding too, because it
-  turns a green suite into no coverage.
+  files. Each assertion must check an observable outcome: a result, return
+  code, emitted header or output, or side effect. Asserting call shape
+  (calledWith, arity, call counts, a query'\''s field list) is a finding. So is a
+  stub that neuters the path under test, because it turns a green suite into no
+  coverage, and so is any skipped test. For a bug fix, the test must precede or
+  accompany the fix and fail without it; say so when the diff cannot show that.
 - CI. READ the workflows, Makefile, or hook config and judge whether the diff
   clears each job. NEVER run CI, a test suite, a linter, or a formatter — you
   read, the author runs. Say so plainly when the repo has no CI.
