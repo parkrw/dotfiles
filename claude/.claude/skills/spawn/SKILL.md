@@ -18,6 +18,7 @@ verbatim and **stop — do not execute the skill**.
 
   /spawn                         new session, picks up the existing handoff
   /spawn "continue task 07c2"    new session seeded with a task
+  /spawn --fresh "task"          seeded with the task only, no handoff pickup
   /spawn --help                  show this help
 
   See also:
@@ -40,7 +41,9 @@ Open a fresh interactive `claude` in a **new window of the current tmux session*
 
 The new session always starts with an initial prompt composed of, in order:
 
-1. **Handoff pickup** — resolve where the handoff lives, in this order:
+1. **Handoff pickup** — when `$ARGUMENTS` starts with `--fresh`, drop the
+   flag and omit this line: the task arrives complete, and an older handoff
+   would compete with it. Otherwise resolve where the handoff lives, in this order:
    - `TODO/README.md` exists → `Read TODO/README.md, follow its Resume pointer
      to the task file, and continue from that file's Handoff section.`
    - else `HANDOFF.md` exists in `$PWD` (`[ -f HANDOFF.md ]`) →
