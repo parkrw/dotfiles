@@ -20,7 +20,10 @@ path=$(jq -r '.tool_input.file_path // ""' <<<"$INPUT")
 # Basename, because a case glob's * also matches /: test_harness/app/retry.py
 # would otherwise match test_*.py.
 case "$(basename "$path")" in
-  *_test.go|*.test.[jt]s|*.test.[jt]sx|*.spec.[jt]s|*.spec.[jt]sx|test_*.py|*_test.py|*_spec.rb) ;;
+  *_test.go) lang=go ;;
+  *.test.[jt]s|*.test.[jt]sx|*.spec.[jt]s|*.spec.[jt]sx) lang=js ;;
+  test_*.py|*_test.py) lang=py ;;
+  *_spec.rb) lang=rb ;;
   *) exit 0 ;;
 esac
 
@@ -36,10 +39,10 @@ fi
 # Edit's new_string repeats its old_string anchor and Write resends the whole
 # file. A line already in the file or in HEAD is legacy, so re-anchoring or
 # moving it across edits must not block; only lines new to both are judged.
-# Compared trimmed, so wrapping a legacy line in a new block re-indents it
-# without making it new.
-trim() { sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'; }
-proposed=$(jq -r '.tool_input.content // empty, ((.tool_input.edits // [.tool_input | select(.new_string)])[] | .new_string)' <<<"$INPUT" | trim)
+# Compared with whitespace normalized, so re-indenting a legacy line into a new
+# block, or gofmt realigning it, does not make it new.
+normalize() { sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/ /g'; }
+proposed=$(jq -r '.tool_input.content // empty, ((.tool_input.edits // [.tool_input | select(.new_string)])[] | .new_string)' <<<"$INPUT" | normalize)
 # old_string is not a source: a later MultiEdit anchor can be a line an earlier
 # edit in the same call added.
 legacy() {
@@ -49,22 +52,31 @@ legacy() {
 # A hash set, not grep -f: grep's cost is proposed x legacy lines, which runs
 # past the hook timeout on a Write of a few-thousand-line file. FILENAME, not
 # NR==FNR, because an empty legacy stream would make every line look seen.
-added=$(awk 'FILENAME == ARGV[1] { seen[$0]; next } !($0 in seen)' <(legacy | trim) - <<<"$proposed")
+added=$(awk 'FILENAME == ARGV[1] { seen[$0]; next } !($0 in seen)' <(legacy | normalize) - <<<"$proposed")
 
-# ^ anchors work because added lines are trimmed.
+# Call-shape and mock names are distinctive in any language. Skip forms are
+# not (a Go `pending []string` field, a JS `{ pending: true }` state), so each
+# is matched only in the language where it skips. ^ works: lines are trimmed.
 pats=(
   'toHaveBeenCalled|toBeCalled|calledWith|calledOnce|callCount|call_count'
   'assert_called|assert_has_calls|assert_not_called'
   'AssertCalled|AssertNumberOfCalls|AssertExpectations|\.EXPECT\(\)|\.Times\('
   'to receive\(|have_received'
   '(jest|vi)\.(fn|mock|spyOn)|sinon\.|MagicMock|mock\.patch|@patch'
-  '(^|[^[:alnum:]_])(it|test|describe)\.skip'
-  '(^|[^[:alnum:]_])x(it|describe|test|context|specify)([[:space:]]|\()'
-  '^(skip|pending)([[:space:]]+[^=:[:space:]]|\(|$)'
-  '(^|[^[:alnum:]_])(skip|pending):[[:space:]]*(true|[^[:alnum:][:space:]_])'
-  'pytest\.(mark\.)?skip|unittest\.skip|skipTest\('
-  '(^|[^[:alnum:]_])[tb]\.Skip(f|Now)?\('
 )
+case "$lang" in
+  go) pats+=('(^|[^[:alnum:]_])[tb]\.Skip(f|Now)?\(') ;;
+  js) pats+=(
+        '(^|[^[:alnum:]_])(it|test|describe)\.skip|(^|[^[:alnum:]_])x(it|describe|test)\('
+        ',[[:space:]]*\{[[:space:]]*skip:[[:space:]]*(true|[^[:alnum:][:space:]_])'
+      ) ;;
+  py) pats+=('pytest\.(mark\.)?skip|unittest\.skip|skipTest\(') ;;
+  rb) pats+=(
+        '(^|[^[:alnum:]_])x(it|describe|context|specify)([[:space:]]|\()'
+        '^(skip|pending)([[:space:]]+[^=[:space:]]|\(|$)'
+        ',[[:space:]]*(skip|pending):[[:space:]]*(true|[^[:alnum:][:space:]_])'
+      ) ;;
+esac
 pat=$(IFS='|'; echo "${pats[*]}")
 hits=$(grep -E "$pat" <<<"$added" || true)
 [[ -z "$hits" ]] && exit 0
