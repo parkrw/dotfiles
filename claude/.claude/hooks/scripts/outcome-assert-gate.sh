@@ -34,15 +34,18 @@ fi
 # Edit's new_string repeats its old_string anchor and Write resends the whole
 # file. A line already in the file or in HEAD is legacy, so re-anchoring or
 # moving it across edits must not block; only lines new to both are judged.
-proposed=$(jq -r '.tool_input.content // empty, ((.tool_input.edits // [.tool_input | select(.new_string)])[] | .new_string)' <<<"$INPUT")
+# Compared trimmed, so wrapping a legacy line in a new block re-indents it
+# without making it new.
+trim() { sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'; }
+proposed=$(jq -r '.tool_input.content // empty, ((.tool_input.edits // [.tool_input | select(.new_string)])[] | .new_string)' <<<"$INPUT" | trim)
 legacy() {
   jq -r '(.tool_input.edits // [.tool_input])[] | .old_string // empty' <<<"$INPUT"
   [[ -f "$path" ]] && cat "$path"
   git -C "$(dirname "$path")" show "HEAD:./$(basename "$path")" 2>/dev/null || true
 }
-added=$(grep -vxFf <(legacy) <<<"$proposed" || true)
+added=$(grep -vxFf <(legacy | trim) <<<"$proposed" || true)
 
-pat='toHaveBeenCalled|toBeCalled|calledWith|calledOnce|callCount|call_count|assert_called|assert_has_calls|assert_not_called|AssertCalled|AssertNumberOfCalls|AssertExpectations|\.EXPECT\(\)|\.Times\(|to receive\(|have_received|(jest|vi)\.(fn|mock|spyOn)|sinon\.|MagicMock|mock\.patch|@patch|(^|[^[:alnum:]_])(it|test|describe)\.skip|(^|[^[:alnum:]_])x(it|describe|test)\(|pytest\.mark\.skip|unittest\.skip|t\.Skip\('
+pat='toHaveBeenCalled|toBeCalled|calledWith|calledOnce|callCount|call_count|assert_called|assert_has_calls|assert_not_called|AssertCalled|AssertNumberOfCalls|AssertExpectations|\.EXPECT\(\)|\.Times\(|to receive\(|have_received|(jest|vi)\.(fn|mock|spyOn)|sinon\.|MagicMock|mock\.patch|@patch|(^|[^[:alnum:]_])(it|test|describe)\.skip|(^|[^[:alnum:]_])x(it|describe|test)\(|pytest\.mark\.skip|unittest\.skip|(^|[^[:alnum:]_])[tb]\.Skip(f|Now)?\('
 hits=$(grep -E "$pat" <<<"$added" || true)
 [[ -z "$hits" ]] && exit 0
 
