@@ -38,12 +38,16 @@ fi
 # without making it new.
 trim() { sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'; }
 proposed=$(jq -r '.tool_input.content // empty, ((.tool_input.edits // [.tool_input | select(.new_string)])[] | .new_string)' <<<"$INPUT" | trim)
+# old_string is not a source: a later MultiEdit anchor can be a line an earlier
+# edit in the same call added.
 legacy() {
-  jq -r '(.tool_input.edits // [.tool_input])[] | .old_string // empty' <<<"$INPUT"
   [[ -f "$path" ]] && cat "$path"
   git -C "$(dirname "$path")" show "HEAD:./$(basename "$path")" 2>/dev/null || true
 }
-added=$(grep -vxFf <(legacy | trim) <<<"$proposed" || true)
+# A hash set, not grep -f: grep's cost is proposed x legacy lines, which runs
+# past the hook timeout on a Write of a few-thousand-line file. FILENAME, not
+# NR==FNR, because an empty legacy stream would make every line look seen.
+added=$(awk 'FILENAME == ARGV[1] { seen[$0]; next } !($0 in seen)' <(legacy | trim) - <<<"$proposed")
 
 pat='toHaveBeenCalled|toBeCalled|calledWith|calledOnce|callCount|call_count|assert_called|assert_has_calls|assert_not_called|AssertCalled|AssertNumberOfCalls|AssertExpectations|\.EXPECT\(\)|\.Times\(|to receive\(|have_received|(jest|vi)\.(fn|mock|spyOn)|sinon\.|MagicMock|mock\.patch|@patch|(^|[^[:alnum:]_])(it|test|describe)\.skip|(^|[^[:alnum:]_])x(it|describe|test)\(|pytest\.mark\.skip|unittest\.skip|(^|[^[:alnum:]_])[tb]\.Skip(f|Now)?\('
 hits=$(grep -E "$pat" <<<"$added" || true)
