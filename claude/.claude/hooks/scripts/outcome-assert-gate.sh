@@ -71,16 +71,15 @@ added=$(awk -v write="$is_write" '
     }
   }' <(current) <(head_copy) <(replaced) - <<<"$inserted")
 
-# Call-shape and mock names are distinctive in any language. Skip forms are
-# not (a Go `pending []string` field, a JS `{ pending: true }` state), so each
-# is matched only in the language where it skips. ^ works: lines are trimmed.
+# Call-shape and mock names that are distinctive in any language go here. The
+# rest are matched only in the language where they mean a mock or a skip: a Go
+# `pending []string` field, a JS `{ pending: true }` state, and a test client's
+# client.patch("/api") are ordinary code. ^ works: lines are trimmed.
 # No bare callCount: a hand-rolled fake's counter goes to review, not here.
 pats=(
   'toHaveBeenCalled|toBeCalled|calledWith|calledOnce'
-  'assert_called|assert_has_calls|assert_not_called'
   'AssertCalled|AssertNumberOfCalls|AssertExpectations|\.EXPECT\(\)|\.Times\('
-  'to receive\(|have_received'
-  '(jest|vi)\.(fn|mock|spyOn)|sinon\.|MagicMock|mock\.patch|@patch'
+  '(jest|vi)\.(fn|mock|spyOn)|sinon\.'
 )
 # A skip: option counts only with true or a string reason; skip: (page - 1) is
 # pagination. Go's bare Skip( is a common method name (readers, scanners), so it
@@ -90,12 +89,19 @@ case "$lang" in
   go) pats+=('\.Skip(f|Now)\(|((^|[^[:alnum:]_])(t|b|f|tb)|\.T\(\))\.Skip\(') ;;
   js) pats+=(
         '(^|[^[:alnum:]_])(it|test|describe)(\.concurrent)?\.skip(If)?(\(|\.each)|(^|[^[:alnum:]_])x(it|describe|test)\('
-        ',[[:space:]]*\{[[:space:]]*skip:[[:space:]]*(true|'"$quote"')'
+        '(^|[^[:alnum:]_])(this|t|ctx|context)\.skip\('
+        ',[[:space:]]*\{([^}]*[,[:space:]])?skip:[[:space:]]*(true|'"$quote"')'
       ) ;;
-  py) pats+=('pytest\.(mark\.)?skip|unittest\.skip|skipTest\(') ;;
+  py) pats+=(
+        'assert_called|assert_has_calls|assert_not_called|assert_awaited'
+        '(^|[^[:alnum:]_.])(patch(\.object|\.dict|\.multiple)?|Mock|AsyncMock|MagicMock|create_autospec)\('
+        'mock\.(patch|Mock|MagicMock|AsyncMock)|mocker\.|@patch'
+        'pytest\.(mark\.)?skip|unittest\.skip|skipTest\('
+      ) ;;
   rb) pats+=(
+        '(to|not_to|to_not) receive([[:space:](]|$)|have_received'
         '(^|[^[:alnum:]_])x(it|describe|context|specify)([[:space:]]|\()'
-        '^(skip|pending)([[:space:]]+[^=[:space:]]|\(|$)'
+        '^(skip|pending)([[:space:]]+('"$quote"'|(if|unless)[[:space:]])|\(|$)'
         ',[[:space:]]*(skip|pending):[[:space:]]*(true|'"$quote"')'
       ) ;;
 esac
