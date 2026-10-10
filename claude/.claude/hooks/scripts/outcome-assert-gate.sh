@@ -7,7 +7,8 @@
 # Fails OPEN: a lint, not a permission gate.
 # Kill switch: touch ~/.claude/hooks/.no-outcome-assert-gate
 # Per repo, where the repo's own test conventions win: list its main checkout
-# in ~/.claude/hooks/outcome-assert-off-repos, one absolute path per line.
+# in ~/.claude/hooks/outcome-assert-off-repos, one absolute path per line;
+# symlinked paths resolve.
 source "$HOME/.claude/hooks/scripts/common.sh"
 
 OFF_REPOS="$HOOKS_DIR/outcome-assert-off-repos"
@@ -31,9 +32,13 @@ dir=$(dirname "$path")
 while [[ ! -d "$dir" ]]; do dir=$(dirname "$dir"); done
 
 # Keyed on the main checkout of the file's repo, so linked worktrees share the
-# opt-out and the session's cwd does not decide it.
+# opt-out and the session's cwd does not decide it. Both sides are resolved
+# physically: on macOS /var and /tmp are symlinks into /private.
 if [[ -f "$OFF_REPOS" ]] && common=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
-  grep -Fxq "$(cd "$(dirname "$common")" && pwd -P)" "$OFF_REPOS" && exit 0
+  root=$(cd "$(dirname "$common")" && pwd -P)
+  while IFS= read -r listed || [[ -n "$listed" ]]; do
+    [[ -d "$listed" && "$(cd "$listed" && pwd -P)" == "$root" ]] && exit 0
+  done < "$OFF_REPOS"
 fi
 
 # Edit's new_string repeats its old_string anchor and Write resends the whole
@@ -64,17 +69,21 @@ pats=(
   'to receive\(|have_received'
   '(jest|vi)\.(fn|mock|spyOn)|sinon\.|MagicMock|mock\.patch|@patch'
 )
+# A skip: option counts only with true or a string reason; skip: (page - 1) is
+# pagination. Go's bare Skip( is a common method name (readers, scanners), so it
+# counts only on a testing receiver; Skipf and SkipNow are testing's alone.
+quote=$'[\'"`]'
 case "$lang" in
-  go) pats+=('(^|[^[:alnum:]_])[tb]\.Skip(f|Now)?\(') ;;
+  go) pats+=('\.Skip(f|Now)\(|((^|[^[:alnum:]_])(t|b|f|tb)|\.T\(\))\.Skip\(') ;;
   js) pats+=(
-        '(^|[^[:alnum:]_])(it|test|describe)\.skip|(^|[^[:alnum:]_])x(it|describe|test)\('
-        ',[[:space:]]*\{[[:space:]]*skip:[[:space:]]*(true|[^[:alnum:][:space:]_])'
+        '(^|[^[:alnum:]_])(it|test|describe)\.skip(\(|\.each)|(^|[^[:alnum:]_])x(it|describe|test)\('
+        ',[[:space:]]*\{[[:space:]]*skip:[[:space:]]*(true|'"$quote"')'
       ) ;;
   py) pats+=('pytest\.(mark\.)?skip|unittest\.skip|skipTest\(') ;;
   rb) pats+=(
         '(^|[^[:alnum:]_])x(it|describe|context|specify)([[:space:]]|\()'
         '^(skip|pending)([[:space:]]+[^=[:space:]]|\(|$)'
-        ',[[:space:]]*(skip|pending):[[:space:]]*(true|[^[:alnum:][:space:]_])'
+        ',[[:space:]]*(skip|pending):[[:space:]]*(true|'"$quote"')'
       ) ;;
 esac
 pat=$(IFS='|'; echo "${pats[*]}")
