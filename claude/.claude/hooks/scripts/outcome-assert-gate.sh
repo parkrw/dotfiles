@@ -17,8 +17,10 @@ require_jq
 read_input
 
 path=$(jq -r '.tool_input.file_path // ""' <<<"$INPUT")
-case "$path" in
-  *_test.go|*.test.[jt]s|*.test.[jt]sx|*.spec.[jt]s|*.spec.[jt]sx|*/test_*.py|*_test.py|*_spec.rb) ;;
+# Basename, because a case glob's * also matches /: test_harness/app/retry.py
+# would otherwise match test_*.py.
+case "$(basename "$path")" in
+  *_test.go|*.test.[jt]s|*.test.[jt]sx|*.spec.[jt]s|*.spec.[jt]sx|test_*.py|*_test.py|*_spec.rb) ;;
   *) exit 0 ;;
 esac
 
@@ -49,7 +51,21 @@ legacy() {
 # NR==FNR, because an empty legacy stream would make every line look seen.
 added=$(awk 'FILENAME == ARGV[1] { seen[$0]; next } !($0 in seen)' <(legacy | trim) - <<<"$proposed")
 
-pat='toHaveBeenCalled|toBeCalled|calledWith|calledOnce|callCount|call_count|assert_called|assert_has_calls|assert_not_called|AssertCalled|AssertNumberOfCalls|AssertExpectations|\.EXPECT\(\)|\.Times\(|to receive\(|have_received|(jest|vi)\.(fn|mock|spyOn)|sinon\.|MagicMock|mock\.patch|@patch|(^|[^[:alnum:]_])(it|test|describe)\.skip|(^|[^[:alnum:]_])x(it|describe|test)\(|pytest\.mark\.skip|unittest\.skip|(^|[^[:alnum:]_])[tb]\.Skip(f|Now)?\('
+# ^ anchors work because added lines are trimmed.
+pats=(
+  'toHaveBeenCalled|toBeCalled|calledWith|calledOnce|callCount|call_count'
+  'assert_called|assert_has_calls|assert_not_called'
+  'AssertCalled|AssertNumberOfCalls|AssertExpectations|\.EXPECT\(\)|\.Times\('
+  'to receive\(|have_received'
+  '(jest|vi)\.(fn|mock|spyOn)|sinon\.|MagicMock|mock\.patch|@patch'
+  '(^|[^[:alnum:]_])(it|test|describe)\.skip'
+  '(^|[^[:alnum:]_])x(it|describe|test|context|specify)([[:space:]]|\()'
+  '^(skip|pending)([[:space:]]+[^=:[:space:]]|\(|$)'
+  '(^|[^[:alnum:]_])(skip|pending):[[:space:]]*(true|[^[:alnum:][:space:]_])'
+  'pytest\.(mark\.)?skip|unittest\.skip|skipTest\('
+  '(^|[^[:alnum:]_])[tb]\.Skip(f|Now)?\('
+)
+pat=$(IFS='|'; echo "${pats[*]}")
 hits=$(grep -E "$pat" <<<"$added" || true)
 [[ -z "$hits" ]] && exit 0
 
