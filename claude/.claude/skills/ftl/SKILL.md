@@ -15,6 +15,11 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
   add and commit, and no fetch except ship's. --integrate adds pull
   --ff-only, rebase/merge, the push and gh pr create --draft.
 
+  Workflows
+    simple task:   /ftl "<task>" --ship          -> draft PR; mark it ready
+    steered task:  /ftl "<task>", build together,
+                   then /ftl ship --integrate     -> draft PR; mark it ready
+
   /ftl <task>     orient: index docs/ by heading, read the sections the
                    task touches, measure the lead's conventions, print state
   /ftl            pre-handoff checklist on the staged diff (falls back to
