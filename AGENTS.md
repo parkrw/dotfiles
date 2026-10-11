@@ -47,12 +47,13 @@ Custom shell tools deployed to `~/.local/bin`:
 
 - `reqd` — **moved to its own repo** at `~/Developments/work/ck/programmin/reqd`; what's here is an untracked, gitignored symlink keeping it on PATH.
 - `cht.sh` — **vendored third-party** cheat.sh shell client (has its own `update`/`version` self-management). Don't hand-edit; treat as upstream.
+- `claude-review-stats` — zero-dependency Node. Reports on `~/.claude/review-ledger/`, which `review-branch.sh` writes one record to per review: verdicts, cost, what became of each finding in the branch's next review, and the finding categories (area and cause) assigned by `--categorize` with haiku. Each run also imports the reviewer's own headless transcripts from `~/.claude/projects` before Claude Code's `cleanupPeriodDays` deletes them.
 
 The `claude` file (untracked) is **not** part of these dotfiles. It's a symlink the Claude Code installer wrote to `~/.local/bin/claude` (pointing at `~/.local/share/claude/versions/<ver>`); because `~/.local/bin` is a folded Stow symlink to this directory, that write landed inside the repo. It's machine- and version-specific — don't commit it (gitignore it, or unfold the dir so `~/.local/bin` holds per-file symlinks).
 
 ## Claude Code (`claude/.claude/`)
 
-Global Claude Code config. `~/.claude/` is a real directory full of machine state, so Stow **folds**: only the items below become symlinks; everything else there (`projects/`, `sessions/`, `history.jsonl`, caches, `plugins/`, `settings.local.json`, and `hooks/logs/` + `hooks/.rename-plans-since`) stays real and untracked.
+Global Claude Code config. `~/.claude/` is a real directory full of machine state, so Stow **folds**: only the items below become symlinks; everything else there (`projects/`, `sessions/`, `history.jsonl`, caches, `plugins/`, `settings.local.json`, `review-ledger/`, and `hooks/logs/` + `hooks/.rename-plans-since`) stays real and untracked.
 
 Stowed:
 

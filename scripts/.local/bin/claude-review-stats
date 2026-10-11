@@ -1,0 +1,597 @@
+#!/usr/bin/env node
+// claude-review-stats — what the branch reviews found, what became of each
+// finding, and where the findings come from.
+//
+//   claude-review-stats                  import new reviewer transcripts, print the report
+//   claude-review-stats --categorize     classify uncategorized findings with haiku first (asks; --yes skips)
+//   claude-review-stats --since <date>   only runs on or after <date> (YYYY-MM-DD)
+//   claude-review-stats --repo <path>    only runs in that repo or checkout
+//   claude-review-stats --json           runs and labelled findings as JSON, no report
+//
+// The ledger is ~/.claude/review-ledger/runs/, one <id>.json + <id>.md pair
+// per review. review-branch.sh writes a pair for every run it makes; this
+// imports the reviewer's own headless transcripts from ~/.claude/projects,
+// which Claude Code deletes after cleanupPeriodDays, so the import is what
+// keeps them. An imported run has no tip sha, so its findings can be called
+// "resolved" but never told apart into fixed or dropped.
+//
+// Outcome of a finding, judged against the next review of the same branch:
+//   repeated  the next round reports it again
+//   fixed     gone, and the commits between the two rounds touched its file
+//   dropped   gone, though its file was untouched: the reviewer changed its
+//             mind, which is the closest thing to a false positive on record
+//   resolved  gone, and the tips needed to tell fixed from dropped are unknown
+//   open      the branch's last review failed with it
+//   shipped   the branch's last review passed with it still listed
+// A late find is one first raised after the branch's first review. In a file
+// the fix commits left untouched, the earlier review could have seen it too:
+// a coverage gap in the reviewer, not a defect the fix introduced.
+"use strict";
+
+const { execFileSync, spawnSync } = require("node:child_process");
+const { createHash } = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const LEDGER = path.join(os.homedir(), ".claude/review-ledger");
+const RUNS = path.join(LEDGER, "runs");
+const CATEGORIES = path.join(LEDGER, "categories.json");
+const PROJECTS = path.join(os.homedir(), ".claude/projects");
+const REVIEW_PROMPT = "You are a senior reviewer. Review the branch diff";
+// A transcript written to this recently may be a review still running; the
+// gate's own record of it is the complete one.
+const SETTLE_MS = 15 * 60 * 1000;
+const BATCH = 40;
+
+const AREAS = {
+  correctness: "wrong result, crash or hang on some input or state",
+  security: "injection, leaked secret, widened permission, bypassed gate",
+  "data-integrity": "lost, duplicated or inconsistent writes",
+  reliability: "races, retries, timeouts, partial failure",
+  "repo-rules": "breaks a rule the repo's CLAUDE.md/AGENTS.md or docs state",
+  style: "naming, comments, prose, convention of the surrounding code",
+  tests: "missing, weak or call-shape tests; skipped tests",
+  ci: "a CI job, hook or build step the change would fail",
+  docs: "a doc or second statement of a fact that did not move with the code",
+};
+
+// [what it means, what to change in how Claude is used so it stops recurring]
+const CAUSES = {
+  "edge-case": ["an input or state the author did not consider", "name the edge cases in the task, and ask for them in the plan"],
+  "rule-ignored": ["a stated repo or user rule the change breaks", "mechanical rule: make it a hook; judgement rule: move it up in CLAUDE.md"],
+  "stale-duplicate": ["one of two places stating the same fact was updated", "single-source the fact, or add a check that both agree"],
+  untested: ["behaviour changed with no test that would catch a regression", "make the test part of the task's definition of done"],
+  "shell-pitfall": ["quoting, word splitting, set -e/pipefail, portability", "run shellcheck from a PostToolUse hook on shell edits"],
+  "contract-break": ["breaks a caller, consumer, format or interface", "grep the callers before changing a signature or format"],
+  scope: ["change beyond the task, or an unrelated edit", "state the task as one behaviour; one behaviour per branch"],
+  "wrong-assumption": ["a tool, API or platform behaves unlike the code assumes", "run the behaviour before relying on it"],
+  other: ["none of the above", ""],
+};
+
+function die(msg) {
+  process.stderr.write(`claude-review-stats: ${msg}\n`);
+  process.exit(1);
+}
+
+function parseArgs(argv) {
+  const o = { categorize: false, yes: false, json: false, since: "", repo: "" };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const value = () => argv[++i] ?? die(`${a} needs a value`);
+    if (a === "--categorize") o.categorize = true;
+    else if (a === "--yes" || a === "-y") o.yes = true;
+    else if (a === "--json") o.json = true;
+    else if (a === "--since") o.since = value();
+    else if (a === "--repo") {
+      const p = value();
+      o.repo = fs.existsSync(p) ? fs.realpathSync(p) : die(`no such path: ${p}`);
+    }
+    else if (a === "-h" || a === "--help") {
+      const lines = fs.readFileSync(__filename, "utf8").split("\n").slice(1, 9);
+      process.stdout.write(lines.map((l) => l.replace(/^\/\/ ?/, "")).join("\n") + "\n");
+      process.exit(0);
+    } else die(`unknown argument ${a}`);
+  }
+  if (o.since && !/^\d{4}-\d{2}-\d{2}$/.test(o.since)) die("--since takes YYYY-MM-DD");
+  return o;
+}
+
+function readJsonl(file) {
+  const out = [];
+  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+    if (!line) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {}
+  }
+  return out;
+}
+
+function readHead(file, bytes) {
+  const fd = fs.openSync(file, "r");
+  try {
+    const buf = Buffer.alloc(bytes);
+    return buf.toString("utf8", 0, fs.readSync(fd, buf, 0, bytes, 0));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function git(dir, ...args) {
+  try {
+    return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
+}
+
+// Written beside, then renamed over: a reader never sees half a file.
+function writeAtomic(file, text) {
+  fs.writeFileSync(`${file}.tmp`, text);
+  fs.renameSync(`${file}.tmp`, file);
+}
+
+// The main checkout of a review's worktree. Most worktrees are deleted once
+// their branch merges, so a missing one falls back to the `../<repo>-<name>`
+// convention: the longest sibling main checkout whose name prefixes the
+// worktree's. A linked worktree's .git is a file, so a surviving sibling
+// worktree named like a prefix is never taken for the repo.
+function repoOf(worktree) {
+  const common = git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir");
+  if (common) return common.replace(/\/\.git$/, "");
+  const parent = path.dirname(worktree);
+  const name = path.basename(worktree);
+  let siblings = [];
+  try {
+    siblings = fs.readdirSync(parent);
+  } catch {}
+  const isMainCheckout = (s) => {
+    try {
+      return fs.statSync(path.join(parent, s, ".git")).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+  const repo = siblings
+    .filter((s) => name.startsWith(`${s}-`) && isMainCheckout(s))
+    .sort((a, b) => b.length - a.length)[0];
+  return repo ? path.join(parent, repo) : worktree;
+}
+
+function transcriptFiles() {
+  const files = new Map();
+  if (!fs.existsSync(PROJECTS)) return files;
+  for (const dir of fs.readdirSync(PROJECTS)) {
+    let names;
+    try {
+      names = fs.readdirSync(path.join(PROJECTS, dir));
+    } catch {
+      continue;
+    }
+    for (const n of names) if (n.endsWith(".jsonl")) files.set(n.slice(0, -6), path.join(PROJECTS, dir, n));
+  }
+  return files;
+}
+
+function textOf(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.map((c) => c.text ?? "").join("");
+  return "";
+}
+
+function verdictOf(report) {
+  const m = [...report.matchAll(/^VERDICT: (PASS|FAIL)[ \t]*$/gm)];
+  return m.length ? m[m.length - 1][1] : "none";
+}
+
+function parseTranscript(sid, file) {
+  const recs = readJsonl(file);
+  const first = recs.find((r) => r.type === "user");
+  const prompt = textOf(first?.message?.content);
+  if (!prompt.startsWith(REVIEW_PROMPT) || !first.cwd || !first.timestamp) return null;
+  const texts = recs
+    .filter((r) => r.type === "assistant")
+    .flatMap((r) => (r.message?.content ?? []).filter((c) => c.type === "text").map((c) => c.text));
+  const report =
+    texts.filter((t) => t.includes("## Findings")).at(-1) ?? texts.filter((t) => t.includes("VERDICT:")).at(-1) ?? texts.at(-1) ?? "";
+  const cost = recs.filter((r) => r.type === "cost-state").at(-1);
+  const models = Object.keys(cost?.modelUsage ?? {});
+  const run = {
+    id: `t-${sid}`,
+    source: "transcript",
+    ts: first.timestamp,
+    repo: repoOf(first.cwd),
+    worktree: first.cwd,
+    branch: first.gitBranch ?? null,
+    base: prompt.match(/git diff (\S+?)\.\.\.HEAD/)?.[1] ?? null,
+    base_sha: null,
+    tip: null,
+    diff: null,
+    engine: "claude",
+    model: recs.filter((r) => r.type === "assistant").at(-1)?.message?.model ?? null,
+    effort: recs.find((r) => typeof r.effort === "string")?.effort ?? null,
+    verdict: verdictOf(report),
+    run: { session_id: sid, total_cost_usd: cost?.totalCostUSD ?? null, duration_ms: cost?.totalDuration ?? null, models },
+  };
+  return { run, report };
+}
+
+function loadRuns() {
+  const runs = [];
+  if (!fs.existsSync(RUNS)) return runs;
+  for (const n of fs.readdirSync(RUNS)) {
+    if (!n.endsWith(".json")) continue;
+    try {
+      const run = JSON.parse(fs.readFileSync(path.join(RUNS, n), "utf8"));
+      run.report = fs.readFileSync(path.join(RUNS, `${n.slice(0, -5)}.md`), "utf8");
+      runs.push(run);
+    } catch {}
+  }
+  return runs;
+}
+
+function importTranscripts(files, runs) {
+  const known = new Set(runs.map((r) => r.run?.session_id).filter(Boolean));
+  fs.mkdirSync(RUNS, { recursive: true });
+  let added = 0;
+  for (const [sid, file] of files) {
+    if (known.has(sid)) continue;
+    if (Date.now() - fs.statSync(file).mtimeMs < SETTLE_MS) continue;
+    if (!readHead(file, 64 * 1024).includes(REVIEW_PROMPT)) continue;
+    const parsed = parseTranscript(sid, file);
+    if (!parsed) continue;
+    writeAtomic(path.join(RUNS, `${parsed.run.id}.md`), parsed.report);
+    writeAtomic(path.join(RUNS, `${parsed.run.id}.json`), JSON.stringify(parsed.run) + "\n");
+    runs.push({ ...parsed.run, report: parsed.report });
+    added++;
+  }
+  return added;
+}
+
+// The gate's record of a run carries its tip; an import of the same session
+// would count the run twice.
+function dedupe(runs) {
+  const gated = new Set(runs.filter((r) => r.source === "gate").map((r) => r.run?.session_id).filter(Boolean));
+  return runs.filter((r) => r.source === "gate" || !gated.has(r.run?.session_id));
+}
+
+const FINDING = /^[-*\s]*[`*]*([^\s`*]+?)(?::(\d+)[^\s`*]*)?[`*]*\s+[—–-]\s+(blocker|major|minor)\s+[—–-]\s+(.+)$/i;
+
+function parseFindings(report) {
+  const start = report.indexOf("## Findings");
+  if (start < 0) return [];
+  const rest = report.slice(start + "## Findings".length);
+  const end = rest.search(/\n## |\nVERDICT:/);
+  const out = [];
+  for (const line of (end < 0 ? rest : rest.slice(0, end)).split("\n")) {
+    const effect = line.match(/^\s+Effect:\s*(.*)$/);
+    if (effect && out.length) {
+      out[out.length - 1].effect = effect[1];
+      continue;
+    }
+    const m = line.match(FINDING);
+    if (!m) continue;
+    out.push({ path: m[1], line: m[2] ? Number(m[2]) : null, severity: m[3].toLowerCase(), text: m[4].trim(), effect: "" });
+  }
+  return out;
+}
+
+function words(s) {
+  return new Set(s.toLowerCase().match(/[a-z0-9_]{3,}/g) ?? []);
+}
+
+function similarity(a, b) {
+  const wa = words(a);
+  const wb = words(b);
+  let both = 0;
+  for (const w of wa) if (wb.has(w)) both++;
+  return both / (wa.size + wb.size - both || 1);
+}
+
+function label(runs) {
+  const chains = new Map();
+  for (const r of runs) {
+    const key = `${r.worktree}\0${r.branch}`;
+    if (!chains.has(key)) chains.set(key, []);
+    chains.get(key).push(r);
+  }
+  const changedCache = new Map();
+  const changed = (repo, a, b) => {
+    const k = `${repo}\0${a}\0${b}`;
+    if (!changedCache.has(k)) {
+      const out = git(repo, "diff", "--name-only", a, b);
+      changedCache.set(k, out === null ? null : new Set(out.split("\n").filter(Boolean)));
+    }
+    return changedCache.get(k);
+  };
+  const findings = [];
+  for (const chain of chains.values()) {
+    chain.sort((a, b) => a.ts.localeCompare(b.ts));
+    chain.forEach((r, i) => {
+      r.round = i + 1;
+      r.rounds = chain.length;
+      const prev = chain[i - 1];
+      const next = chain[i + 1];
+      const sinceLast = prev?.tip && r.tip ? changed(r.repo, prev.tip, r.tip) : null;
+      for (const f of r.findings) {
+        if (prev && !prev.findings.some((g) => g.path === f.path && similarity(f.text, g.text) >= 0.35))
+          f.late = sinceLast === null ? "unknown" : sinceLast.has(f.path) ? "touched" : "untouched";
+        if (!next) f.outcome = r.verdict === "PASS" ? "shipped" : "open";
+        else if (next.findings.some((g) => g.path === f.path && similarity(f.text, g.text) >= 0.35)) f.outcome = "repeated";
+        else {
+          const files = r.tip && next.tip ? changed(r.repo, r.tip, next.tip) : null;
+          f.outcome = files === null ? "resolved" : files.has(f.path) ? "fixed" : "dropped";
+        }
+        findings.push(f);
+      }
+    });
+  }
+  return findings;
+}
+
+function findingKey(f) {
+  return createHash("sha256").update(`${f.path}\0${f.severity}\0${f.text}`).digest("hex").slice(0, 16);
+}
+
+function loadCategories() {
+  try {
+    return JSON.parse(fs.readFileSync(CATEGORIES, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function ask(question) {
+  let fd;
+  try {
+    fd = fs.openSync("/dev/tty", "r+");
+  } catch {
+    die("no terminal to ask on — rerun with --yes");
+  }
+  try {
+    fs.writeSync(fd, question);
+    const buf = Buffer.alloc(256);
+    return buf.toString("utf8", 0, fs.readSync(fd, buf, 0, buf.length, null)).trim();
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function classify(batch) {
+  const list = (o) => Object.entries(o).map(([k, v]) => `- ${k}: ${Array.isArray(v) ? v[0] : v}`).join("\n");
+  const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s);
+  const rows = batch.map((f, i) => `f${i} | ${f.severity} | ${f.path} | ${clip(f.text, 300)} | ${clip(f.effect, 200)}`);
+  const prompt = `Classify each code-review finding on two axes, using only the finding's own text. Pick exactly one value per axis.
+
+area — what the defect is:
+${list(AREAS)}
+
+cause — why the author's change let it through:
+${list(CAUSES)}
+
+Findings (id | severity | path | finding | effect):
+${rows.join("\n")}`;
+  const schema = {
+    type: "object",
+    properties: {
+      items: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            area: { type: "string", enum: Object.keys(AREAS) },
+            cause: { type: "string", enum: Object.keys(CAUSES) },
+          },
+          required: ["id", "area", "cause"],
+        },
+      },
+    },
+    required: ["items"],
+  };
+  // --restricted with no tools: the classifier reads text and nothing else,
+  // and no user hook or MCP server runs inside it.
+  const res = spawnSync(
+    "claude",
+    ["-p", prompt, "--model", "haiku", "--output-format", "json", "--json-schema", JSON.stringify(schema),
+      "--tools", "", "--restricted", "--strict-mcp-config", "--no-session-persistence", "--max-budget-usd", "0.50"],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 300_000, maxBuffer: 16 << 20 },
+  );
+  if (res.status !== 0) return { items: [], cost: 0, error: (res.stderr || res.error?.message || "").trim().split("\n")[0] };
+  let out;
+  try {
+    out = JSON.parse(res.stdout);
+  } catch {
+    return { items: [], cost: 0, error: "unparseable output" };
+  }
+  return { items: out.structured_output?.items ?? [], cost: out.total_cost_usd ?? 0, error: out.is_error ? out.subtype : "" };
+}
+
+function categorize(findings, cats, yes) {
+  const todo = [];
+  const seen = new Set();
+  for (const f of findings) if (!cats[f.key] && !seen.has(f.key)) seen.add(f.key), todo.push(f);
+  if (!todo.length) return;
+  const batches = Math.ceil(todo.length / BATCH);
+  if (!yes) {
+    const ans = ask(`classify ${todo.length} findings with haiku in ${batches} calls, each capped at $0.50? [y/N] `);
+    if (!/^y/i.test(ans)) die("declined — nothing classified");
+  }
+  let cost = 0;
+  let done = 0;
+  for (let b = 0; b < batches; b++) {
+    const batch = todo.slice(b * BATCH, (b + 1) * BATCH);
+    const { items, cost: c, error } = classify(batch);
+    cost += c;
+    if (error) process.stderr.write(`claude-review-stats: batch ${b + 1}/${batches} failed: ${error}\n`);
+    for (const it of items) {
+      const f = batch[Number(String(it.id).replace(/^f/, ""))];
+      if (f && AREAS[it.area] && CAUSES[it.cause]) (cats[f.key] = { area: it.area, cause: it.cause }), done++;
+    }
+    // Saved per batch, so an interrupted run keeps what it paid for.
+    writeAtomic(CATEGORIES, JSON.stringify(cats) + "\n");
+    process.stderr.write(`\rclassified ${done}/${todo.length}`);
+  }
+  process.stderr.write(`\nclassified ${done} findings for $${cost.toFixed(2)}\n`);
+}
+
+// The user's own skills and commands; built-ins like /clear or /model say
+// nothing about which workflow produced a change.
+function workflowNames() {
+  const names = new Set();
+  const read = (d) => {
+    try {
+      return fs.readdirSync(path.join(os.homedir(), ".claude", d));
+    } catch {
+      return [];
+    }
+  };
+  for (const n of read("skills")) names.add(n);
+  for (const n of read("commands")) names.add(n.replace(/\.md$/, ""));
+  return names;
+}
+
+// The workflows run in the author's session: where the reviewed change came from.
+function commandsOf(sid, files, workflows, cache) {
+  if (!sid || !files.has(sid)) return [];
+  if (!cache.has(sid)) {
+    const raw = fs.readFileSync(files.get(sid), "utf8");
+    const names = [...raw.matchAll(/<command-name>\/?([\w:.-]+)<\/command-name>/g)].map((m) => m[1].split(":").pop());
+    cache.set(sid, [...new Set(names.filter((n) => workflows.has(n)))]);
+  }
+  return cache.get(sid);
+}
+
+const pct = (n, d) => (d ? `${Math.round((100 * n) / d)}%` : "-");
+const money = (n) => `$${n.toFixed(2)}`;
+const quantile = (xs, q) => {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor(q * s.length))];
+};
+const count = (xs, f) => xs.filter(f).length;
+
+function table(headers, rows) {
+  const w = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => String(r[i]).length)));
+  const left = (i) => i === 0 || headers[i] === "remedy";
+  const fmt = (r) => "  " + r.map((c, i) => (left(i) ? String(c).padEnd(w[i]) : String(c).padStart(w[i]))).join("  ").trimEnd();
+  return [fmt(headers), ...rows.map(fmt)].join("\n");
+}
+
+function groupBy(xs, key) {
+  const m = new Map();
+  for (const x of xs) {
+    const k = key(x);
+    if (k === null || k === undefined) continue;
+    for (const kk of Array.isArray(k) ? k : [k]) {
+      if (!m.has(kk)) m.set(kk, []);
+      m.get(kk).push(x);
+    }
+  }
+  return [...m].sort((a, b) => b[1].length - a[1].length);
+}
+
+function report(runs, findings, cats, imported) {
+  const out = [];
+  const say = (s = "") => out.push(s);
+  const days = runs.map((r) => r.ts.slice(0, 10)).sort();
+  const gate = runs.filter((r) => r.source === "gate");
+  say(`claude-review-stats — ${days[0]}..${days.at(-1)}: ${runs.length} reviews (${gate.length} gate, ${runs.length - gate.length} imported${imported ? `, ${imported} new` : ""})`);
+  say();
+
+  say("Reviewer");
+  const costs = runs.map((r) => r.run?.total_cost_usd).filter((c) => typeof c === "number");
+  const mins = runs.map((r) => r.run?.duration_ms).filter((d) => typeof d === "number").map((d) => d / 60000);
+  const chains = groupBy(runs, (r) => `${r.worktree}\0${r.branch}`);
+  const rounds = chains.map(([, c]) => c.length);
+  say(`  verdicts   PASS ${count(runs, (r) => r.verdict === "PASS")}  FAIL ${count(runs, (r) => r.verdict === "FAIL")}  none ${count(runs, (r) => r.verdict === "none")} (no verdict line: failed closed)`);
+  if (costs.length) say(`  cost       ${money(costs.reduce((a, b) => a + b, 0))} over ${costs.length} priced runs, ${money(costs.reduce((a, b) => a + b, 0) / costs.length)}/run, ${(mins.reduce((a, b) => a + b, 0) / (mins.length || 1)).toFixed(1)} min/run`);
+  say(`  branches   ${chains.length}; reviews per branch median ${quantile(rounds, 0.5)}, p90 ${quantile(rounds, 0.9)}, max ${Math.max(0, ...rounds)}`);
+  const rereviewed = groupBy(gate, (r) => r.diff).filter(([, rs]) => rs.length > 1);
+  const flipped = rereviewed.filter(([, rs]) => new Set(rs.map((r) => r.verdict)).size > 1);
+  if (gate.length) say(`  flaky      ${flipped.length} of ${rereviewed.length} unchanged diffs reviewed twice got different verdicts`);
+  say(`  findings   ${findings.length}: blocker ${count(findings, (f) => f.severity === "blocker")}, major ${count(findings, (f) => f.severity === "major")}, minor ${count(findings, (f) => f.severity === "minor")}`);
+  const outcomes = ["fixed", "dropped", "resolved", "repeated", "open", "shipped"];
+  say(`  outcomes   ${outcomes.map((o) => `${o} ${count(findings, (f) => f.outcome === o)}`).join("  ")}`);
+  const late = findings.filter((f) => f.late);
+  say(`  late finds ${late.length} (${pct(late.length, findings.length)}) first raised after a branch's first review: ${count(late, (f) => f.late === "touched")} in a file the fix touched, ${count(late, (f) => f.late === "untouched")} in an untouched file (missed earlier), ${count(late, (f) => f.late === "unknown")} unknown (no tips)`);
+  say();
+  const outcomeRow = (fs) => [fs.length, ...outcomes.map((o) => pct(count(fs, (f) => f.outcome === o), fs.length))];
+  say(table(["by severity", "n", ...outcomes], ["blocker", "major", "minor"].map((s) => [s, ...outcomeRow(findings.filter((f) => f.severity === s))])));
+  say();
+  const categorized = findings.filter((f) => cats[f.key]);
+  if (categorized.length) {
+    say(table(["by area", "n", ...outcomes], groupBy(categorized, (f) => cats[f.key].area).map(([k, fs]) => [k, ...outcomeRow(fs)])));
+    say();
+  }
+  const engineOf = (r) => `${r.engine}/${r.run?.models?.[0] ?? r.model ?? "?"}${r.effort ? `/${r.effort}` : ""}`;
+  say(table(["by reviewer", "reviews", "FAIL", "findings/review", "$/review"], groupBy(runs, engineOf).map(([k, rs]) => {
+    const priced = rs.map((r) => r.run?.total_cost_usd).filter((c) => typeof c === "number");
+    return [k, rs.length, pct(count(rs, (r) => r.verdict === "FAIL"), rs.length), (rs.reduce((a, r) => a + r.findings.length, 0) / rs.length).toFixed(1), priced.length ? money(priced.reduce((a, b) => a + b, 0) / priced.length) : "-"];
+  })));
+  say();
+
+  say("You");
+  if (categorized.length) {
+    const byCause = groupBy(categorized, (f) => cats[f.key].cause);
+    say(table(["by cause", "n", "share", "repeated", "remedy"], byCause.map(([k, fs]) => [k, fs.length, pct(fs.length, categorized.length), pct(count(fs, (f) => f.outcome === "repeated"), fs.length), CAUSES[k][1]])));
+    say();
+    for (const [k, fs] of byCause.filter(([k]) => k !== "other").slice(0, 3)) {
+      say(`  ${k}, e.g.`);
+      for (const f of [...fs].sort((a, b) => a.text.length - b.text.length).slice(0, 3)) say(`    ${f.path}${f.line ? `:${f.line}` : ""} — ${f.text.length > 140 ? `${f.text.slice(0, 140)}…` : f.text}`);
+    }
+    say();
+  }
+  const uncategorized = new Set(findings.filter((f) => !cats[f.key]).map((f) => f.key)).size;
+  if (uncategorized) {
+    say(`  ${uncategorized} findings have no cause yet: claude-review-stats --categorize`);
+    say();
+  }
+  const branchRow = (rs) => {
+    const cs = groupBy(rs, (r) => `${r.worktree}\0${r.branch}`).map(([, c]) => c.length);
+    return [rs.length, pct(count(rs, (r) => r.verdict === "FAIL"), rs.length), (rs.reduce((a, r) => a + r.findings.length, 0) / rs.length).toFixed(1), quantile(cs, 0.5)];
+  };
+  const authored = gate.filter((r) => r.author_model);
+  if (authored.length) {
+    say(table(["by author", "reviews", "FAIL", "findings/review", "reviews/branch"], groupBy(authored, (r) => `${r.author_model}/${r.author_effort || "?"}`).map(([k, rs]) => [k, ...branchRow(rs)])));
+    say();
+    const withCommands = authored.filter((r) => r.commands.length);
+    if (withCommands.length) {
+      say(table(["by command", "reviews", "FAIL", "findings/review", "reviews/branch"], groupBy(withCommands, (r) => r.commands).map(([k, rs]) => [`/${k}`, ...branchRow(rs)])));
+      say();
+    }
+  }
+  say(table(["by repo", "reviews", "FAIL", "findings/review", "reviews/branch"], groupBy(runs, (r) => path.basename(r.repo ?? r.worktree)).slice(0, 12).map(([k, rs]) => [k, ...branchRow(rs)])));
+  return out.join("\n") + "\n";
+}
+
+function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  const files = transcriptFiles();
+  let runs = loadRuns();
+  const imported = importTranscripts(files, runs);
+  runs = dedupe(runs).filter((r) => r.ts);
+  for (const r of runs) r.findings = parseFindings(r.report).map((f) => ({ ...f, key: findingKey(f), run: r.id }));
+  // Labelled before filtering, so a finding's next round counts even when it
+  // falls outside --since.
+  label(runs);
+  if (opts.since) runs = runs.filter((r) => r.ts.slice(0, 10) >= opts.since);
+  if (opts.repo) runs = runs.filter((r) => r.repo === opts.repo || r.worktree === opts.repo);
+  if (!runs.length) die("no reviews match");
+  const findings = runs.flatMap((r) => r.findings);
+  const cats = loadCategories();
+  if (opts.categorize) categorize(findings, cats, opts.yes);
+  const workflows = workflowNames();
+  const commandCache = new Map();
+  for (const r of runs) r.commands = commandsOf(r.author_session, files, workflows, commandCache);
+  if (opts.json) {
+    const strip = ({ report, findings, ...r }) => r;
+    const json = { runs: runs.map(strip), findings: findings.map((f) => ({ ...f, ...cats[f.key] })) };
+    process.stdout.write(JSON.stringify(json, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write(report(runs, findings, cats, imported));
+}
+
+main();

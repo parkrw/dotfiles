@@ -378,9 +378,52 @@ fi
   echo "$out"
 } > "$report"
 
+# The ledger keeps every run, which the path-keyed report above overwrites, so
+# claude-review-stats can follow a finding from one round to the next. One
+# file pair per run, renamed into place, so concurrent reviews never interleave
+# a write and a reader never sees half a record. Best-effort: it touches
+# neither the sentinel nor the verdict, so a failed write loses history, not a
+# push.
+record_run() {
+  command -v jq >/dev/null 2>&1 || return 1
+  local dir="$HOME/.claude/review-ledger/runs" id run='{}' r common
+  id="$(date -u +%Y%m%dT%H%M%SZ)-${hash:0:12}-$$"
+  mkdir -p "$dir" || return 1
+  if [[ -s "$stream" ]]; then
+    if [[ "$engine" == codex ]]; then
+      r=$(jq -sc '{session_id: (map(select(.type=="thread.started") | .thread_id) | last),
+                   usage: (map(select(.type=="turn.completed") | .usage) | last)}' "$stream") && run=$r
+    else
+      r=$(jq -sc 'map(select(.type=="result")) | (last // {})
+                  | {session_id, total_cost_usd, duration_ms, num_turns, usage,
+                     models: (.modelUsage // {} | keys)}' "$stream") && run=$r
+    fi
+  fi
+  common=$(git -C "$worktree" rev-parse --path-format=absolute --git-common-dir) || return 1
+  printf '%s\n' "$out" > "$dir/$id.md.tmp" || return 1
+  jq -nc \
+    --arg id "$id" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg repo "${common%/.git}" --arg worktree "$worktree" \
+    --arg branch "$(git -C "$worktree" rev-parse --abbrev-ref HEAD)" \
+    --arg base "$base" --arg base_sha "$(git -C "$worktree" rev-parse --verify --quiet "$base^{commit}")" \
+    --arg tip "$tip" --arg diff "$hash" --arg lines "$branch_lines" --arg docs_only "$docs_only" \
+    --arg engine "$engine" --arg model "$review_model" --arg effort "$review_effort" \
+    --arg author_model "$caller_model" --arg author_effort "$caller_effort" \
+    --arg author_session "${CLAUDE_CODE_SESSION_ID:-}" \
+    --arg accept_file "${accept_section:+$accept_file}" \
+    --arg verdict "${verdict#VERDICT: }" --argjson run "$run" \
+    '{$id, source: "gate", $ts, $repo, $worktree, $branch, $base, $base_sha, $tip, $diff,
+      lines: ($lines | tonumber? // null), docs_only: ($docs_only == "1"),
+      $engine, $model, $effort, $author_model, $author_effort, $author_session, $accept_file,
+      verdict: (if $verdict == "" then "none" else $verdict end), $run}' \
+    > "$dir/$id.json.tmp" || { rm -f "$dir/$id.md.tmp" "$dir/$id.json.tmp"; return 1; }
+  mv "$dir/$id.md.tmp" "$dir/$id.md" && mv "$dir/$id.json.tmp" "$dir/$id.json"
+}
+
 echo "$out"
 echo
 verdict=$(echo "$out" | grep -E '^VERDICT: (PASS|FAIL)[[:space:]]*$' | tail -1 || true)
+record_run || echo "review-branch: ledger not written — the review and its verdict stand" >&2
 failcount="$state/review-branch-fails-$repokey"
 if [[ "$verdict" == "VERDICT: PASS" ]]; then
   printf '%s\n' "$hash" > "$sentinel"
