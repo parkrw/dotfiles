@@ -217,14 +217,18 @@ git -C "$worktree" add <path>... && git -C "$worktree" commit -m '<subject>'
 
 ## 3a. Integrate - `--integrate` only
 
-Resolve `<default>` and `<default-checkout>` as step 5 does. `<default-checkout>` absent from `git worktree list`: skip to step 4 and print the step 5 behind-block for the human at the end.
+Resolve `<default>` and `<default-checkout>` as step 5 does.
+
+The review judges integrated code or nothing. When integration cannot run - `<default-checkout>` absent from `git worktree list`, or `pull --ff-only` failing (dirty or diverged default checkout) - stop before step 4: print the one command that unblocks it, wait, and resume at step 3a. Never review first and hand the human a rebase after.
+
+The session sits in the worktree EnterWorktree isolated, and that isolation refuses any git aimed outside it, `-C` included. Leave it for the pull: `ExitWorktree` with `action: "keep"`, then the pull, then `EnterWorktree` with `path: "<worktree>"`, then the rebase.
 
 ```
 git -C <default-checkout> pull --ff-only
 git -C "$worktree" rebase <default>
 ```
 
-Type both paths and `<default>` as literals, unquoted: the write gate cannot expand a variable, and a line it cannot resolve asks. `rebase` when the branch is unpushed (`git -C "$worktree" rev-parse --abbrev-ref @{u}` fails and `git -C "$worktree" ls-remote --exit-code --heads origin <branch>` exits 2); `git -C "$worktree" merge <default>` otherwise, so review comments keep their shas. `pull --ff-only` fails (the default checkout is dirty or diverged): stop integrating and print the step 5 behind-block for the human at the end.
+Type both paths and `<default>` as literals, unquoted: the write gate cannot expand a variable, and a line it cannot resolve asks. `rebase` when the branch is unpushed (`git -C "$worktree" rev-parse --abbrev-ref @{u}` fails and `git -C "$worktree" ls-remote --exit-code --heads origin <branch>` exits 2); `git -C "$worktree" merge <default>` otherwise, so review comments keep their shas.
 
 A conflict: resolve it. For each file in `git -C <worktree> diff --name-only --diff-filter=U`:
 
