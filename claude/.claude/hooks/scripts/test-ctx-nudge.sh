@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pipe-test suite for ~/.claude/hooks/scripts/ctx-handoff-nudge.sh
-# State files hold context USED %; nudge fires at used >= threshold (default 15).
+# State files hold context USED %; nudge fires at used >= threshold (default 25).
 # Uses a temp CTX_STATE_DIR so the real state dir is untouched.
 set -u
 HOOK="$HOME/.claude/hooks/scripts/ctx-handoff-nudge.sh"
@@ -22,8 +22,8 @@ check "no state file -> silent"            "s-none"  silent
 echo 5 > "$T/ctx-s-low"
 check "used 5 -> silent"                   "s-low"   silent
 
-echo 15 > "$T/ctx-s-edge"
-check "used 15 (boundary) -> nudge"        "s-edge"  nudge
+echo 25 > "$T/ctx-s-edge"
+check "used 25 (boundary) -> nudge"        "s-edge"  nudge
 check "same session again -> debounced"    "s-edge"  silent
 
 echo 88 > "$T/ctx-s-high"
@@ -32,11 +32,11 @@ check "used 88, new session -> nudge"      "s-high"  nudge
 echo garbage > "$T/ctx-s-bad"
 check "garbage state -> silent, no crash"  "s-bad"   silent
 
-echo 15.4 > "$T/ctx-s-frac"
-check "fractional used 15.4 -> nudge"      "s-frac"  nudge
+echo 25.4 > "$T/ctx-s-frac"
+check "fractional used 25.4 -> nudge"      "s-frac"  nudge
 
-echo 14.9 > "$T/ctx-s-under"
-check "used 14.9 -> silent"                "s-under" silent
+echo 24.9 > "$T/ctx-s-under"
+check "used 24.9 -> silent"                "s-under" silent
 
 echo "---"
 echo "$pass passed, $fail failed"
