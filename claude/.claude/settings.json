@@ -1,4 +1,6 @@
 {
+  "cleanupPeriodDays": 90,
+  "syncClaudeAiSkills": false,
   "env": {
     "CLAUDE_CODE_SUBAGENT_MODEL": "claude-opus-4-6[1m]"
   },
@@ -13,7 +15,9 @@
       "EnterWorktree",
       "Bash(gh list:*)",
       "Bash(gh issue view:*)",
-      "Bash(gh pr view:*)"
+      "Bash(gh pr view:*)",
+      "Bash(tmux paste-buffer:*)",
+      "Bash(tmux send-keys:*)"
     ],
     "deny": [
       "mcp__clickup",
@@ -42,10 +46,7 @@
     ],
     "defaultMode": "auto"
   },
-  "model": "claude-fable-5-1[1m]",
   "disableClaudeAiConnectors": true,
-  "cleanupPeriodDays": 90,
-  "syncClaudeAiSkills": false,
   "hooks": {
     "Stop": [
       {
@@ -192,6 +193,12 @@
     },
     "claude-fable-5-1": {
       "effortLevel": "xhigh"
+    },
+    "claude-opus-5-5": {
+      "effortLevel": "xhigh"
+    },
+    "claude-sonnet-5-5": {
+      "effortLevel": "xhigh"
     }
   },
   "askUserQuestionTimeout": "60s",
@@ -236,5 +243,6 @@
       "**routine under CloudKey-io/core prefix**: all local git mutations (staging, commit, branch, stash, local merge/rebase) ask before running; read-only git/gh commands run without a prompt; `git push` and mutating `gh` commands always ask; integrating from a remote (`git pull`, `git merge origin/…`, `gh pr merge`) is permanently denied"
     ]
   },
-  "voiceEnabled": true
+  "voiceEnabled": true,
+  "model": "opus"
 }
