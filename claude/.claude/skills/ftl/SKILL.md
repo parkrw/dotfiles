@@ -1,6 +1,6 @@
 ---
 name: ftl
-description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `claude-review` in a loop until it reports zero findings, then prints the push and `gh pr create` commands, with a rebase first only when behind. `/ftl ship --integrate` also runs `pull --ff-only` in the default checkout, the rebase or merge itself, resolves conflicts, then pushes and opens a draft PR. Read-only otherwise - no fetch, push, branch, stash, or gh outside Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl ship --integrate, /ftl --help.
+description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `claude-review` in a loop until it reports zero findings, then prints the push and `gh pr create` commands, with a rebase first only when behind. `/ftl ship --integrate` also runs `pull --ff-only` in the default checkout, the rebase or merge itself, resolves conflicts, then pushes and opens a draft PR. `/ftl <task> --ship` does all of it in one command - orient, build, then ship --integrate - stopping only for a decision the build cannot make alone. Read-only otherwise - no fetch, push, branch, stash, or gh outside Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl ship --integrate, /ftl "fix the logout redirect #301" --ship, /ftl --help.
 ---
 
 ## Help
@@ -29,12 +29,15 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
                    (pull --ff-only, then rebase if unpushed or merge
                    if pushed), resolve conflicts, re-review only if
                    the diff changed, then push and open a draft PR
+  /ftl <task> --ship
+                  orient, build, then ship --integrate; stops only
+                   for a decision the build cannot make alone
   /ftl --help     show this help
 ```
 
 ---
 
-Run from the repo root. Every step prints the line that shows its result, so the next step can rely on what is on screen. `$ARGUMENTS` of exactly `ship` runs Ship, and exactly `ship --integrate` runs Ship with Integrate; empty runs Check; anything else is the task for Orient.
+Run from the repo root. Every step prints the line that shows its result, so the next step can rely on what is on screen. `$ARGUMENTS` of exactly `ship` runs Ship, and exactly `ship --integrate` runs Ship with Integrate; empty runs Check; anything else ending in ` --ship` runs Task to PR with the rest as the task; anything else is the task for Orient.
 
 # Orient - `/ftl <task>`
 
@@ -94,6 +97,15 @@ These win over the lead's habits.
 - Repo-tracked Claude config (`.claude/`, `CLAUDE.md`, skills) is the lead's decision. Tooling lives in `~/.claude/` and the untracked `.claude/settings.local.json`.
 - A runbook is unverified until you have run it. Run a procedure against dev before extending it, and frame the change as "run against dev on <date>, here is what changed".
 - Work lands as a PR. An issue writeup gets absorbed into the lead's commits; a PR gets reviewed and stays attributable.
+
+# Task to PR - `/ftl <task> --ship`
+
+For a task that needs no steer. One command from task to draft PR.
+
+1. Orient steps 1, 2, 3 and 5 for the task. Skip step 4: Ship fetches and integrates, so nothing is printed for the human and nothing waits.
+2. Ship step 1 now, before the first edit, so the build never lands on the default branch. Name the worktree from the task; there is no diff yet.
+3. Build the task in `worktree`. When the task leaves a decision open - scope it does not settle, an amount under the Visual work rules (variants or a slider page), a choice between two behaviors - stop with one question or the variants. After the answer, carry on from here; no second command.
+4. Ship from step 2, with `--integrate`.
 
 # Check - `/ftl`
 
