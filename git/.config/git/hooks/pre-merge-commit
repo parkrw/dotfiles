@@ -39,7 +39,8 @@ if [ -n "$CLAUDECODE" ]; then
     # The loop runs in a subshell (pipeline), so it reports rather than denies.
     env | sed -n 's/^GITHEAD_\([0-9a-f][0-9a-f]*\)=\(.*\)$/\1 \2/p' |
         while read -r sha name; do
-            if cg_is_remote_ref "$name" || [ -n "$(cg_remote_ref_name "$sha")" ]; then
+            if cg_is_remote_ref "$name" ||
+                { ! cg_is_local_branch "$name" && [ -n "$(cg_remote_ref_name "$sha")" ]; }; then
                 echo "REMOTE ${name}"
             fi
         done | grep -q '^REMOTE ' &&

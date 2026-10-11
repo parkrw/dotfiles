@@ -19,6 +19,13 @@
 - Before starting a task, read the docs whose trigger matches the work. Do not read all docs up front unless the repo explicitly requires it.
 - When citing repo files, include relative file paths with exact line numbers whenever possible. Prefer `path/to/file.ext:123` and use line ranges only when they add clarity.
 - **Repo rules win.** When a project's CLAUDE.md/AGENTS.md conflicts with this file, follow the repo.
+- When blocked, hand back one command block to run or one yes/no question — not a menu.
+
+## Visual work
+
+- A visual claim (size, spacing, alignment, color, overflow) needs a measurement from a real browser plus a cropped screenshot of the element. Reading the CSS is not a measurement.
+- An unquantified "more/less X" gets 3–4 labelled variants side by side; a continuous parameter gets a slider page. I pick; you do not guess the amount.
+- Before an ambiguous visual edit, state its scope in one line — which element, which breakpoints, which states — then make it.
 
 ## Git Safety
 
@@ -27,30 +34,33 @@
 ## Source control
 
 - **Never integrate from a remote.** No `git merge origin/…`, no `git rebase origin/…`, no `git pull` or `git pull --rebase`, no `gh pr merge`. These are denied permanently and no toggle enables them. If one is genuinely needed, stop and tell me the exact command and what it will do to my tree — I will run it.
-- `git add` and `git commit` run without a prompt: they write only the local index and history. Committing on `main`/`master` is denied — branch first. `--amend`, `--no-verify`, and a commit on a detached HEAD still ask. Branching, stashing, merging, rebasing ask before running.
+- `git add` and `git commit` run without a prompt: they write only the local index and history. Committing on `main`/`master` is denied — branch first. `--amend`, `--no-verify`, and a commit on a detached HEAD still ask. Branching, stashing, merging, rebasing ask before running, except a local merge/rebase under `merge auto` (below).
+- Stage named paths only: `git add <path>…` from `git status --short`. Never `git add -A`, `git add .` or `git commit -a`.
+- Commit before a merge or rebase; the auto tier refuses a dirty tree, untracked files included.
+- Rebase only an unpushed branch. A pushed branch takes `git merge <default>` so review comments keep their shas.
 - Read-only git and gh commands (log, diff, status, show, blame, pr view, issue list, etc.) run without a prompt.
 - `git push` and mutating `gh` commands ask every time. `git pull --ff-only` is allowed outright: it advances a branch pointer or fails, so it can neither write a merge commit nor rewrite a sha.
 - Never work around a gate. `--no-verify`, a repo-local `core.hooksPath`, and hand-writing or deleting a marker file are all off limits; ask me instead.
 
 ### Per-repo toggles
 
-`claude-gate` shows a repo's toggles; `claude-gate <toggle> on|off` flips one and then offers the others, so a stale setting surfaces instead of lingering unnoticed.
+`claude-gate` shows a repo's toggles; `claude-gate <toggle> on|off` (`merge` also takes `auto`) flips one and then offers the others, so a stale setting surfaces instead of lingering unnoticed.
 
 | Toggle | Default | On | Off |
 | --- | --- | --- | --- |
 | `remote` | on | `git push`, `gh` ask | both denied |
-| `merge` | on | **local** merge/rebase ask | both denied |
+| `merge` | on | **local** merge/rebase ask; `auto` allows one onto a named local branch from a clean tree, a rebased branch unpushed | both denied |
 | `review` | off | push denied until the branch diff passes a fresh-context review | no review required |
 
-`remote` and `merge` are on unless the repo root carries an opt-out marker — `.claude-remote-off` or `.claude-merge-off` — so turning one off writes a file and turning it back on removes it. `review` is the reverse: off unless the repo is listed in `~/.claude/hooks/review-gate-repos`.
+`remote` and `merge` are on unless the repo root carries an opt-out marker — `.claude-remote-off` or `.claude-merge-off` — so turning one off writes a file and turning it back on removes it. `review` is the reverse: off unless the repo is listed in `~/.claude/hooks/review-gate-repos`. `merge auto` is an opt-in marker, `.claude-merge-auto`; anything outside its rules — a sha, bare `git merge`, `-i`, `--onto`, a dirty tree, a branch on origin — falls back to ask, and `.claude-merge-off` wins over it.
 
-The markers are per checkout, so a worktree tightens separately from its parent; the review toggle keys off the main checkout instead and is shared with its worktrees. `~/.config/git/ignore` covers the markers, so they never reach a repo's tracked tree or show up in `git status`.
+The markers are per checkout, so a worktree tightens separately from its parent; the review toggle and `.claude-merge-auto` key off the main checkout instead and are shared with its worktrees. `~/.config/git/ignore` covers the markers, so they never reach a repo's tracked tree or show up in `git status`.
 
 ### The enforcement layers
 
 - `hooks/scripts/bash-write-gate.sh` — inspects command text before the tool runs. Fails closed: a crash denies the command.
 - `~/.config/git/hooks/{pre-push,pre-rebase,pre-merge-commit}` — run inside git, so they also catch operations buried in Makefiles, npm scripts, and `git pull`, which command-text inspection cannot see. They act only when `CLAUDECODE` is set, so my own terminal is unaffected.
-- `~/.config/git/hooks/pre-push` — the human-side review gate, now pre-PR rather than pre-commit. Runs for ALL pushes (no `CLAUDECODE` guard) in repos opted into `review`, so both Claude and terminal pushes meet the same turnstile. The reviewed unit is the branch diff a PR would show, and the approval is keyed by that diff's own sha256, so a new commit or a rebase expires it and each worktree carries its own. `~/.claude/hooks/scripts/review-branch.sh` is the only writer of an approval. A terminal push runs `claude-review` inline — diff summary, then a choice of reviewer (`claude -p`, `codex exec`, or no) — and proceeds if the review passes; under `CLAUDECODE` the hook only names the command, because an agent has no terminal to answer on. Kill switches: `~/.claude/hooks/.disabled`, `~/.claude/hooks/.no-review-gate`. `pre-commit` is now only a chainer to a repo's own hook.
+- `~/.config/git/hooks/pre-push` — the human-side review gate, now pre-PR rather than pre-commit. Runs for ALL pushes (no `CLAUDECODE` guard) in repos opted into `review`, so both Claude and terminal pushes meet the same turnstile. The reviewed unit is the branch diff a PR would show, and the approval is keyed by that diff's own sha256, so a new commit or a rebase expires it and each worktree carries its own. `~/.claude/hooks/scripts/review-branch.sh` is the only writer of an approval. A terminal push runs `claude-review` inline — diff summary, then a choice of reviewer (`claude -p`, `codex exec`, or no) — and proceeds if the review passes; under `CLAUDECODE` the hook only names the command, because an agent has no terminal to answer on. Kill switches: `~/.claude/hooks/.disabled`, `~/.claude/hooks/.no-review-gate`. `pre-commit` rejects staged lines that add a `<<<<<<<` or `>>>>>>>` conflict marker, for everyone, then chains to a repo's own hook.
 
 Whatever the toggles say, `pre-push` denies pushes to `main`/`master`, tags, branch deletions, and non-fast-forward pushes, deciding from the ref list on stdin rather than the current branch — so `git push origin HEAD:master` is caught from a feature branch. Known gaps, accepted: `--no-verify` skips all git hooks (the write gate denies that flag), a repo-local `core.hooksPath` such as husky overrides the global one, and a fast-forward merge writes no commit so `pre-merge-commit` never sees it.
 

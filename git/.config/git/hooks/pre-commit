@@ -1,5 +1,5 @@
 #!/bin/sh
-# Global pre-commit (core.hooksPath): a pure chainer. It gates nothing.
+# Global pre-commit (core.hooksPath): rejects conflict markers, then chains.
 #
 # The review gate used to live here, blocking a commit until its staged diff
 # passed a fresh-context review. It now runs at push time, in pre-push's
@@ -20,6 +20,25 @@
 # This file still has to exist. core.hooksPath replaces .git/hooks outright, so
 # without this chain a repo's own pre-commit hook — husky and friends — stops
 # running everywhere.
+
+# A conflict resolved by hand can leave a marker behind, and a union-merged
+# file never stops to show one. Only <<<<<<< and >>>>>>> count: ======= is a
+# Markdown and RST heading underline, and `diff --check` also flags whitespace.
+markers=$(git diff --cached --no-color --no-ext-diff -U0 --src-prefix=a/ --dst-prefix=b/ | awk '
+    /^diff --git / { hdr = 1; next }
+    hdr && /^\+\+\+ / { file = substr($0, 7); next }
+    /^@@/ { hdr = 0; split($3, a, ","); line = substr(a[1], 2) + 0; next }
+    hdr { next }
+    /^\+/ {
+        if ($0 ~ /^\+(<<<<<<<|>>>>>>>)( |$)/) print "  " file ":" line
+        line++
+    }')
+if [ -n "$markers" ]; then
+    echo "pre-commit: blocked — conflict markers in staged lines:" >&2
+    echo "$markers" >&2
+    exit 1
+fi
+
 repo_hook="$(git rev-parse --git-common-dir)/hooks/pre-commit"
 [ -x "$repo_hook" ] && exec "$repo_hook" "$@"
 exit 0

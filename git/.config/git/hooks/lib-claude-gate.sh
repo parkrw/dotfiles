@@ -3,17 +3,27 @@
 # git only runs files named after a hook, so this name is inert in hooksPath.
 # (pre-push predates this file and stays self-contained; it needs none of it.)
 
+# cg_is_local_branch <name> — true when the name resolves to refs/heads/*.
+cg_is_local_branch() {
+    case "$(git rev-parse --symbolic-full-name "$1" 2>/dev/null)" in
+        refs/heads/*) return 0 ;;
+    esac
+    return 1
+}
+
 # cg_is_remote_ref <ref-or-sha>
 # True when the argument names, or resolves to, something on a remote:
 # a remote-tracking ref, FETCH_HEAD, or a bare URL. Commits reached by sha
 # alone — which is what `git pull` hands its subcommands — are matched by
-# asking which refs point at them.
+# asking which refs point at them. A local branch name is local even when its
+# tip equals a remote-tracking ref, as it does right after `pull --ff-only`.
 cg_is_remote_ref() {
     case "$1" in
         FETCH_HEAD | *://* | *@*:*) return 0 ;;
     esac
     case "$(git rev-parse --symbolic-full-name "$1" 2>/dev/null)" in
         refs/remotes/*) return 0 ;;
+        refs/heads/*) return 1 ;;
     esac
     sha=$(git rev-parse --verify --quiet "$1^{commit}" 2>/dev/null) || return 1
     [ -n "$(git for-each-ref --points-at "$sha" --format='%(refname)' refs/remotes 2>/dev/null)" ]

@@ -11,7 +11,9 @@
 #   new branch whose name is taken
 #     on origin, or whose issue is
 #     someone else's                -> deny (always)
-#   LOCAL merge/rebase              -> ask (default) or deny (.claude-merge-off)
+#   LOCAL merge/rebase              -> ask (default), deny (.claude-merge-off),
+#                                      or allow onto a named local branch from a
+#                                      clean tree (.claude-merge-auto)
 #   overwrite/modify EXISTING file  -> ask
 #   remote git writes (push), gh    -> ask (default) or deny (.claude-remote-off)
 #   REMOTE merge/rebase, gh pr merge-> deny, always. No marker changes it.
@@ -22,9 +24,12 @@
 # repo below the default; their absence is the permissive default:
 #   .claude-remote-off  push/gh            ask   -> deny
 #   .claude-merge-off   LOCAL merge/rebase allow -> deny
-# Neither affects a merge or rebase whose target is a remote ref, and nothing
+# One opt-IN marker, read from the main checkout so linked worktrees share it:
+#   .claude-merge-auto  LOCAL merge/rebase ask -> allow, when the target is a
+#                       named local branch and the tree is clean; -off wins
+# None affects a merge or rebase whose target is a remote ref, and nothing
 # permits `gh pr merge`. Those are human-only, permanently.
-# Flip both with `claude-gate`.
+# Flip them with `claude-gate`.
 #
 # A compound line is judged segment by segment, wherever the git or gh segment
 # sits: it can be auto-approved only when every segment is itself in the allow
@@ -300,16 +305,28 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
 
   # Each merge/rebase segment is tested on its own arguments — reading to the
   # end of the line would mistake a URL in a later command for a remote ref.
+  #
+  # The same pass judges the auto tier: every segment must be --abort/--continue
+  # or name exactly one local branch, with no flag that reshapes the operation
+  # (-i, --onto, -X, -m …), and run in the repo the checks below inspect.
   op=""; is_remote=0
+  auto_named=1; auto_work=0; auto_rebase=0; auto_segs=0
+  c_raw=$(echo "$cmd" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*/\1/p')
   while IFS= read -r seg; do
     s=$(git_sub_of "$seg")
     case "$s" in merge|rebase) ;; *) continue ;; esac
     [[ -z "$op" ]] && op="$s"
+    auto_segs=$((auto_segs + 1))
+    seg_c=$(echo "$seg" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*/\1/p')
+    [[ "$seg_c" == "$c_raw" ]] || auto_named=0
     args=$(echo "$seg" | sed -E "s/.*[[:space:]]${s}([[:space:]]|\$)//")
 
     # --abort/--continue/etc. steer an in-flight operation; they resolve local
     # state and never reach a remote, so they sit in the local tier.
-    echo "$args" | grep -Eq -- '--(abort|quit|continue|skip|edit-todo|show-current-patch)\b' && continue
+    if echo "$args" | grep -Eq -- '--(abort|quit|continue|skip|edit-todo|show-current-patch)\b'; then
+      echo "$args" | grep -Eq -- '^[[:space:]]*--(abort|continue)[[:space:]]*$' || auto_named=0
+      continue
+    fi
 
     echo "$args" | grep -Eq "(^|[[:space:]=])($remotes)/"                && { op="$s"; is_remote=1; break; }
     echo "$args" | grep -Eq '(^|[[:space:]=])(FETCH_HEAD|refs/remotes/)' && { op="$s"; is_remote=1; break; }
@@ -317,6 +334,17 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
     # Bare `git rebase` rebases onto @{upstream} — a remote-tracking ref.
     if [[ "$s" == rebase ]] && ! echo "$args" | tr ' ' '\n' | grep -qE '^[^-][^[:space:]]*'; then
       op="$s"; is_remote=1; break
+    fi
+
+    auto_work=1; [[ "$s" == rebase ]] && auto_rebase=1
+    words=$(git_args_of "$seg" | tr ' \t' '\n\n' | grep -v '^$' || true)
+    flags=$(printf '%s\n' "$words" | grep -E '^-' || true)
+    targets_=$(printf '%s\n' "$words" | grep -vE '^-|^$' || true)
+    [[ -n "$flags" ]] && printf '%s\n' "$flags" | grep -vqxE -- '--(no-ff|ff|ff-only|no-edit|stat|no-stat|quiet)|-q' \
+      && auto_named=0
+    if [[ "$(printf '%s\n' "$targets_" | grep -c . || true)" != 1 ]] \
+       || ! git -C "$gitdir" show-ref --verify --quiet "refs/heads/$targets_"; then
+      auto_named=0
     fi
   done < <(echo "$cmd" | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}')
   [[ -z "$op" ]] && op=merge
@@ -332,6 +360,64 @@ If YOU run this yourself: git rewrites your local commits on top of the remote r
 
   [[ "$merge_off" == 1 ]] &&
     emit deny "Local git $op blocked — this repo is opted out (.claude-merge-off). Re-enable with: claude-gate merge on"
+
+  # ── auto tier (.claude-merge-auto) ──
+  #
+  # Read from the main checkout so Ship's linked worktrees inherit it. Committed
+  # work survives a local merge or rebase in the reflog; what does not is a dirty
+  # tree caught in a conflict, and a rebased branch someone already fetched. So:
+  # clean tree, and a rebased branch that has no upstream and is absent from
+  # origin. ls-remote runs last — it is the slow check. It fails closed: any exit
+  # other than 2 (no such branch) asks.
+  merge_auto=0
+  if [[ -n "$repo_root" ]]; then
+    common=$(git -C "$gitdir" rev-parse --git-common-dir 2>/dev/null || true)
+    [[ -n "$common" && "$common" != /* ]] && common="$gitdir/$common"
+    main_root=""
+    [[ -n "$common" ]] && main_root=$(cd "$(dirname "$common")" 2>/dev/null && pwd -P || true)
+    [[ -n "$main_root" && -f "$main_root/.claude-merge-auto" ]] && merge_auto=1
+  fi
+
+  if [[ "$merge_auto" == 1 ]]; then
+    blocker=""
+    bare_segs=$(segments | while IFS= read -r seg; do git_sub_of "$seg"; done | grep -cxE 'merge|rebase' || true)
+    cd_segs=$(segments | while IFS= read -r seg; do word_of "$seg"; done | grep -cx 'cd' || true)
+    if [[ "$auto_named" != 1 ]]; then
+      blocker="auto needs one named local branch (refs/heads/<target>) and no -i/--onto/-X/-m, or --abort/--continue"
+    elif [[ "$auto_segs" == 0 || "$bare_segs" != "$auto_segs" ]]; then
+      blocker="could not match every merge/rebase segment on the line"
+    elif [[ "$cd_segs" -gt 1 || ( "$cd_segs" == 1 && -z "$cd_arg" ) ]]; then
+      blocker="only a single leading cd is resolved"
+    elif [[ "$auto_work" == 1 ]]; then
+      porcelain=$(git -C "$gitdir" status --porcelain 2>/dev/null || echo "status failed")
+      if [[ -n "$porcelain" ]]; then
+        blocker="the tree is not clean (untracked files count) — commit first"
+      elif [[ "$auto_rebase" == 1 ]]; then
+        if [[ -z "$cur" ]]; then
+          blocker="HEAD is detached"
+        elif git -C "$gitdir" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+          blocker="'$cur' has an upstream — rebase only unpushed branches"
+        elif git -C "$gitdir" show-ref --verify --quiet "refs/remotes/origin/$cur"; then
+          blocker="origin/$cur exists locally — rebase only unpushed branches"
+        else
+          lr_rc=0
+          git -C "$gitdir" ls-remote --exit-code --heads origin "$cur" >/dev/null 2>&1 || lr_rc=$?
+          if [[ "$lr_rc" == 0 ]]; then
+            blocker="'$cur' is on origin — rebase only unpushed branches"
+          elif [[ "$lr_rc" != 2 ]]; then
+            blocker="could not confirm '$cur' is absent from origin (git ls-remote exited $lr_rc)"
+          fi
+        fi
+      fi
+    fi
+    if [[ -z "$blocker" ]]; then
+      seg_extra_git='merge|rebase'
+      can_allow && emit allow "Local git $op onto a local branch, clean tree (.claude-merge-auto)."
+      seg_extra_git=''
+      blocker="another segment on the line is outside the allow tier"
+    fi
+    emit ask "Local git $op — needs approval (merge auto: $blocker)."
+  fi
   emit ask "Local git $op — needs approval."
 fi
 

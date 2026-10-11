@@ -44,6 +44,7 @@
   },
   "model": "claude-fable-5-1[1m]",
   "disableClaudeAiConnectors": true,
+  "cleanupPeriodDays": 90,
   "syncClaudeAiSkills": false,
   "hooks": {
     "Stop": [
