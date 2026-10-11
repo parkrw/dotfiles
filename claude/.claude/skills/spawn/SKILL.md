@@ -1,6 +1,6 @@
 ---
 name: spawn
-description: Open a new interactive Claude Code session in a new tmux window (like prefix+c) of the current tmux session, running this session's model and effort (never max). Seeds it with a handoff pickup (task file's Handoff section, or HANDOFF.md) and a 15%/20% context-budget rule; optional argument appends the task, e.g. /spawn, /spawn "continue task 07c2".
+description: Open a new interactive Claude Code session in a new tmux window (like prefix+c) of the current tmux session, running this session's model and effort (never max). Seeds it with a handoff pickup (task file's Handoff section, or HANDOFF.md) and a 15%/20% context-budget rule; optional argument appends the task; --fresh skips the handoff pickup, e.g. /spawn, /spawn "continue task 07c2", /spawn --fresh "task".
 ---
 
 ## Help
@@ -39,9 +39,11 @@ Open a fresh interactive `claude` in a **new window of the current tmux session*
 
 ## 2. Build the seed prompt
 
+If `$ARGUMENTS` starts with `--fresh`, remember that and strip the flag; every item below reads the stripped `$ARGUMENTS`.
+
 The new session always starts with an initial prompt composed of, in order:
 
-1. **Handoff pickup** — when `$ARGUMENTS` starts with `--fresh`, drop the flag and omit this line: the task arrives complete, and an older handoff would compete with it. Otherwise resolve where the handoff lives, in this order:
+1. **Handoff pickup** — omit under `--fresh`: the task arrives complete, and an older handoff would compete with it. Otherwise resolve where the handoff lives, in this order:
    - `TODO/README.md` exists → `Read TODO/README.md, follow its Resume pointer
      to the task file, and continue from that file's Handoff section.`
    - else `HANDOFF.md` exists in `$PWD` (`[ -f HANDOFF.md ]`) →
