@@ -39,22 +39,22 @@
 - Commit before a merge or rebase; the auto tier refuses a dirty tree, untracked files included.
 - Rebase only an unpushed branch. A pushed branch takes `git merge <default>` so review comments keep their shas.
 - Read-only git and gh commands (log, diff, status, show, blame, pr view, issue list, etc.) run without a prompt.
-- `git push` and mutating `gh` commands ask every time. `git pull --ff-only` is allowed outright: it advances a branch pointer or fails, so it can neither write a merge commit nor rewrite a sha.
+- `git push` and mutating `gh` commands ask, except under `remote auto` (below): a push of the current branch to origin and `gh pr create --draft`. `gh pr merge` stays denied. `git pull --ff-only` is allowed outright: it advances a branch pointer or fails, so it can neither write a merge commit nor rewrite a sha.
 - Never work around a gate. `--no-verify`, a repo-local `core.hooksPath`, and hand-writing or deleting a marker file are all off limits; ask me instead.
 
 ### Per-repo toggles
 
-`claude-gate` shows a repo's toggles; `claude-gate <toggle> on|off` (`merge` also takes `auto`) flips one and then offers the others, so a stale setting surfaces instead of lingering unnoticed.
+`claude-gate` shows a repo's toggles; `claude-gate <toggle> on|off` (`merge` and `remote` also take `auto`) flips one and then offers the others, so a stale setting surfaces instead of lingering unnoticed.
 
 | Toggle | Default | On | Off |
 | --- | --- | --- | --- |
-| `remote` | on | `git push`, `gh` ask | both denied |
+| `remote` | on | `git push`, `gh` ask; `auto` allows `git push [-u] origin <current-branch>` and `gh pr create --draft` while pre-push's review gate is live, and turns `review` on | both denied |
 | `merge` | on | **local** merge/rebase ask; `auto` allows one onto a named local branch from a clean tree, a rebased branch unpushed | both denied |
 | `review` | off | push denied until the branch diff passes a fresh-context review | no review required |
 
-`remote` and `merge` are on unless the repo root carries an opt-out marker — `.claude-remote-off` or `.claude-merge-off` — so turning one off writes a file and turning it back on removes it. `review` is the reverse: off unless the repo is listed in `~/.claude/hooks/review-gate-repos`. `merge auto` is an opt-in marker, `.claude-merge-auto`; anything outside its rules — a sha, bare `git merge`, `-i`, `--onto`, a dirty tree, a branch on origin — falls back to ask, and `.claude-merge-off` wins over it.
+`remote` and `merge` are on unless the repo root carries an opt-out marker — `.claude-remote-off` or `.claude-merge-off` — so turning one off writes a file and turning it back on removes it. `review` is the reverse: off unless the repo is listed in `~/.claude/hooks/review-gate-repos`. `merge auto` is an opt-in marker, `.claude-merge-auto`; anything outside its rules — a sha, bare `git merge`, `-i`, `--onto`, a dirty tree, a branch on origin — falls back to ask, and `.claude-merge-off` wins over it. `remote auto` is `.claude-remote-auto`: a push asks when the review gate is not live, `origin/HEAD` is unset, the branch is the default, or origin's copy of the branch holds anyone else's commits; `.claude-remote-off` wins.
 
-The markers are per checkout, so a worktree tightens separately from its parent; the review toggle and `.claude-merge-auto` key off the main checkout instead and are shared with its worktrees. `~/.config/git/ignore` covers the markers, so they never reach a repo's tracked tree or show up in `git status`.
+The markers are per checkout, so a worktree tightens separately from its parent; the review toggle, `.claude-merge-auto` and `.claude-remote-auto` key off the main checkout instead and are shared with its worktrees. `~/.config/git/ignore` covers the markers, so they never reach a repo's tracked tree or show up in `git status`.
 
 ### The enforcement layers
 

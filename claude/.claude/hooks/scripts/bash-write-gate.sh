@@ -16,6 +16,9 @@
 #                                      clean tree (.claude-merge-auto)
 #   overwrite/modify EXISTING file  -> ask
 #   remote git writes (push), gh    -> ask (default) or deny (.claude-remote-off)
+#   push of the current branch,
+#     gh pr create --draft          -> allow under .claude-remote-auto when the
+#                                      review gate is live; otherwise as above
 #   REMOTE merge/rebase, gh pr merge-> deny, always. No marker changes it.
 #   force-push, push main, tags    -> deny (always)
 #   reset --hard, clean -f, rm -rf  -> deny (always)
@@ -24,9 +27,11 @@
 # repo below the default; their absence is the permissive default:
 #   .claude-remote-off  push/gh            ask   -> deny
 #   .claude-merge-off   LOCAL merge/rebase allow -> deny
-# One opt-IN marker, read from the main checkout so linked worktrees share it:
+# Two opt-IN markers, read from the main checkout so linked worktrees share them:
 #   .claude-merge-auto  LOCAL merge/rebase ask -> allow, when the target is a
 #                       named local branch and the tree is clean; -off wins
+#   .claude-remote-auto push of the current branch and a draft PR ask -> allow,
+#                       when pre-push's review gate is live; -off wins
 # None affects a merge or rebase whose target is a remote ref, and nothing
 # permits `gh pr merge`. Those are human-only, permanently.
 # Flip them with `claude-gate`.
@@ -67,6 +72,16 @@ remote_off=0; merge_off=0
 [[ -n "$repo_root" && -f "$repo_root/.claude-remote-off" ]] && remote_off=1
 [[ -n "$repo_root" && -f "$repo_root/.claude-merge-off"  ]] && merge_off=1
 cur=$(git -C "$gitdir" branch --show-current 2>/dev/null || true)
+
+main_root=""
+if [[ -n "$repo_root" ]]; then
+  common=$(git -C "$gitdir" rev-parse --git-common-dir 2>/dev/null || true)
+  [[ -n "$common" && "$common" != /* ]] && common="$gitdir/$common"
+  [[ -n "$common" ]] && main_root=$(cd "$(dirname "$common")" 2>/dev/null && pwd -P || true)
+fi
+merge_auto=0; remote_auto=0
+[[ -n "$main_root" && -f "$main_root/.claude-merge-auto"  ]] && merge_auto=1
+[[ -n "$main_root" && -f "$main_root/.claude-remote-auto" ]] && remote_auto=1
 
 remote_gate(){
   if [[ "$remote_off" == 1 ]]; then
@@ -141,6 +156,7 @@ seg_git='status|log|diff|show|reflog|shortlog|whatchanged|blame|describe|rev-par
 # A block that has already validated its own subcommand against the remote and
 # marker rules adds it here before asking whether the rest of the line is safe.
 seg_extra_git=''
+seg_extra_gh=''
 
 git_segment_ok(){
   local sub args
@@ -163,6 +179,9 @@ git_segment_ok(){
 
 gh_segment_ok(){
   [[ "$remote_off" == 1 ]] && return 1
+  if [[ -n "$seg_extra_gh" ]] && echo "$1" | grep -Eq '^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
+    pr_create_shape "$1"; return
+  fi
   local rest sub act
   rest=$(echo "$1" | sed -E 's/^[[:space:]]*gh[[:space:]]+((-R|--repo|--hostname)[[:space:]]+[^[:space:]]+[[:space:]]+)*//')
   sub=$(echo "$rest" | awk '{print $1}'); act=$(echo "$rest" | awk '{print $2}')
@@ -183,6 +202,23 @@ gh_segment_ok(){
       return 0 ;;
   esac
   return 1
+}
+
+# A draft PR of the current branch, in this repo. Quoted values arrive blanked
+# to '' or "", so each is one word. --repo, --web, reviewers and labels ask.
+pr_create_shape(){
+  echo "$1" | sed -E 's/^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create//' | tr ' \t' '\n\n' | grep -v '^$' \
+    | awk -v cur="$cur" '
+      take == "val"  { take = ""; next }
+      take == "head" { if ($0 != cur) bad = 1; take = ""; next }
+      /^(-d|--draft)$/ { draft = 1; next }
+      /^(-f|--fill|--fill-first|--fill-verbose)$/ { next }
+      /^(-t|--title|-b|--body|-F|--body-file|-B|--base)$/ { take = "val"; next }
+      /^(-H|--head)$/ { take = "head"; next }
+      /^--(title|body|body-file|base)=/ { next }
+      /^--head=/ { if (substr($0, 8) != cur) bad = 1; next }
+      { bad = 1 }
+      END { exit (draft && !bad && take == "") ? 0 : 1 }'
 }
 
 segment_ok(){
@@ -225,6 +261,39 @@ can_allow(){
   return 0
 }
 
+# The line acts on the repo the gate inspected: a -C in the segment is the
+# line's only -C, and a cd is the single leading one gitdir came from.
+one_repo_seg(){ # $1 = the git or gh segment
+  local c_line c_seg cds
+  c_line=$(echo "$cmd" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*/\1/p')
+  c_seg=$(echo "$1" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*/\1/p')
+  [[ "$c_seg" == "$c_line" ]] || return 1
+  cds=$(segments | while IFS= read -r s; do word_of "$s"; done | grep -cx 'cd' || true)
+  [[ "$cds" == 0 || ( "$cds" == 1 && -n "$cd_arg" ) ]]
+}
+
+# pre-push is what makes an unprompted push safe: under CLAUDECODE it denies
+# trunk, tags, deletions and non-fast-forward pushes, and its review gate
+# denies a branch diff no review has passed. That gate fails open when the
+# repo is not listed, a kill switch is set, or origin/HEAD is unset, so the
+# auto tier requires all three.
+remote_auto_blocker(){ # sets blocker and default_branch
+  local hooks_dir="$HOME/.claude/hooks"
+  blocker=""
+  default_branch=$(git -C "$gitdir" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  default_branch=${default_branch#origin/}
+  if [[ -f "$hooks_dir/.disabled" || -f "$hooks_dir/.no-review-gate" ]] \
+     || ! grep -Fxq "$main_root" "$hooks_dir/review-gate-repos" 2>/dev/null; then
+    blocker="pre-push's review gate is not live here (claude-gate review on; no .disabled or .no-review-gate)"
+  elif [[ -z "$cur" ]]; then
+    blocker="HEAD is detached"
+  elif [[ -z "$default_branch" ]]; then
+    blocker="origin/HEAD is unset (git remote set-head origin -a)"
+  elif [[ "$cur" == "$default_branch" ]]; then
+    blocker="'$cur' is the default branch"
+  fi
+}
+
 # ── DENY backstop (always, no opt-in) ──
 #
 # Runs before any block that can emit `allow`, so a compound line pairing an
@@ -244,7 +313,7 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
   case "$cur" in
     main|master|"") emit deny "push from main/master (or an undetermined branch) is human-only." ;;
   esac
-  remote_gate "Remote write (push)"
+  [[ "$remote_auto" == 1 && "$remote_off" != 1 ]] || remote_gate "Remote write (push)"
 fi
 
 if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+commit\b'; then
@@ -270,7 +339,7 @@ If YOU run this yourself: git fetches, then merges the remote branch into yours,
   remote_gate "Remote write (pull --ff-only, compound command)"
 fi
 
-echo "$cmd" | grep -Eq '\bgh\b.*\bpr\b.*\bmerge\b' && emit deny "gh pr merge is denied permanently — no marker file enables it.
+echo "$cmd" | grep -Eq '\bgh\b[^|;&]*\bpr[[:space:]]+merge\b' && emit deny "gh pr merge is denied permanently — no marker file enables it.
 If YOU run this yourself: GitHub merges the PR head into its base branch ON THE SERVER, immediately, and with --delete-branch also deletes the head branch. There is no local undo — reversing it needs a revert PR."
 echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+tag\b' \
   && ! echo "$cmd" | grep -Eq '\btag\b([[:space:]]+(-l|--list|-n)|[[:space:]]*($|[|;&]))' \
@@ -279,6 +348,51 @@ echo "$cmd" | grep -Eq '\bgit\b.*\breset\b.*--hard'          && emit deny "git r
 echo "$cmd" | grep -Eq '\bgit\b.*\bclean\b.*-[a-zA-Z]*f'     && emit deny "git clean -f deletes untracked files — run it yourself."
 echo "$cmd" | grep -Eq '\brm\b[^|;&]*-[a-zA-Z]*(rf|fr)'      && emit deny "rm -rf is not allowed."
 echo "$cmd" | grep -Eq '\bshred\b'                           && emit deny "shred irreversibly destroys files — run it yourself."
+
+# ── remote auto tier (.claude-remote-auto) ──
+#
+# Only `git push [-u] origin <current-branch>`. A branch already on origin must
+# hold only the user's own commits past the default branch, so a push never
+# adds to a teammate's branch. ls-remote fails closed: any exit but 2 asks.
+if [[ "$remote_auto" == 1 && "$remote_off" != 1 ]] \
+   && echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+push\b'; then
+  remote_auto_blocker
+  n_push=0; push_seg=""
+  while IFS= read -r seg; do
+    [[ "$(git_sub_of "$seg")" == push ]] && { n_push=$((n_push + 1)); push_seg="$seg"; }
+  done < <(segments)
+  if [[ -z "$blocker" ]]; then
+    push_words=$(git_args_of "$push_seg" | tr ' \t' '\n\n' | grep -v '^$' | grep -vxE -- '-u|--set-upstream' | paste -sd' ' - || true)
+    if [[ "$n_push" != 1 ]] || ! one_repo_seg "$push_seg"; then
+      blocker="auto needs one push segment acting on this repo"
+    elif [[ "$push_words" != "origin $cur" && "$push_words" != "origin HEAD" ]]; then
+      blocker="auto pushes only 'git push [-u] origin $cur'"
+    else
+      lr_rc=0
+      lr_out=$(git -C "$gitdir" ls-remote --exit-code --heads origin "refs/heads/$cur" 2>/dev/null) || lr_rc=$?
+      if [[ "$lr_rc" == 0 ]]; then
+        remote_sha=$(printf '%s\n' "$lr_out" | awk '{print $1; exit}')
+        me=$(git -C "$gitdir" config user.email 2>/dev/null || true)
+        if [[ -z "$me" ]] || ! git -C "$gitdir" cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+          blocker="origin/$cur holds commits not fetched here, or user.email is unset — fetch first"
+        else
+          authors=$(git -C "$gitdir" log --format=%ae "origin/$default_branch..$remote_sha" 2>/dev/null) || authors="(git log failed)"
+          others=$(printf '%s\n' "$authors" | grep -v '^$' | grep -vxF "$me" | sort -u | paste -sd, - || true)
+          [[ -n "$others" ]] && blocker="origin/$cur has commits by $others"
+        fi
+      elif [[ "$lr_rc" != 2 ]]; then
+        blocker="could not reach origin (git ls-remote exited $lr_rc)"
+      fi
+    fi
+  fi
+  if [[ -z "$blocker" ]]; then
+    seg_extra_git='push'
+    can_allow && emit allow "git push of '$cur' to origin — pre-push still requires a passing review (.claude-remote-auto)."
+    seg_extra_git=''
+    blocker="another segment on the line is outside the allow tier"
+  fi
+  emit ask "Remote write (push) — needs approval (remote auto: $blocker)."
+fi
 
 # ── read-only lines ──
 #
@@ -293,6 +407,29 @@ fi
 #
 # A gh line not allowed above is a remote write or a shape the segment
 # analysis does not recognise, such as `$(gh …)`.
+if [[ "$remote_auto" == 1 && "$remote_off" != 1 ]] \
+   && echo "$bare" | grep -Eq '(^|[[:space:]&|;(])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
+  remote_auto_blocker
+  n_pr=0; pr_seg=""
+  while IFS= read -r seg; do
+    echo "$seg" | grep -Eq '^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' \
+      && { n_pr=$((n_pr + 1)); pr_seg="$seg"; }
+  done < <(segments)
+  if [[ -z "$blocker" ]]; then
+    if [[ "$n_pr" != 1 ]] || ! one_repo_seg "$pr_seg"; then
+      blocker="auto needs one gh pr create acting on this repo"
+    elif ! pr_create_shape "$pr_seg"; then
+      blocker="auto opens only a draft: gh pr create --draft with --title, --body, --body-file, --base, --fill, or --head $cur"
+    fi
+  fi
+  if [[ -z "$blocker" ]]; then
+    seg_extra_gh=1
+    can_allow && emit allow "Draft PR of '$cur' (.claude-remote-auto)."
+    seg_extra_gh=''
+    blocker="another segment on the line is outside the allow tier"
+  fi
+  emit ask "gh pr create — needs approval (remote auto: $blocker)."
+fi
 echo "$bare" | grep -Eq '(^|[[:space:]&|;(`])gh([[:space:]]|$)' && remote_gate "gh CLI command"
 
 # ── merge / rebase ──
@@ -369,15 +506,6 @@ If YOU run this yourself: git rewrites your local commits on top of the remote r
   # clean tree, and a rebased branch that has no upstream and is absent from
   # origin. ls-remote runs last — it is the slow check. It fails closed: any exit
   # other than 2 (no such branch) asks.
-  merge_auto=0
-  if [[ -n "$repo_root" ]]; then
-    common=$(git -C "$gitdir" rev-parse --git-common-dir 2>/dev/null || true)
-    [[ -n "$common" && "$common" != /* ]] && common="$gitdir/$common"
-    main_root=""
-    [[ -n "$common" ]] && main_root=$(cd "$(dirname "$common")" 2>/dev/null && pwd -P || true)
-    [[ -n "$main_root" && -f "$main_root/.claude-merge-auto" ]] && merge_auto=1
-  fi
-
   if [[ "$merge_auto" == 1 ]]; then
     blocker=""
     bare_segs=$(segments | while IFS= read -r seg; do git_sub_of "$seg"; done | grep -cxE 'merge|rebase' || true)
@@ -555,9 +683,11 @@ fi
 # unattended. Commit on main/master was denied above. What is not a plain
 # local write still asks: --amend rewrites a sha, --no-verify skips the repo's
 # own hooks, a detached HEAD has no branch to hold the commit, and an opaque or
-# redirecting line may hide another command.
+# redirecting line may hide another command. Staging alone needs no branch: a
+# rebase stopped on a conflict has a detached HEAD, and resolving it is `git add`.
 if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+(add|commit)([[:space:]]|$)'; then
-  if [[ -n "$cur" ]] && ! echo "$bare" | grep -Eq -- '(^|[[:space:]])--amend\b'; then
+  if { [[ -n "$cur" ]] || ! echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+commit([[:space:]]|$)'; } \
+     && ! echo "$bare" | grep -Eq -- '(^|[[:space:]])--amend\b'; then
     seg_extra_git='add|commit'
     can_allow && emit allow "Local git add/commit — writes only this checkout's index and history."
     seg_extra_git=''

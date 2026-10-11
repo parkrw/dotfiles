@@ -2,7 +2,11 @@
 # claude-gate — show and flip the per-repo Claude permission toggles.
 #
 #   claude-gate                 status for this repo
-#   claude-gate remote on|off   git push / gh:       ask   <-> deny  (default on)
+#   claude-gate remote on|off|auto
+#                               git push / gh:       ask <-> deny   (default on);
+#                               auto allows a push of the current branch and a
+#                               draft PR, and turns review on, since pre-push's
+#                               review gate is what makes that push safe
 #   claude-gate merge  on|off|auto
 #                               LOCAL merge/rebase:  ask <-> deny   (default on);
 #                               auto allows one onto a named local branch from a
@@ -13,9 +17,9 @@
 #
 # remote and merge are on unless the repo root carries an opt-out marker, so
 # "off" writes a file and "on" removes it. review is the reverse: it is off
-# unless the repo is listed in review-gate-repos. merge auto is an opt-in
-# marker, .claude-merge-auto, in the main checkout; a checkout's
-# .claude-merge-off still wins over it.
+# unless the repo is listed in review-gate-repos. merge auto and remote auto
+# are opt-in markers, .claude-merge-auto and .claude-remote-auto, in the main
+# checkout; a checkout's -off marker still wins over them.
 #
 # Flipping one toggle offers the others, because the failure mode is tightening
 # a repo months ago and forgetting the rest are still set.
@@ -44,7 +48,10 @@ review_root=$(cd "$review_root" && pwd -P)
 
 state() {
   case $1 in
-    remote) [[ -f "$root/.claude-remote-off" ]] && echo off || echo on ;;
+    remote)
+      if   [[ -f "$root/.claude-remote-off" ]]; then echo off
+      elif [[ -f "$review_root/.claude-remote-auto" ]]; then echo auto
+      else echo on; fi ;;
     merge)
       if   [[ -f "$root/.claude-merge-off" ]]; then echo off
       elif [[ -f "$review_root/.claude-merge-auto" ]]; then echo auto
@@ -55,7 +62,7 @@ state() {
 
 describe() {
   case $1 in
-    remote) echo "git push / gh:        on = ask,   off = deny" ;;
+    remote) echo "git push / gh:        on = ask,   off = deny,  auto = allow own-branch push and draft PR" ;;
     merge)  echo "LOCAL merge / rebase: on = ask,   off = deny,  auto = allow onto a local branch, clean tree" ;;
     review) echo "on = push blocked until the branch diff passes review" ;;
   esac
@@ -63,8 +70,11 @@ describe() {
 
 apply() { # toggle on|off
   case "$1:$2" in
-    remote:on)  rm -f "$root/.claude-remote-off" ;;
-    remote:off) : > "$root/.claude-remote-off" ;;
+    remote:on)  rm -f "$root/.claude-remote-off" "$review_root/.claude-remote-auto" ;;
+    remote:off) : > "$root/.claude-remote-off"; rm -f "$review_root/.claude-remote-auto" ;;
+    remote:auto)
+      : > "$review_root/.claude-remote-auto"; rm -f "$review_root/.claude-remote-off"
+      apply review on ;;
     merge:on)   rm -f "$root/.claude-merge-off" "$review_root/.claude-merge-auto" ;;
     merge:off)  : > "$root/.claude-merge-off"; rm -f "$review_root/.claude-merge-auto" ;;
     merge:auto) : > "$review_root/.claude-merge-auto"; rm -f "$review_root/.claude-merge-off" ;;
@@ -77,7 +87,7 @@ apply() { # toggle on|off
       mv "$REPOS_FILE.tmp" "$REPOS_FILE" ;;
   esac
   printf '  %-7s %s\n' "$1" "$(state "$1")"
-  [[ "$1:$2" == merge:auto && "$review_root" != "$root" ]] &&
+  [[ "$2" == auto && "$review_root" != "$root" ]] &&
     echo "  marker written at the main checkout: $review_root"
   return 0
 }
@@ -98,10 +108,12 @@ status() {
 }
 
 # Flipping one toggle is the moment to reconsider the others.
-offer_others() {
+offer_others() { # toggle state
   [[ -t 0 ]] || return 0
   for t in remote merge review; do
     [[ "$t" == "$1" ]] && continue
+    # remote auto just turned review on, and depends on it.
+    [[ "$1:$2:$t" == remote:auto:review ]] && continue
     cur=$(state "$t")
     want=$([[ "$cur" == on ]] && echo off || echo on)
     read -r -p "  also turn $t $want? ($(describe "$t")) [y/N] " ans || return 0
@@ -114,13 +126,13 @@ case "${1:-}" in
   all)
     [[ "${2:-}" == off ]] || die "only 'all off' is supported"
     for t in remote merge review; do apply "$t" off; done ;;
-  merge)
-    case "${2:-}" in on|off|auto) ;; *) die "usage: claude-gate merge on|off|auto" ;; esac
+  remote|merge)
+    case "${2:-}" in on|off|auto) ;; *) die "usage: claude-gate $1 on|off|auto" ;; esac
     apply "$1" "$2"
-    offer_others "$1" ;;
-  remote|review)
-    case "${2:-}" in on|off) ;; *) die "usage: claude-gate $1 on|off" ;; esac
+    offer_others "$1" "$2" ;;
+  review)
+    case "${2:-}" in on|off) ;; *) die "usage: claude-gate review on|off" ;; esac
     apply "$1" "$2"
-    offer_others "$1" ;;
+    offer_others "$1" "$2" ;;
   *) die "unknown toggle '${1}' — try: status, remote, merge, review, all off" ;;
 esac
