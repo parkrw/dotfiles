@@ -68,7 +68,7 @@ The index is a few percent of the docs' size. Then:
 
 What the reviewer will find, found first. Two lists, both printed:
 
-- Past findings on the paths the task will touch, the latest six per file. `<main-checkout>` is `dirname "$(git rev-parse --path-format=absolute --git-common-dir)"`, since the ledger files a worktree's reviews under its main checkout. `no reviews match`, or no lines: none recorded.
+- Past findings on the paths the task will touch, the latest six per file. `<main-checkout>` is `common=$(git rev-parse --path-format=absolute --git-common-dir)` then `${common%/.git}`, the path the ledger files a worktree's reviews under. `no reviews match`, or no lines: none recorded.
 
   ```
   claude-review-stats --json --repo <main-checkout> | jq -r '(.runs | map({(.id): .ts}) | add) as $ts | [.findings[] | select(.path | IN($ARGS.positional[]))] | group_by(.path)[] | sort_by($ts[.run]) | .[-6:][] | "\(.path):\(.line // "?") \(.severity) - \(.text)"' --args <path>...
@@ -278,7 +278,7 @@ Run it in the background and wait for it; a review takes minutes and a foregroun
   - Add the test that fails without the fix, if the repo has tests. A doc or prose finding needs none.
   - A finding that is wrong gets its reason in the commit body instead of a code change.
 
-  Then rerun Check step 2's commands and fix what fails: a fix is new code the checkers have not seen. Then `git -C "$worktree" add <path>... && git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
+  Then `git -C "$worktree" add <path>...`, and rerun Check step 2's commands on what is staged and fix what fails: a fix is new code the checkers have not seen. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
 
 After round 10 with findings still open, stop: print each as `path:line - defect`, then hand off anyway. The human decides.
 
