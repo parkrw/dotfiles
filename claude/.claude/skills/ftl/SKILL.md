@@ -74,7 +74,7 @@ What the reviewer will find, found first. Two lists, both printed:
   claude-review-stats --json --repo <main-checkout> | jq -r '(.runs | map({(.id): .ts}) | add) as $ts | [.findings[] | select(.path | IN($ARGS.positional[]))] | group_by(.path)[] | sort_by($ts[.run]) | .[-6:][] | "\(.path):\(.line // "?") \(.severity) - \(.text)"' --args <path>...
   ```
 
-- Edge cases: the inputs and states the change meets - empty, one, many, equal values, the boundary, the error path, and for UI both color schemes and RTL. Each one gets a test, or a line saying why it cannot occur.
+- Edge cases: the inputs and states the change meets - empty, one, many, equal values, the boundary, the error path, and for UI both color schemes and RTL. Each one gets a test, or a line saying why it cannot occur; in a repo with no tests, a line saying how the change handles it. The build repeats none of the past findings.
 
 ## 3. The lead's conventions, measured
 
@@ -123,7 +123,7 @@ For a task that needs no steer. One command from task to draft PR.
 
 1. Orient steps 1, 2, 2a, 3 and 5 for the task. Skip step 4: Ship fetches and integrates, so nothing is printed for the human and nothing waits.
 2. Ship step 1 now, before the first edit, so the build never lands on the default branch. Name the worktree from the task; there is no diff yet.
-3. Build the task in `worktree`, with a test for each edge case from Orient step 2a and none of its past findings repeated. When the task leaves a decision open - scope it does not settle, an amount under the Visual work rules (variants or a slider page), a choice between two behaviors - stop with one question or the variants. After the answer, carry on from here; no second command.
+3. Build the task in `worktree` against Orient step 2a's traps. When the task leaves a decision open - scope it does not settle, an amount under the Visual work rules (variants or a slider page), a choice between two behaviors - stop with one question or the variants. After the answer, carry on from here; no second command.
 4. Ship from step 2, with `--integrate`.
 
 # Check - `/ftl`
@@ -278,7 +278,7 @@ Run it in the background and wait for it; a review takes minutes and a foregroun
   - Add the test that fails without the fix, if the repo has tests. A doc or prose finding needs none.
   - A finding that is wrong gets its reason in the commit body instead of a code change.
 
-  Then `git -C "$worktree" add <path>...`, and rerun Check step 2's commands on what is staged and fix what fails: a fix is new code the checkers have not seen. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
+  Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged: a fix is new code the checkers have not seen. Fix what fails and add those paths again, until the checks pass on the staged tree. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
 
 After round 10 with findings still open, stop: print each as `path:line - defect`, then hand off anyway. The human decides.
 
