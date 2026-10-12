@@ -388,7 +388,8 @@ bulk_staging(){ # $1 = command line
       if (!paths && w ~ /^--./) {
         e = index(w, "="); if (index(w, X) && (!e || index(w, X) < e)) { unsure = 1; return }
         if (long(w, "pathspec-from-file", 11)) { unsure = 1; take = !e; return }
-        if (long(w, "no-dry-run", 5)) { dry = 0; return }
+        # commit also has --no-date, so --no-d is ambiguous there.
+        if (long(w, "no-dry-run", op == "commit" ? 5 : 4)) { dry = 0; return }
         if (long(w, "dry-run", op == "commit" ? 2 : 1)) { dry = 1; return }
         if (op == "commit") {
           if (w == "--all") hit(w)
@@ -890,6 +891,9 @@ Approve only if the uncommitted changes are meant to move."
     fi
   fi
 fi
+
+# Every deny is above this point, so asking here cannot mask one.
+[[ "$staging" == "?" ]] && emit ask "git add/commit with a pathspec the gate cannot place in the repo — it may expand to the whole tree."
 
 # ── local add / commit ──
 #
