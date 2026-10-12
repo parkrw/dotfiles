@@ -76,6 +76,8 @@ function labelRepos(runs) {
     }),
   );
 }
+// A run with no verdict line failed closed; claude-review-stats does not count it as a round.
+const roundsOf = (chain) => count(chain, (r) => r.verdict !== "none");
 const sevRank = (s) => (SEVERITIES.indexOf(s) + 4) % 4;
 const reviewerOf = (r) => `${r.engine}/${r.run?.models?.[0] ?? r.model ?? "?"}${r.effort ? `/${r.effort}` : ""}`;
 
@@ -98,7 +100,7 @@ function aggregate(runs, findings, tax, runById) {
   const costs = runs.map((r) => r.run?.total_cost_usd).filter((c) => typeof c === "number");
   const mins = runs.map((r) => r.run?.duration_ms).filter((d) => typeof d === "number").map((d) => d / 60000);
   const chains = groupBy(runs, (r) => `${r.worktree}\0${r.branch}`).map(([, rs]) => rs.sort((a, b) => a.ts.localeCompare(b.ts)));
-  const rounds = chains.map((c) => c.length);
+  const rounds = chains.map(roundsOf).filter(Boolean);
   const categorized = findings.filter((f) => f.cause && tax.causes[f.cause]);
   const rereviewed = groupBy(runs.filter((r) => r.diff), (r) => r.diff).filter(([, rs]) => rs.length > 1);
 
@@ -135,9 +137,9 @@ function aggregate(runs, findings, tax, runById) {
 
   const repos = groupBy(runs, repoName)
     .map(([k, rs]) => {
-      const cs = groupBy(rs, (r) => `${r.worktree}\0${r.branch}`).map(([, c]) => c.length);
+      const cs = groupBy(rs, (r) => `${r.worktree}\0${r.branch}`).map(([, c]) => c);
       const priced = rs.map((r) => r.run?.total_cost_usd).filter((c) => typeof c === "number");
-      return { key: k, reviews: rs.length, fail: count(rs, (r) => r.verdict === "FAIL"), perReview: round(sum(rs.map((r) => r.findings.length)) / rs.length), branches: cs.length, roundsMedian: quantile(cs, 0.5), cost: priced.length ? round(sum(priced)) : null };
+      return { key: k, reviews: rs.length, fail: count(rs, (r) => r.verdict === "FAIL"), perReview: round(sum(rs.map((r) => r.findings.length)) / rs.length), branches: cs.length, roundsMedian: quantile(cs.map(roundsOf).filter(Boolean), 0.5), cost: priced.length ? round(sum(priced)) : null };
     })
     .sort((a, b) => b.reviews - a.reviews);
 
@@ -145,7 +147,7 @@ function aggregate(runs, findings, tax, runById) {
     .map((c) => {
       const last = c[c.length - 1];
       const priced = c.map((r) => r.run?.total_cost_usd).filter((x) => typeof x === "number");
-      return { branch: last.branch, repo: repoName(last), rounds: c.length, findings: sum(c.map((r) => r.findings.length)), cost: priced.length ? round(sum(priced)) : null, verdict: last.verdict, last: last.ts };
+      return { branch: last.branch, repo: repoName(last), rounds: roundsOf(c), findings: sum(c.map((r) => r.findings.length)), cost: priced.length ? round(sum(priced)) : null, verdict: last.verdict, last: last.ts };
     })
     .sort((a, b) => b.rounds - a.rounds || b.findings - a.findings)
     .slice(0, 12);
