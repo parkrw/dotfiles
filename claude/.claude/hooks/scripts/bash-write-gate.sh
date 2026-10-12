@@ -6,7 +6,10 @@
 #   create NEW file                 -> allow (no prompt)
 #   git pull --ff-only              -> allow (no prompt)
 #   git add / git commit (local)    -> allow (no prompt); --amend, --no-verify,
-#                                      detached HEAD or an opaque line -> ask
+#                                      detached HEAD, a quoted or variable
+#                                      pathspec or an opaque line -> ask
+#   bulk staging (add -A/-u/., commit
+#     -a, a whole-tree pathspec)    -> deny (always)
 #   other local git writes          -> ask
 #   new branch whose name is taken
 #     on origin, or whose issue is
@@ -323,19 +326,24 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
 fi
 
 # The git command a segment runs. Control words and grouping are stripped as
-# segment_ok strips them, or `if true; then git add -A; fi` would be allowed.
+# segment_ok strips them, or `if true; then git add -A; fi` and `(git add .)`
+# would be allowed.
 seg_git_cmd(){
-  echo "$1" | sed -E 's/^[[:space:]]*([({!][[:space:]]*|(do|then|else|if|elif|while|until|time)[[:space:]]+)*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//' \
+  echo "$1" | sed -E 's/^[[:space:]]*([({!][[:space:]]*|(do|then|else|if|elif|while|until|time)[[:space:]]+)*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//; s/([[:space:]]*[)}])+[[:space:]]*$//' \
     | grep -E '^git([[:space:]]|$)'
 }
 
 # Prints the word that makes a git add/stage/commit stage more than the paths
-# it names, `?` for a quoted pathspec (blanked, so unreadable), or nothing.
-# A short cluster ends at commit's first option that takes a value, so -qam is
-# -a but -mam is a message.
+# it names, `?` for a pathspec the shell may widen (quoted and so blanked, a
+# variable, ~, a .. climb), or nothing. Unquoted backslashes are dropped first,
+# as the shell drops them. A short cluster ends at commit's first option that
+# takes a value, so -qam is -a but -mam is a message.
 bulk_staging(){ # $1 = git command
-  git_args_of "$1" | tr ' \t' '\n\n' | grep -v '^$' | awk -v op="$(git_sub_of "$1")" '
+  git_args_of "$1" | tr -d '\\' | tr ' \t' '\n\n' | grep -v '^$' \
+    | awk -v op="$(git_sub_of "$1")" -v root="$repo_root" '
     function hit(w) { if (!found) found = w }
+    # git takes any unambiguous prefix of a long option.
+    function long(w, name, min) { w = substr(w, 3); return length(w) >= min && index(name, w) == 1 }
     take  { take = 0; next }
     found { next }
     !paths && $0 == "--" { paths = 1; next }
@@ -351,12 +359,14 @@ bulk_staging(){ # $1 = git command
         }
       next
     }
-    !paths && /^--(a|al|all|u|up|upd|upda|updat|update|no-ignore-removal)$/ { hit($0); next }
+    # --renormalize implies -u.
+    !paths && /^--/ && (long($0, "all", 1) || long($0, "update", 1) || long($0, "renormalize", 3) || long($0, "no-ignore-removal", 11)) { hit($0); next }
     !paths && /^-[^-]/ && /[Au]/ { hit($0); next }
     !paths && /^-/ { next }
     /^(:|[.\/*]+$)/ { hit($0); next }
-    /["\047]/ { quoted = 1 }
-    END { if (found) print found; else if (quoted) print "?" }'
+    root != "" && /^\// { p = $0; sub(/\/+$/, "", p); if (index(root "/", p "/") == 1) { hit($0); next } }
+    /["\047$~]|(^|\/)\.\.(\/|$)/ { unsure = 1 }
+    END { if (found) print found; else if (unsure) print "?" }'
 }
 
 staging=""
@@ -728,9 +738,9 @@ fi
 # without a prompt so a review loop can commit each fix and re-review
 # unattended. Commit on main/master was denied above. What is not a plain
 # local write still asks: --amend rewrites a sha, --no-verify skips the repo's
-# own hooks, a detached HEAD has no branch to hold the commit, a quoted
-# pathspec may be `.`, and an opaque or redirecting line may hide another
-# command. Staging alone needs no branch: a
+# own hooks, a detached HEAD has no branch to hold the commit, a quoted or
+# variable pathspec may be `.`, and an opaque or redirecting line may hide
+# another command. Staging alone needs no branch: a
 # rebase stopped on a conflict has a detached HEAD, and resolving it is `git add`.
 if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+(add|commit)([[:space:]]|$)'; then
   if { [[ -n "$cur" ]] || ! echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+commit([[:space:]]|$)'; } \
