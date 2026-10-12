@@ -1,6 +1,6 @@
 ---
 name: ftl
-description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `claude-review` in a loop until it reports zero findings, then prints the push and `gh pr create` commands, with a rebase first only when behind. `/ftl ship --integrate` also runs `pull --ff-only` in the default checkout, the rebase or merge itself, resolves conflicts, then pushes and opens a draft PR. `/ftl <task> --ship` does all of it in one command - orient, build, then ship --integrate - stopping only for a decision the build cannot make alone. Read-only otherwise - no fetch, push, branch, stash, or gh outside Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl ship --integrate, /ftl "fix the logout redirect #301" --ship, /ftl --help.
+description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, lists the reviewer's past findings on those files and the edge cases to test, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, then the git and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `claude-review` in a loop until it reports zero findings, then prints the push and `gh pr create` commands, with a rebase first only when behind. `/ftl ship --integrate` also runs `pull --ff-only` in the default checkout, the rebase or merge itself, resolves conflicts, then pushes and opens a draft PR. `/ftl <task> --ship` does all of it in one command - orient, build, then ship --integrate - stopping only for a decision the build cannot make alone. Read-only otherwise - no fetch, push, branch, stash, or gh outside Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl ship --integrate, /ftl "fix the logout redirect #301" --ship, /ftl --help.
 ---
 
 ## Help
@@ -21,12 +21,14 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
                    then /ftl ship --integrate     -> draft PR; mark it ready
 
   /ftl <task>     orient: index docs/ by heading, read the sections the
-                   task touches, measure the lead's conventions, print state
+                   task touches, list past review findings and edge
+                   cases, measure the lead's conventions, print state
   /ftl            pre-handoff checklist on the staged diff (falls back to
                    the working tree), then the commands for the human
   /ftl ship       worktree (created on main/detached), fetch, check,
                    commit, then claude-review (opus, xhigh)
-                   in a loop - fix, commit, re-review - until zero
+                   in a loop - fix each finding's class, rerun the
+                   checks, commit, re-review - until zero
                    findings; then print cd, push and gh pr create,
                    with a rebase first only when behind
   /ftl ship --integrate
@@ -61,6 +63,18 @@ The index is a few percent of the docs' size. Then:
 - If a doc opens with a table mapping docs to subsystems, read the table.
 - Select the docs whose headings or table rows name the task's nouns or the paths it will touch. Read a selected section from its heading line to the line before the next heading of the same or higher level, with `sed -n '<from>,<to>p'`. Read a whole doc only when most of its headings match.
 - Print the sections read, `file:from-to`, one per line. The checklist reuses the index against the touched files.
+
+## 2a. Traps
+
+What the reviewer will find, found first. Two lists, both printed:
+
+- Past findings on the paths the task will touch, the latest six per file. `<main-checkout>` is `dirname "$(git rev-parse --path-format=absolute --git-common-dir)"`, since the ledger files a worktree's reviews under its main checkout. `no reviews match`, or no lines: none recorded.
+
+  ```
+  claude-review-stats --json --repo <main-checkout> | jq -r '(.runs | map({(.id): .ts}) | add) as $ts | [.findings[] | select(.path | IN($ARGS.positional[]))] | group_by(.path)[] | sort_by($ts[.run]) | .[-6:][] | "\(.path):\(.line // "?") \(.severity) - \(.text)"' --args <path>...
+  ```
+
+- Edge cases: the inputs and states the change meets - empty, one, many, equal values, the boundary, the error path, and for UI both color schemes and RTL. Each one gets a test, or a line saying why it cannot occur.
 
 ## 3. The lead's conventions, measured
 
@@ -107,9 +121,9 @@ These win over the lead's habits.
 
 For a task that needs no steer. One command from task to draft PR.
 
-1. Orient steps 1, 2, 3 and 5 for the task. Skip step 4: Ship fetches and integrates, so nothing is printed for the human and nothing waits.
+1. Orient steps 1, 2, 2a, 3 and 5 for the task. Skip step 4: Ship fetches and integrates, so nothing is printed for the human and nothing waits.
 2. Ship step 1 now, before the first edit, so the build never lands on the default branch. Name the worktree from the task; there is no diff yet.
-3. Build the task in `worktree`. When the task leaves a decision open - scope it does not settle, an amount under the Visual work rules (variants or a slider page), a choice between two behaviors - stop with one question or the variants. After the answer, carry on from here; no second command.
+3. Build the task in `worktree`, with a test for each edge case from Orient step 2a and none of its past findings repeated. When the task leaves a decision open - scope it does not settle, an amount under the Visual work rules (variants or a slider page), a choice between two behaviors - stop with one question or the variants. After the answer, carry on from here; no second command.
 4. Ship from step 2, with `--integrate`.
 
 # Check - `/ftl`
@@ -131,10 +145,15 @@ Run the commands from Orient step 3, from the repo root, each with its pass line
 - A bug fix carries a test that failed before the fix. Name the test.
 - If the rules file demands a spelling, `git diff --cached | grep -nE '^\+.*\b(licence|colour|behaviour|organis|initialis|centre|cancelled|catalogue|analyse|favour|honour)'` prints nothing for US spelling. A mechanical checker rarely covers spelling; this grep is the spot check.
 - If the rules file names a running stack you may restart, restart it and read its log. Paste anything that is not a clean boot.
+- If the repo has end-to-end tests (the directory the e2e command from Orient step 3 runs), grep them for every class, role name, label text, test id and option the diff renames, removes or restyles. Each hit is a spec to update on this branch, though it sits outside the diff.
 
 ## 3. Docs
 
 `git diff --cached --name-only`, then grep the docs index (Orient step 2) for each touched module's name and for the behavior's nouns. A doc that describes the changed behavior and does not reflect the change fails. An endpoint change updates the API reference if the repo has one.
+
+Then grep the body of every doc, `git grep -n -w '<name>' -- '*.md'`, for each prop, class, component, flag and function name the diff adds, renames or removes. A doc line that names one is a second statement of the fact and moves in the same commit.
+
+A doc line this diff adds states the rule, not the list of callers or cases that follow it: a list goes stale the next time a caller changes. An existing list that has to change is rebuilt from a grep of the callers, not from memory.
 
 ## 4. Code and prose spot check
 
@@ -254,7 +273,12 @@ Run it in the background and wait for it; a review takes minutes and a foregroun
 
 - `## Findings` is exactly `none`: the loop is done. `VERDICT: PASS` alone is not enough, since PASS can carry minors. `## Adjacent smells` never counts: it is advisory, outside the diff, and not this PR's to fix.
 - `already approved`: this exact diff passed earlier. Read the report file (`~/.claude/hooks/state/review-branch-<key>.md`); if its `diff sha256` matches the one printed and its findings are `none`, done. Otherwise fix those findings; the next commit changes the hash and the next round reviews afresh.
-- Anything else: print `round N: <count> findings`. Fix each finding in `"$worktree"`, most severe first. A finding that is wrong gets its reason in the commit body instead of a code change. Then `git -C "$worktree" add <path>... && git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
+- Anything else: print `round N: <count> findings`. Fix each finding in `"$worktree"`, most severe first, as a class, not an instance - most later-round findings land in a file an earlier round flagged:
+  - Grep `git -C "$worktree" diff <default>...HEAD` for the same pattern and fix every occurrence, not only the line cited.
+  - Add the test that fails without the fix, if the repo has tests. A doc or prose finding needs none.
+  - A finding that is wrong gets its reason in the commit body instead of a code change.
+
+  Then rerun Check step 2's commands and fix what fails: a fix is new code the checkers have not seen. Then `git -C "$worktree" add <path>... && git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
 
 After round 10 with findings still open, stop: print each as `path:line - defect`, then hand off anyway. The human decides.
 
