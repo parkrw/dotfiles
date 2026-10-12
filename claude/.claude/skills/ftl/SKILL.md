@@ -286,14 +286,14 @@ After round 10 with findings still open, or a round where every finding is wrong
 
 First rerun step 2's `fetch`, then `git -C "$worktree" rev-list --count HEAD..origin/HEAD`, since the review loop can outlast a merge to the default branch. The human pastes into a shell that sits in some other directory and has no `$worktree`, so every path is a literal absolute path and the block opens with `cd`. Print exactly one of the two blocks below, placeholders filled, and nothing else - no smell line, no summary.
 
-Before either, write the PR body with the Write tool to `<git-common-dir>/ftl-pr-body.md` (outside the tree), ending with `Conflicts resolved` when step 3a resolved any, `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
+Before either, write the PR body with the Write tool to `<git-common-dir>/ftl-pr-body-<branch-slug>.md` (outside the tree, one file per branch since every worktree shares the common dir; `<branch-slug>` is `<branch>` with each `/` as `-`), ending with `Conflicts resolved` when step 3a resolved any, `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
 
 Count `0` - current. No `pull`, no `rebase`:
 
 ```
 cd <worktree>
 git push -u origin <branch>
-gh pr create --title '<subject>' --body-file <git-common-dir>/ftl-pr-body.md
+gh pr create --title '<subject>' --body-file <git-common-dir>/ftl-pr-body-<branch-slug>.md
 ```
 
 Count above `0` - behind:
@@ -303,12 +303,12 @@ cd <worktree>
 git -C <default-checkout> pull --ff-only
 git rebase <default>
 git push -u origin <branch>
-gh pr create --title '<subject>' --body-file <git-common-dir>/ftl-pr-body.md
+gh pr create --title '<subject>' --body-file <git-common-dir>/ftl-pr-body-<branch-slug>.md
 ```
 
 With `--integrate`: after the fetch, behind (count above `0`) runs step 3a again, then `claude-review -C "$worktree" --status`; anything but `already approved` goes back to step 4. Then, instead of printing a block:
 
-- `git -C <worktree> push -u origin <branch>`, then `cd <worktree> && gh pr create --draft --title '<subject>' --body-file <git-common-dir>/ftl-pr-body.md`. Literal paths. Single-quote the title; one with an apostrophe goes in double quotes and carries no `$` or backtick.
+- `git -C <worktree> push -u origin <branch>`, then `cd <worktree> && gh pr create --draft --title '<subject>' --body-file <git-common-dir>/ftl-pr-body-<branch-slug>.md`. Literal paths. Single-quote the title; one with an apostrophe goes in double quotes and carries no `$` or backtick.
 - Print the PR URL and nothing else - plus step 3a's `integrated against local` line when its pull failed, and, when step 1 carried work over, the restore and clean line below for the human.
 
 Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), step 3a stopped, or the gate or pre-push refuses: print the behind or current block for the human, as plain Ship does.
