@@ -240,7 +240,7 @@
       "**Primary use of Claude Code**: software development",
       "**Trusted repo**: CloudKey-io/core (this checkout and its origin remote), private — confidential material (non-secret) is fine to commit here; secrets and personal/regulated data are never cleared into it by visibility alone",
       "**Org-specific CLIs**: None configured",
-      "**routine under CloudKey-io/core prefix**: all local git mutations (staging, commit, branch, stash, local merge/rebase) ask before running; read-only git/gh commands run without a prompt; `git push` and mutating `gh` commands always ask; integrating from a remote (`git pull`, `git merge origin/…`, `gh pr merge`) is permanently denied"
+      "**routine under CloudKey-io/core prefix**: staging and commit run without a prompt; other local git mutations (branch, stash, local merge/rebase) ask before running; read-only git/gh commands run without a prompt; `git push` and mutating `gh` commands always ask; integrating from a remote (`git pull`, `git merge origin/…`, `gh pr merge`) is permanently denied"
     ]
   },
   "voiceEnabled": true,

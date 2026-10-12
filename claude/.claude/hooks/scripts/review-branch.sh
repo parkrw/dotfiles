@@ -383,7 +383,8 @@ fi
 # file pair per run, renamed into place, so concurrent reviews never interleave
 # a write and a reader never sees half a record. Best-effort: it touches
 # neither the sentinel nor the verdict, so a failed write loses history, not a
-# push.
+# push. The verdict recorded is the gate's own decision: PASS only on the exact
+# line the sentinel check below accepts.
 record_run() {
   command -v jq >/dev/null 2>&1 || return 1
   local dir="$HOME/.claude/review-ledger/runs" id run='{}' r common
@@ -411,11 +412,12 @@ record_run() {
     --arg author_model "$caller_model" --arg author_effort "$caller_effort" \
     --arg author_session "${CLAUDE_CODE_SESSION_ID:-}" \
     --arg accept_file "${accept_section:+$accept_file}" \
-    --arg verdict "${verdict#VERDICT: }" --argjson run "$run" \
+    --arg verdict "$verdict" --argjson run "$run" \
     '{$id, source: "gate", $ts, $repo, $worktree, $branch, $base, $base_sha, $tip, $diff,
       lines: ($lines | tonumber? // null), docs_only: ($docs_only == "1"),
       $engine, $model, $effort, $author_model, $author_effort, $author_session, $accept_file,
-      verdict: (if $verdict == "" then "none" else $verdict end), $run}' \
+      verdict: (if $verdict == "VERDICT: PASS" then "PASS" elif $verdict == "" then "none" else "FAIL" end),
+      $run}' \
     > "$dir/$id.json.tmp" || { rm -f "$dir/$id.md.tmp" "$dir/$id.json.tmp"; return 1; }
   mv "$dir/$id.md.tmp" "$dir/$id.md" && mv "$dir/$id.json.tmp" "$dir/$id.json"
 }

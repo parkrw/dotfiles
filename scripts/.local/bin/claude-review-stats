@@ -180,9 +180,12 @@ function textOf(content) {
   return "";
 }
 
+// The gate's decision, as review-branch.sh makes it: the last verdict line
+// counts, and only an exact "VERDICT: PASS" passes.
 function verdictOf(report) {
-  const m = [...report.matchAll(/^VERDICT: (PASS|FAIL)[ \t]*$/gm)];
-  return m.length ? m[m.length - 1][1] : "none";
+  const lines = report.split("\n").filter((l) => /^VERDICT: (PASS|FAIL)\s*$/.test(l));
+  if (!lines.length) return "none";
+  return lines.at(-1) === "VERDICT: PASS" ? "PASS" : "FAIL";
 }
 
 function parseTranscript(sid, file) {
@@ -237,14 +240,18 @@ function importTranscripts(files, runs) {
   let added = 0;
   for (const [sid, file] of files) {
     if (known.has(sid)) continue;
-    if (Date.now() - fs.statSync(file).mtimeMs < SETTLE_MS) continue;
-    if (!readHead(file, 64 * 1024).includes(REVIEW_PROMPT)) continue;
-    const parsed = parseTranscript(sid, file);
-    if (!parsed) continue;
-    writeAtomic(path.join(RUNS, `${parsed.run.id}.md`), parsed.report);
-    writeAtomic(path.join(RUNS, `${parsed.run.id}.json`), JSON.stringify(parsed.run) + "\n");
-    runs.push({ ...parsed.run, report: parsed.report });
-    added++;
+    // Claude Code may prune a transcript mid-scan, and a concurrent import may
+    // rename the same run first; either way the file is skipped, not fatal.
+    try {
+      if (Date.now() - fs.statSync(file).mtimeMs < SETTLE_MS) continue;
+      if (!readHead(file, 64 * 1024).includes(REVIEW_PROMPT)) continue;
+      const parsed = parseTranscript(sid, file);
+      if (!parsed) continue;
+      writeAtomic(path.join(RUNS, `${parsed.run.id}.md`), parsed.report);
+      writeAtomic(path.join(RUNS, `${parsed.run.id}.json`), JSON.stringify(parsed.run) + "\n");
+      runs.push({ ...parsed.run, report: parsed.report });
+      added++;
+    } catch {}
   }
   return added;
 }
@@ -300,7 +307,7 @@ function label(runs) {
   const changed = (repo, a, b) => {
     const k = `${repo}\0${a}\0${b}`;
     if (!changedCache.has(k)) {
-      const out = git(repo, "diff", "--name-only", a, b);
+      const out = git(repo, "diff", "--name-only", "--end-of-options", a, b);
       changedCache.set(k, out === null ? null : new Set(out.split("\n").filter(Boolean)));
     }
     return changedCache.get(k);
