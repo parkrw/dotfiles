@@ -334,8 +334,15 @@ fi
 # what they expand to is unknown here. A short cluster ends at commit's first
 # option that takes a value, so -qam is -a but -mam is a message.
 bulk_staging(){ # $1 = command line
-  printf '%s\n' "$1" | awk -v root="$repo_root" '
+  printf '%s\n' "$1" | awk -v root="$repo_root" -v root2="$root_alias" '
     function hit(w) { if (!found) found = w }
+    # 1 when np is nr, above it or inside it; rel is then the path below nr.
+    function under(np, nr) {
+      rel = ""
+      if (np == "" || index(nr "/", np "/") == 1) return 1
+      if (index(np, nr "/") != 1) return 0
+      rel = substr(np, length(nr) + 2); return 1
+    }
     # git takes any unambiguous prefix of a long option.
     function long(w, name, min) { w = substr(w, 3); sub(/=.*/, "", w); return length(w) >= min && index(name, w) == 1 }
     # Drops empty and . components; sets dots when one is .. and globs when
@@ -362,12 +369,12 @@ bulk_staging(){ # $1 = command line
         match(p, /^:[\/!^]*:?/); mg = substr(p, 2, RLENGTH - 1); p = substr(p, RLENGTH + 1)
         if (mg ~ /[!^]/) { unsure = 1; return }
       } else if (p ~ /^\//) {
-        if (root == "") return
+        # Outside the root as either spelling has it, the path may still
+        # reach it through some other symlink.
         np = norm(p); if (dots) { unsure = 1; return }
-        nr = norm(root)
-        if (index(nr "/", np "/") == 1 || np == "") { hit(w); return }
-        if (index(np, nr "/") != 1) return
-        p = substr(np, length(nr) + 2)
+        if (!under(np, norm(root)) && !(root2 != "" && under(np, norm(root2)))) { unsure = 1; return }
+        if (rel == "") { hit(w); return }
+        p = rel
       }
       np = norm(p)
       if (np == "" || globs) hit(w)
@@ -404,8 +411,8 @@ bulk_staging(){ # $1 = command line
       while (k <= nw && (words[k] ~ /^(if|then|else|elif|do|while|until|time|!|\{|\})$/ || words[k] ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) k++
       if (words[k] != "git") return
       for (k++; k <= nw; k++) {
-        if (words[k] == "-C" || words[k] == "-c") k++
-        else if (words[k] !~ /^(--git-dir=|--work-tree=|--no-pager$|--paginate$|-p$)/) break
+        if (words[k] !~ /^-/) break
+        if (words[k] ~ /^(-C|-c|--git-dir|--work-tree|--namespace|--config-env|--attr-source)$/) k++
       }
       op = words[k]
       if (op != "add" && op != "stage" && op != "commit") return
@@ -510,6 +517,15 @@ bulk_staging(){ # $1 = command line
     }'
 }
 
+# git resolves symlinks in the root it reports (macOS /var and /tmp are
+# links), so the gate also knows the root as the line's directory spells it.
+root_alias=""
+if [[ -n "$repo_root" ]]; then
+  phys=$(cd "$gitdir" 2>/dev/null && pwd -P) || phys=""
+  case "$phys/" in
+    "$repo_root"/*) below=${phys#"$repo_root"}; [[ "$gitdir" == *"$below" ]] && root_alias=${gitdir%"$below"} ;;
+  esac
+fi
 staging=$(bulk_staging "$cmd")
 [[ -n "$staging" && "$staging" != "?" ]] && emit deny "bulk staging ($staging) sweeps in whatever else is in the tree — stage named paths: git add <path>… then git commit."
 
