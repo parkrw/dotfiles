@@ -48,7 +48,8 @@
       "Bash(rmdir:*)"
     ],
     "additionalDirectories": [
-      "~/Developments/work/ck/programmin"
+      "~/Developments/work/ck/programmin",
+      "~/Developments/progrums"
     ],
     "defaultMode": "auto"
   },
