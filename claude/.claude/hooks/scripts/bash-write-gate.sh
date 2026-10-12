@@ -388,6 +388,7 @@ bulk_staging(){ # $1 = command line
       if (!paths && w ~ /^--./) {
         e = index(w, "="); if (index(w, X) && (!e || index(w, X) < e)) { unsure = 1; return }
         if (long(w, "pathspec-from-file", 11)) { unsure = 1; take = !e; return }
+        if (long(w, "no-dry-run", 5)) { dry = 0; return }
         if (long(w, "dry-run", op == "commit" ? 2 : 1)) { dry = 1; return }
         if (op == "commit") {
           if (w == "--all") hit(w)
@@ -495,7 +496,10 @@ bulk_staging(){ # $1 = command line
       X = "\001"; n = length(s); i = 1
       while (i <= n) {
         c = substr(s, i, 1)
-        if (q == "\047") { if (c == "\047") q = ""; else w = w c; i++; continue }
+        if (q == "\047") {
+          e = index(substr(s, i), "\047"); if (!e) e = n - i + 2
+          w = w substr(s, i, e - 1); q = ""; i += e; continue
+        }
         if (q == "\"") {
           if (substr(s, i, 2) == "$(") { w = w X; i = subst(i); continue }
           if (c == "`") { w = w X; i = backtick(i); continue }
