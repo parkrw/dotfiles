@@ -47,6 +47,9 @@
       "Bash(rm:*)",
       "Bash(rmdir:*)"
     ],
+    "additionalDirectories": [
+      "~/Developments/work/ck/programmin"
+    ],
     "defaultMode": "auto"
   },
   "disableClaudeAiConnectors": true,

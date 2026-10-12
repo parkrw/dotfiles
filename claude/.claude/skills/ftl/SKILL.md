@@ -183,7 +183,7 @@ With `--integrate`, Ship also integrates the default branch itself (step 3a) and
   - Uncommitted work in the original checkout: carry it over, tracked then untracked - `git diff --binary HEAD | git -C "$worktree" apply --index`, then `git ls-files -z -o --exclude-standard | rsync -a --from0 --files-from=- ./ "$worktree"/`. Either fails: stop, and leave both checkouts as they are.
   - Never clean the original checkout. Its copy of the changes stays; step 5 tells the human to discard it once the worktree is verified.
 - `git worktree list`: if `branch` is checked out at another path, that path is `worktree`. One checkout holds the files, the commits and the review.
-- `worktree` differs from the session cwd: call the `EnterWorktree` tool with `path: "$worktree"` (load it via ToolSearch first) without asking the human; entering is part of Ship, not a decision. A plain `cd` to a checkout outside the launch directory is reset after the call; EnterWorktree moves the session itself, so edits, reads and fixes land in `worktree`. Then run `pwd` and print it; anything other than `worktree`: stop.
+- `worktree` differs from the session cwd: `cd <worktree>`, literal path, without asking the human; entering is part of Ship, not a decision. Then run `pwd` in a separate call and print it. The harness keeps a `cd` only inside the session's working directories - the launch directory plus `permissions.additionalDirectories` - and resets it after the call otherwise; inside them, Edit and Write on `worktree` run without a prompt too. `pwd` is not `worktree`: the `cd` was reset, so call the `EnterWorktree` tool with `path: "$worktree"` (load it via ToolSearch first), which asks the human once whatever the allow rules say, then `pwd` again; anything other than `worktree`: stop.
 - From here every command is still `git -C "$worktree" …` and `claude-review -C "$worktree" …`. No bare `git`: if the cwd drifts, `-C` keeps each command on the right checkout.
 
 ## 2. Fetch
@@ -219,9 +219,9 @@ git -C "$worktree" add <path>... && git -C "$worktree" commit -m '<subject>'
 
 Resolve `<default>` and `<default-checkout>` as step 5 does.
 
-The review judges integrated code. When `<default-checkout>` is absent from `git worktree list`, stop before step 4: print the one command that unblocks it, wait, and resume at step 3a. When `pull --ff-only` fails - uncommitted paths in `<default-checkout>` overlap the incoming commits, or its `<default>` has diverged from origin - do not stop: `EnterWorktree` again, integrate against local `<default>` as it stands, and keep `integrated against local <default>, <N> behind origin/<default>: <git's error line>` for step 5, `<N>` from `git -C "$worktree" rev-list --count <default>..origin/<default>`. Never review first and hand the human a rebase after.
+The review judges integrated code. When `<default-checkout>` is absent from `git worktree list`, stop before step 4: print the one command that unblocks it, wait, and resume at step 3a. When `pull --ff-only` fails - uncommitted paths in `<default-checkout>` overlap the incoming commits, or its `<default>` has diverged from origin - do not stop: back in the worktree, integrate against local `<default>` as it stands, and keep `integrated against local <default>, <N> behind origin/<default>: <git's error line>` for step 5, `<N>` from `git -C "$worktree" rev-list --count <default>..origin/<default>`. Never review first and hand the human a rebase after.
 
-The session sits in the worktree EnterWorktree isolated, and that isolation refuses any git aimed outside it, `-C` included. Leave it for the pull: `ExitWorktree` with `action: "keep"`, then the pull, then `EnterWorktree` with `path: "<worktree>"`, then the rebase.
+After a `cd`, run both lines below from the worktree. After the `EnterWorktree` fallback, the session sits in the worktree it isolated, and that isolation refuses any git aimed outside it, `-C` included. Leave it for the pull: `ExitWorktree` with `action: "keep"`, then the pull, then `EnterWorktree` with `path: "<worktree>"`, then the rebase.
 
 ```
 git -C <default-checkout> pull --ff-only
