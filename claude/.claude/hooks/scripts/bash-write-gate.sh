@@ -7,8 +7,8 @@
 #   git pull --ff-only              -> allow (no prompt)
 #   git add / git commit (local)    -> allow (no prompt); --amend, --no-verify,
 #                                      detached HEAD, an unreadable pathspec
-#                                      (quoted, $var, ~, .., from a file) or
-#                                      an opaque line -> ask
+#                                      (quoted, $var, ~, .., from a file,
+#                                      :! exclude) or an opaque line -> ask
 #   bulk staging (add -A/-u/., commit
 #     -a, a whole-tree pathspec)    -> deny (always)
 #   other local git writes          -> ask
@@ -139,7 +139,19 @@ echo "$bare"    | grep -Eq '>\(|<\('             && opaque=1
 echo "$bare"    | grep -Eq '(^|[^&>])&([^&>]|$)' && opaque=1
 [[ "$cmd" == *$'\n'* ]] && opaque=1
 
-segments(){ echo "$bare" | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}'; }
+segments(){ echo "${1:-$bare}" | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}'; }
+
+# Drops heredoc bodies, which are data, not commands. Read from the raw line:
+# blanking empties a quoted delimiter. `<<<` is a here-string, not a heredoc.
+strip_heredocs(){
+  printf '%s\n' "$1" | awk '
+    body { t = $0; if (dash) sub(/^\t+/, "", t); if (t == delim) body = 0; next }
+    { print }
+    match($0, /(^|[^<])<<-?[[:space:]]*["\047]?[A-Za-z_][A-Za-z0-9_]*/) {
+      d = substr($0, RSTART, RLENGTH); dash = (d ~ /<<-/)
+      sub(/^[^<]*<<-?[[:space:]]*["\047]?/, "", d); delim = d; body = 1
+    }'
+}
 
 word_of(){ echo "$1" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*([[:space:]]+|$))*//' | awk '{print $1}'; }
 git_global='(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+|--no-pager|--paginate|-p)[[:space:]]+'
@@ -336,10 +348,11 @@ seg_git_cmd(){
 
 # Prints the word that makes a git add/stage/commit stage more than the paths
 # it names, `?` for a pathspec it cannot read (quoted and so blanked, a
-# variable, ~, a .. climb, a --pathspec-from-file list), or nothing. Unquoted
-# backslashes are dropped first, as the shell drops them, and an absolute path
-# under the root is read as the relative path it names. A short cluster ends at
-# commit's first option that takes a value, so -qam is -a but -mam is a message.
+# variable, ~, a .. climb, a --pathspec-from-file list, exclude magic), or
+# nothing. Unquoted backslashes are dropped first, as the shell drops them, and
+# an absolute path under the root is read as the relative path it names. A
+# short cluster ends at commit's first option that takes a value, so -qam is -a
+# but -mam is a message.
 bulk_staging(){ # $1 = git command
   git_args_of "$1" | tr -d '\\' | tr ' \t' '\n\n' | grep -v '^$' \
     | awk -v op="$(git_sub_of "$1")" -v root="$repo_root" '
@@ -366,12 +379,26 @@ bulk_staging(){ # $1 = git command
     !paths && /^--/ && (long($0, "all", 1) || long($0, "update", 1) || long($0, "renormalize", 3) || long($0, "no-ignore-removal", 11)) { hit($0); next }
     !paths && /^-[^-]/ && /[Au]/ { hit($0); next }
     !paths && /^-/ { next }
+    # Pathspec magic: :/ and :(top) anchor at the root, so the path after
+    # them is what counts. Exclude magic stages everything it does not name.
+    /^:/ {
+      w = $0
+      if (w ~ /^:\(/) {
+        mg = substr(w, 3); sub(/\).*/, "", mg); rest = substr(w, length(mg) + 4)
+        if (mg "," !~ /^((top|icase|literal|glob),)+$/) { unsure = 1; next }
+      } else {
+        match(w, /^:[\/!^]*:?/); mg = substr(w, 2, RLENGTH - 1); rest = substr(w, RLENGTH + 1)
+        if (mg ~ /[!^]/) { unsure = 1; next }
+      }
+      if (rest == "") { hit(w); next }
+      $0 = rest
+    }
     root != "" && /^\// {
       p = $0; sub(/\/+$/, "", p)
       if (index(root "/", p "/") == 1) { hit($0); next }
       if (index($0, root "/") == 1) $0 = substr($0, length(root) + 2)
     }
-    /^(:|[.\/*]+$)/ { hit($0); next }
+    /^[.\/*]+$/ { hit($0); next }
     /["\047$~]|(^|\/)\.\.(\/|$)/ { unsure = 1 }
     END { if (found) print found; else if (unsure) print "?" }'
 }
@@ -383,7 +410,7 @@ while IFS= read -r seg; do
   b=$(bulk_staging "$g")
   [[ -n "$b" && "$b" != "?" ]] && emit deny "bulk staging ($b) sweeps in whatever else is in the tree — stage named paths: git add <path>… then git commit."
   [[ -n "$b" ]] && staging="$b"
-done < <(segments)
+done < <(segments "$(blank_quotes "$(strip_heredocs "$cmd")")")
 
 # `git pull` is fetch + integrate. The integrate half is a merge or rebase
 # against a remote ref, so only --ff-only survives: it can advance a branch
