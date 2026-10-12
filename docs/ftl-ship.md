@@ -4,7 +4,7 @@ Task to draft PR in one command: worktree, commit, rebase, a review loop until z
 
 ## Install
 
-Everything below is symlinked from the clone, so `git -C ~/dotfiles pull` updates it. On WSL, run it all inside WSL and clone under `~`, not `/mnt/c`.
+The install copies the files into your home directory. After that they're yours to change, and nothing updates them. Running the install again picks up newer versions, but it overwrites anything you've edited. On WSL, run everything inside WSL.
 
 macOS:
 
@@ -22,12 +22,13 @@ Both:
 
 ```
 curl -fsSL https://claude.ai/install.sh | bash
-git clone https://github.com/pwilliams-ck/dotfiles ~/dotfiles
-mkdir -p ~/.local/bin ~/.config/git ~/.claude/hooks ~/.claude/skills
-ln -s ~/dotfiles/scripts/.local/bin/claude-{gate,review,review-stats} ~/.local/bin/
-ln -s ~/dotfiles/git/.config/git/hooks ~/.config/git/hooks
-ln -s ~/dotfiles/claude/.claude/hooks/scripts ~/.claude/hooks/scripts
-for s in ftl newchat spawn fan review-insights; do ln -s ~/dotfiles/claude/.claude/skills/$s ~/.claude/skills/; done
+src=$(mktemp -d) && git clone --depth 1 https://github.com/pwilliams-ck/dotfiles "$src"
+mkdir -p ~/.local/bin ~/.config/git/hooks ~/.claude/hooks/scripts ~/.claude/hooks/state ~/.claude/skills
+cp "$src"/scripts/.local/bin/claude-{gate,review,review-stats} ~/.local/bin/
+cp "$src"/git/.config/git/hooks/* ~/.config/git/hooks/
+cp "$src"/claude/.claude/hooks/scripts/* ~/.claude/hooks/scripts/
+cp -R "$src"/claude/.claude/skills/{ftl,newchat,spawn,fan,review-insights} ~/.claude/skills/
+rm -rf "$src"
 git config --global core.hooksPath ~/.config/git/hooks
 printf '%s\n' .claude-merge-off .claude-remote-off .claude-merge-auto .claude-remote-auto >> ~/.config/git/ignore
 ```
@@ -50,7 +51,6 @@ Merge into `~/.claude/settings.json`:
 
 Then, in each repo: `claude-gate merge auto && claude-gate remote auto`.
 
-- Don't `stow claude`: it replaces your `settings.json` and `CLAUDE.md`.
 - `core.hooksPath` is machine-wide. A repo's own `.git/hooks` stop running, except `pre-commit`, which chains to it.
 - Reviews run `claude -p` on your account. `codex` is optional, for `--engine codex`.
 - `~/.local/bin` must be on `PATH`.
@@ -72,7 +72,7 @@ Always denied: `gh pr merge`, `git pull` (except `--ff-only`), and merging or re
 1. Run `/ftl "<task>" --ship`. For a task you want to steer, run `/ftl "<task>"`, build it together, then `/ftl ship --integrate`.
 2. Ship works in a worktree. It fetches, checks, commits, pulls with `--ff-only` and rebases. It then loops `claude-review` (opus, xhigh) until there are zero findings, pushes, and opens a draft PR.
 3. Mark the PR ready.
-4. Every week or so, run `claude-review-stats --categorize`, then `/review-insights`. Turn its recommendations into CLAUDE.md rules, hooks or skill steps.
+4. Every week or so, run `/review-insights`. See [review-insights.md](review-insights.md).
 
 ## What blocks what
 
@@ -83,6 +83,7 @@ Always denied: `gh pr merge`, `git pull` (except `--ff-only`), and merging or re
 ## Extras
 
 - `claude-review --status`: whether this diff is already approved, without running a review.
-- `/fan <issues>`: one worktree and tmux pane per issue.
+- `/fan <issues>`: one worktree and tmux pane per issue. `/fan`, `/spawn` and `/newchat --spawn` need Claude Code running inside tmux.
+- [context-handoff.md](context-handoff.md): hand off to a fresh session at 25% context.
 - `git worktree remove <path>`: after the PR merges.
 - `touch ~/.claude/hooks/.disabled`: kill switch for every hook.
