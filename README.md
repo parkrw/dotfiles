@@ -77,7 +77,7 @@ Not carried by the repo — set up separately on each machine:
 - `~/.claude/settings.local.json` and `hooks/logs/` — machine-local, intentionally untracked.
 - The hook scripts were vendored from the archived `review-hooks` repo; edit them under `claude/.claude/hooks/scripts/`.
 - **Global git hooks** need `git config --global core.hooksPath ~/.config/git/hooks` once per machine, after `stow git`. Without it the pre-push guard never runs.
-- `~/.config/git/ignore` is machine-local and untracked; it needs a `.claude-remote-ok` line so opt-in markers stay out of tracked trees.
+- `~/.config/git/ignore` is machine-local and untracked; it needs `.claude-remote-off`, `.claude-merge-off`, `.claude-remote-auto` and `.claude-merge-auto` lines so `claude-gate` markers stay out of tracked trees.
 
 #### Letting Claude push
 
