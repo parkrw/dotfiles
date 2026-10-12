@@ -274,11 +274,11 @@ Run it in the background and wait for it; a review takes minutes and a foregroun
 - `## Findings` is exactly `none`: the loop is done. `VERDICT: PASS` alone is not enough, since PASS can carry minors. `## Adjacent smells` never counts: it is advisory, outside the diff, and not this PR's to fix.
 - `already approved`: this exact diff passed earlier. Read the report file (`~/.claude/hooks/state/review-branch-<key>.md`); if its `diff sha256` matches the one printed and its findings are `none`, done. Otherwise fix those findings; the next commit changes the hash and the next round reviews afresh.
 - Anything else: print `round N: <count> findings`. Fix each finding in `"$worktree"`, most severe first, as a class, not an instance - most later-round findings land in a file an earlier round flagged:
-  - Grep `git -C "$worktree" diff <default>...HEAD` for the same pattern and fix every occurrence, not only the line cited.
+  - Grep `git -C "$worktree" diff origin/<default>...HEAD`, the diff the reviewer reads, for the same pattern and fix every occurrence, not only the line cited.
   - Add the test that fails without the fix, if the repo has tests. A doc or prose finding needs none.
   - A finding that is wrong gets its reason in the commit body instead of a code change.
 
-  Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged: a fix is new code the checkers have not seen. Fix what fails and add those paths again, until the checks pass on the staged tree. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
+  Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged: a fix is new code the checkers have not seen. Fix what fails and add those paths again. A check that fails on `<default>` too is named as left out, not fixed on this branch. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
 
 After round 10 with findings still open, stop: print each as `path:line - defect`, then hand off anyway. The human decides.
 
