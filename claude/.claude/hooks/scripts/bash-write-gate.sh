@@ -304,36 +304,13 @@ remote_auto_blocker(){ # sets blocker and default_branch
 # Runs before any block that can emit `allow`, so a compound line pairing an
 # allowable command with a denied one is denied on the denied half.
 
-if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+push\b'; then
-  echo "$cmd" | grep -Eq '(--force-with-lease|--force|[[:space:]]-[a-zA-Z]*f)\b' \
-    && emit deny "force-push is never auto-run — do it yourself."
-  echo "$cmd" | grep -Eq '[[:space:]]\+[^[:space:]]' \
-    && emit deny "force-push (+refspec) is never auto-run — do it yourself."
-  echo "$cmd" | grep -Eq '(--tags|--follow-tags)\b' \
-    && emit deny "pushing tags is the prod deploy trigger — human-only."
-  echo "$cmd" | grep -Eq -- '--no-verify\b' \
-    && emit deny "push --no-verify bypasses the pre-push hook — human-only."
-  echo "$cmd" | grep -Eq '(^|[[:space:]]|:|/|\+)(main|master)([[:space:]]|:|$)' \
-    && emit deny "pushing main/master is human-only (merge deploys dev)."
-  case "$cur" in
-    main|master|"") emit deny "push from main/master (or an undetermined branch) is human-only." ;;
-  esac
-  [[ "$remote_auto" == 1 && "$remote_off" != 1 ]] || remote_gate "Remote write (push)"
-fi
-
-if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+commit\b'; then
-  case "$cur" in
-    main|master) emit deny "commit on $cur is blocked — create a feature branch first: git switch -c <type>/<kebab-name>." ;;
-  esac
-fi
-
 # Prints the word that makes a git add/stage/commit on the line stage more
 # than the paths it names, `?` for a word the gate cannot read, or nothing.
 # The line is split into words as the shell splits it: quotes and backslashes
 # removed, comments and heredoc bodies dropped, redirections and their targets
-# skipped. A `$` or backtick expansion and a leading `~` become \001, since
-# what they expand to is unknown here. A short cluster ends at commit's first
-# option that takes a value, so -qam is -a but -mam is a message.
+# skipped. A `$`, backtick or brace expansion and a leading `~` become \001,
+# since what they expand to is unknown here. A short cluster ends at commit's
+# first option that takes a value, so -qam is -a but -mam is a message.
 bulk_staging(){ # $1 = command line
   printf '%s\n' "$1" | awk -v root="$repo_root" -v root2="$root_alias" '
     function hit(w) { if (!hitw) hitw = w }
@@ -347,13 +324,13 @@ bulk_staging(){ # $1 = command line
     # git takes any unambiguous prefix of a long option.
     function long(w, name, min) { w = substr(w, 3); sub(/=.*/, "", w); return length(w) >= min && index(name, w) == 1 }
     # Drops empty and . components; sets dots when one is .. and globs when
-    # every other component is a bare * or ? glob.
-    function norm(p,   n, c, k, out) {
+    # every other component is made of *, ? and [...] globs alone.
+    function norm(p,   n, c, k, out, t) {
       n = split(p, c, "/"); out = ""; dots = 0; globs = 1
       for (k = 1; k <= n; k++) {
         if (c[k] == "" || c[k] == ".") continue
         if (c[k] == "..") dots = 1
-        else if (c[k] !~ /^[*?]+$/) globs = 0
+        else { t = c[k]; gsub(/\[[!^]?\]?[^]]*\]/, "?", t); if (t !~ /^[*?]+$/) globs = 0 }
         out = out (out == "" ? "" : "/") c[k]
       }
       return out
@@ -496,6 +473,21 @@ bulk_staging(){ # $1 = command line
       }
       return i
     }
+    # 1 when the { at i opens a brace expansion: a , or .. at its own level
+    # before the } that closes it, all within one word.
+    function brace(i,   depth, c, e, list) {
+      for (; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") { i++; continue }
+        if (c == "\047") { e = index(substr(s, i + 1), "\047"); if (!e) return 0; i += e; continue }
+        if (c == "\"") { for (i++; i <= n && substr(s, i, 1) != "\""; i++) if (substr(s, i, 1) == "\\") i++; continue }
+        if (index(" \t\n;&|()<>", c)) return 0
+        if (c == "{") depth++
+        else if (c == "}" && !--depth) return list
+        else if (depth == 1 && (c == "," || substr(s, i, 2) == "..")) list = 1
+      }
+      return 0
+    }
     function backtick(i) {
       for (i++; i <= n && substr(s, i, 1) != "`"; i++) if (substr(s, i, 1) == "\\") i++
       return i + 1
@@ -527,7 +519,7 @@ bulk_staging(){ # $1 = command line
         if (index(";&|()", c)) { endseg(); i++; continue }
         if (substr(s, i, 2) == "$(") { w = w X; inword = 1; i = subst(i); continue }
         if (c == "`") { w = w X; inword = 1; i = backtick(i); continue }
-        if (c == "$" || (c == "~" && !inword)) c = X
+        if (c == "$" || (c == "~" && !inword) || (c == "{" && brace(i))) c = X
         w = w c; inword = 1; i++
       }
       endseg()
@@ -544,8 +536,32 @@ if [[ -n "$repo_root" ]]; then
     "$repo_root"/*) below=${phys#"$repo_root"}; [[ "$gitdir" == *"$below" ]] && root_alias=${gitdir%"$below"} ;;
   esac
 fi
+# Ahead of the push block, whose ask would otherwise mask this deny.
 staging=$(bulk_staging "$cmd")
 [[ -n "$staging" && "$staging" != "?" ]] && emit deny "bulk staging ($staging) sweeps in whatever else is in the tree — stage named paths: git add <path>… then git commit."
+
+if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+push\b'; then
+  echo "$cmd" | grep -Eq '(--force-with-lease|--force|[[:space:]]-[a-zA-Z]*f)\b' \
+    && emit deny "force-push is never auto-run — do it yourself."
+  echo "$cmd" | grep -Eq '[[:space:]]\+[^[:space:]]' \
+    && emit deny "force-push (+refspec) is never auto-run — do it yourself."
+  echo "$cmd" | grep -Eq '(--tags|--follow-tags)\b' \
+    && emit deny "pushing tags is the prod deploy trigger — human-only."
+  echo "$cmd" | grep -Eq -- '--no-verify\b' \
+    && emit deny "push --no-verify bypasses the pre-push hook — human-only."
+  echo "$cmd" | grep -Eq '(^|[[:space:]]|:|/|\+)(main|master)([[:space:]]|:|$)' \
+    && emit deny "pushing main/master is human-only (merge deploys dev)."
+  case "$cur" in
+    main|master|"") emit deny "push from main/master (or an undetermined branch) is human-only." ;;
+  esac
+  [[ "$remote_auto" == 1 && "$remote_off" != 1 ]] || remote_gate "Remote write (push)"
+fi
+
+if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+commit\b'; then
+  case "$cur" in
+    main|master) emit deny "commit on $cur is blocked — create a feature branch first: git switch -c <type>/<kebab-name>." ;;
+  esac
+fi
 
 # `git pull` is fetch + integrate. The integrate half is a merge or rebase
 # against a remote ref, so only --ff-only survives: it can advance a branch
