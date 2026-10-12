@@ -6,8 +6,9 @@
 #   create NEW file                 -> allow (no prompt)
 #   git pull --ff-only              -> allow (no prompt)
 #   git add / git commit (local)    -> allow (no prompt); --amend, --no-verify,
-#                                      detached HEAD, a quoted or variable
-#                                      pathspec or an opaque line -> ask
+#                                      detached HEAD, an unreadable pathspec
+#                                      (quoted, $var, ~, .., from a file) or
+#                                      an opaque line -> ask
 #   bulk staging (add -A/-u/., commit
 #     -a, a whole-tree pathspec)    -> deny (always)
 #   other local git writes          -> ask
@@ -334,22 +335,24 @@ seg_git_cmd(){
 }
 
 # Prints the word that makes a git add/stage/commit stage more than the paths
-# it names, `?` for a pathspec the shell may widen (quoted and so blanked, a
-# variable, ~, a .. climb), or nothing. Unquoted backslashes are dropped first,
-# as the shell drops them. A short cluster ends at commit's first option that
-# takes a value, so -qam is -a but -mam is a message.
+# it names, `?` for a pathspec it cannot read (quoted and so blanked, a
+# variable, ~, a .. climb, a --pathspec-from-file list), or nothing. Unquoted
+# backslashes are dropped first, as the shell drops them, and an absolute path
+# under the root is read as the relative path it names. A short cluster ends at
+# commit's first option that takes a value, so -qam is -a but -mam is a message.
 bulk_staging(){ # $1 = git command
   git_args_of "$1" | tr -d '\\' | tr ' \t' '\n\n' | grep -v '^$' \
     | awk -v op="$(git_sub_of "$1")" -v root="$repo_root" '
     function hit(w) { if (!found) found = w }
     # git takes any unambiguous prefix of a long option.
-    function long(w, name, min) { w = substr(w, 3); return length(w) >= min && index(name, w) == 1 }
+    function long(w, name, min) { w = substr(w, 3); sub(/=.*/, "", w); return length(w) >= min && index(name, w) == 1 }
     take  { take = 0; next }
     found { next }
     !paths && $0 == "--" { paths = 1; next }
+    !paths && /^--/ && long($0, "pathspec-from-file", 11) { unsure = 1; take = ($0 !~ /=/); next }
     !paths && op == "commit" && /^-/ {
       if ($0 == "--all") hit($0)
-      else if ($0 ~ /^--(message|file|reuse-message|reedit-message|template|author|date|cleanup|fixup|squash|trailer|pathspec-from-file)$/) take = 1
+      else if ($0 ~ /^--(message|file|reuse-message|reedit-message|template|author|date|cleanup|fixup|squash|trailer)$/) take = 1
       else if ($0 ~ /^-[^-]/)
         for (i = 2; i <= length($0); i++) {
           c = substr($0, i, 1)
@@ -363,8 +366,12 @@ bulk_staging(){ # $1 = git command
     !paths && /^--/ && (long($0, "all", 1) || long($0, "update", 1) || long($0, "renormalize", 3) || long($0, "no-ignore-removal", 11)) { hit($0); next }
     !paths && /^-[^-]/ && /[Au]/ { hit($0); next }
     !paths && /^-/ { next }
+    root != "" && /^\// {
+      p = $0; sub(/\/+$/, "", p)
+      if (index(root "/", p "/") == 1) { hit($0); next }
+      if (index($0, root "/") == 1) $0 = substr($0, length(root) + 2)
+    }
     /^(:|[.\/*]+$)/ { hit($0); next }
-    root != "" && /^\// { p = $0; sub(/\/+$/, "", p); if (index(root "/", p "/") == 1) { hit($0); next } }
     /["\047$~]|(^|\/)\.\.(\/|$)/ { unsure = 1 }
     END { if (found) print found; else if (unsure) print "?" }'
 }
@@ -738,8 +745,8 @@ fi
 # without a prompt so a review loop can commit each fix and re-review
 # unattended. Commit on main/master was denied above. What is not a plain
 # local write still asks: --amend rewrites a sha, --no-verify skips the repo's
-# own hooks, a detached HEAD has no branch to hold the commit, a quoted or
-# variable pathspec may be `.`, and an opaque or redirecting line may hide
+# own hooks, a detached HEAD has no branch to hold the commit, an unreadable
+# pathspec may be `.`, and an opaque or redirecting line may hide
 # another command. Staging alone needs no branch: a
 # rebase stopped on a conflict has a detached HEAD, and resolving it is `git add`.
 if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+(add|commit)([[:space:]]|$)'; then
