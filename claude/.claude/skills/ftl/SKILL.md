@@ -151,7 +151,7 @@ Run the commands from Orient step 3, from the repo root, each with its pass line
 
 `git diff --cached --name-only`, then grep the docs index (Orient step 2) for each touched module's name and for the behavior's nouns. A doc that describes the changed behavior and does not reflect the change fails. An endpoint change updates the API reference if the repo has one.
 
-Then grep the body of every doc, `git grep -n -w '<name>' -- '*.md'`, for each prop, class, component, flag and function name the diff adds, renames or removes. A doc line that names one is a second statement of the fact and moves in the same commit.
+Then grep the body of every doc, `git grep -n -w -e '<name>' -- '*.md'`, for each prop, class, component, flag and function name the diff adds, renames or removes. A doc line that names one is a second statement of the fact and moves in the same commit.
 
 A doc line this diff adds states the rule, not the list of callers or cases that follow it: a list goes stale the next time a caller changes. An existing list that has to change is rebuilt from a grep of the callers, not from memory.
 
@@ -276,9 +276,9 @@ Run it in the background and wait for it; a review takes minutes and a foregroun
 - Anything else: print `round N: <count> findings`. Fix each finding in `"$worktree"`, most severe first, as a class, not an instance - most later-round findings land in a file an earlier round flagged:
   - Grep `git -C "$worktree" diff origin/<default>...HEAD`, the diff the reviewer reads, for the same pattern and fix every occurrence, not only the line cited.
   - Add the test that fails without the fix, if the repo has tests. A doc or prose finding needs none.
-  - A finding that is wrong gets its reason in the commit body instead of a code change.
+  - A finding that is wrong gets no code change: append it and the reason to `<git-common-dir>/ftl-accepted-<branch>.md`, outside the tree. Every later round runs the command above with `CLAUDE_REVIEW_ACCEPT=<that path>` in front, so the reviewer reads the reason instead of raising the finding again.
 
-  Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged: a fix is new code the checkers have not seen. Fix what fails and add those paths again. A check that fails on `<default>` too is named as left out, not fixed on this branch. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
+  Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged: a fix is new code the checkers have not seen. Fix what fails and add those paths again, or name it as left out and why, as Check allows. Then, when anything is staged, `git -C "$worktree" commit -m '<fix subject>'`. Start round N+1.
 
 After round 10 with findings still open, stop: print each as `path:line - defect`, then hand off anyway. The human decides.
 
