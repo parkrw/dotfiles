@@ -439,6 +439,45 @@ bulk_staging(){ # $1 = command line
         }
       nd = 0; return i
     }
+    # Index just past the $( … ) that opens at i. Its quotes, nested
+    # substitutions and heredoc bodies are skipped whole, so their parens and
+    # quotes cannot end it early or leak into the enclosing word.
+    function subst(i,   depth, c, q2, dl, dd, e, t) {
+      depth = 1; i += 2
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (q2 == "\047") { if (c == "\047") q2 = ""; i++; continue }
+        if (c == "\\") { i += 2; continue }
+        if (substr(s, i, 2) == "$(") { i = subst(i); continue }
+        if (c == "`") { i = backtick(i); continue }
+        if (q2 == "\"") { if (c == "\"") q2 = ""; i++; continue }
+        if (c == "\047" || c == "\"") { q2 = c; i++; continue }
+        if (substr(s, i, 2) == "<<" && substr(s, i, 3) != "<<<") {
+          i += 2; dd = (substr(s, i, 1) == "-"); i += dd
+          while (substr(s, i, 1) ~ /[ \t]/) i++
+          if (match(substr(s, i), /^["\047\\]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) { dl = substr(s, i, RLENGTH); i += RLENGTH; gsub(/["\047\\]/, "", dl) }
+          continue
+        }
+        if (c == "\n" && dl != "") {
+          i++
+          while (i <= n) {
+            e = index(substr(s, i), "\n"); if (!e) e = n - i + 2
+            t = substr(s, i, e - 1); i += e
+            if (dd) sub(/^\t+/, "", t)
+            if (t == dl) break
+          }
+          dl = ""; continue
+        }
+        if (c == "(") depth++
+        else if (c == ")" && !--depth) return i + 1
+        i++
+      }
+      return i
+    }
+    function backtick(i) {
+      for (i++; i <= n && substr(s, i, 1) != "`"; i++) if (substr(s, i, 1) == "\\") i++
+      return i + 1
+    }
     { s = s $0 "\n" }
     END {
       X = "\001"; n = length(s); i = 1
@@ -446,9 +485,11 @@ bulk_staging(){ # $1 = command line
         c = substr(s, i, 1)
         if (q == "\047") { if (c == "\047") q = ""; else w = w c; i++; continue }
         if (q == "\"") {
+          if (substr(s, i, 2) == "$(") { w = w X; i = subst(i); continue }
+          if (c == "`") { w = w X; i = backtick(i); continue }
           if (c == "\"") q = ""
           else if (c == "\\") { d = substr(s, i + 1, 1); if (index("$`\"\\\n", d)) { if (d != "\n") w = w d; i++ } else w = w c }
-          else if (c == "$" || c == "`") w = w X
+          else if (c == "$") w = w X
           else w = w c
           i++; continue
         }
@@ -459,7 +500,9 @@ bulk_staging(){ # $1 = command line
         if (c == "\n") { endseg(); i = bodies(i + 1); continue }
         if (c == "<" || c == ">" || substr(s, i, 2) == "&>") { i = redirect(i); continue }
         if (index(";&|()", c)) { endseg(); i++; continue }
-        if (c == "$" || c == "`" || (c == "~" && !inword)) c = X
+        if (substr(s, i, 2) == "$(") { w = w X; inword = 1; i = subst(i); continue }
+        if (c == "`") { w = w X; inword = 1; i = backtick(i); continue }
+        if (c == "$" || (c == "~" && !inword)) c = X
         w = w c; inword = 1; i++
       }
       endseg()
