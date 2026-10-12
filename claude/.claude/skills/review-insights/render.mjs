@@ -148,7 +148,7 @@ function aggregate(runs, findings, tax, runById) {
       const r = runById.get(f.run) ?? {};
       return { outcome: f.outcome, severity: f.severity, path: f.path, line: f.line ?? null, text: f.text, repo: repoName(r), branch: r.branch ?? "", ts: r.ts ?? "" };
     })
-    .sort((a, b) => (a.outcome === b.outcome ? 0 : a.outcome === "open" ? -1 : 1) || sevRank(a.severity) - sevRank(b.severity) || b.ts.localeCompare(a.ts));
+    .sort((a, b) => sevRank(a.severity) - sevRank(b.severity) || (a.outcome === b.outcome ? 0 : a.outcome === "open" ? -1 : 1) || b.ts.localeCompare(a.ts));
 
   return {
     range: { from: runs[0]?.ts ?? "", to: runs[runs.length - 1]?.ts ?? "" },
