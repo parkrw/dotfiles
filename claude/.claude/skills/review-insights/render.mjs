@@ -137,7 +137,7 @@ function aggregate(runs, findings, tax, runById) {
     .map(([k, rs]) => {
       const cs = groupBy(rs, (r) => `${r.worktree}\0${r.branch}`).map(([, c]) => c.length);
       const priced = rs.map((r) => r.run?.total_cost_usd).filter((c) => typeof c === "number");
-      return { key: k, reviews: rs.length, fail: count(rs, (r) => r.verdict === "FAIL"), perReview: round(sum(rs.map((r) => r.findings.length)) / rs.length), branches: cs.length, roundsMedian: quantile(cs, 0.5), cost: round(sum(priced)) };
+      return { key: k, reviews: rs.length, fail: count(rs, (r) => r.verdict === "FAIL"), perReview: round(sum(rs.map((r) => r.findings.length)) / rs.length), branches: cs.length, roundsMedian: quantile(cs, 0.5), cost: priced.length ? round(sum(priced)) : null };
     })
     .sort((a, b) => b.reviews - a.reviews);
 
@@ -145,7 +145,7 @@ function aggregate(runs, findings, tax, runById) {
     .map((c) => {
       const last = c[c.length - 1];
       const priced = c.map((r) => r.run?.total_cost_usd).filter((x) => typeof x === "number");
-      return { branch: last.branch, repo: repoName(last), rounds: c.length, findings: sum(c.map((r) => r.findings.length)), cost: round(sum(priced)), verdict: last.verdict, last: last.ts };
+      return { branch: last.branch, repo: repoName(last), rounds: c.length, findings: sum(c.map((r) => r.findings.length)), cost: priced.length ? round(sum(priced)) : null, verdict: last.verdict, last: last.ts };
     })
     .sort((a, b) => b.rounds - a.rounds || b.findings - a.findings)
     .slice(0, 12);
@@ -190,17 +190,18 @@ function digest(scopes) {
   const a = scopes.all;
   const pct = (x) => `${Math.round(x * 100)}%`;
   const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s);
+  const usd = (x) => (x == null ? "n/a" : `$${x}`);
   const L = [];
   L.push(`REVIEW LEDGER ${a.range.from.slice(0, 10)} .. ${a.range.to.slice(0, 10)}`);
   L.push(`reviews ${a.runs.n} (PASS ${a.runs.pass}, FAIL ${a.runs.fail}); ${a.runs.transcript} imported from transcripts, ${a.runs.gate} recorded by the gate`);
   L.push(`branches ${a.branchCount}; rounds per branch median ${a.rounds.median}, p90 ${a.rounds.p90}, max ${a.rounds.max}`);
-  L.push(`cost $${a.cost.total} over ${a.cost.priced} priced reviews, ${a.cost.perReview == null ? "n/a" : `$${a.cost.perReview}`}/review, ${a.cost.minutesPerReview ?? "n/a"} min/review`);
+  L.push(`cost $${a.cost.total} over ${a.cost.priced} priced reviews, ${usd(a.cost.perReview)}/review, ${a.cost.minutesPerReview ?? "n/a"} min/review`);
   L.push(`findings ${a.findings.n} (${a.findings.perReview}/review): blocker ${a.findings.severity.blocker}, major ${a.findings.severity.major}, minor ${a.findings.severity.minor}; categorized ${a.findings.categorized}, uncategorized ${a.findings.n - a.findings.categorized}`);
   L.push(`outcomes ${OUTCOMES.map((o) => `${o} ${a.findings.outcome[o]}`).join(", ")}`);
   L.push(`flaky: ${a.flaky.flipped} of ${a.flaky.rereviewed} unchanged diffs reviewed twice changed verdict`);
   L.push("");
   L.push("REPOS (reviews, FAIL rate, findings/review, branches, median rounds, cost)");
-  for (const r of a.repos) L.push(`  ${r.key}: ${r.reviews}, ${pct(r.fail / r.reviews)}, ${r.perReview}, ${r.branches}, ${r.roundsMedian}, $${r.cost}`);
+  for (const r of a.repos) L.push(`  ${r.key}: ${r.reviews}, ${pct(r.fail / r.reviews)}, ${r.perReview}, ${r.branches}, ${r.roundsMedian}, ${usd(r.cost)}`);
   L.push("");
   L.push("WEEKS (week, reviews, FAIL, findings/review)");
   for (const w of a.weeks) L.push(`  ${w.week}: ${w.reviews}, ${w.fail}, ${w.perReview}`);
