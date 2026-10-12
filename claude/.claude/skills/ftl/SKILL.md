@@ -170,7 +170,7 @@ Then one line per adjacent smell found, and nothing else.
 
 # Ship - `/ftl ship`
 
-Fetch, check, commit, review, fix, repeat, until the reviewer reports no findings. Ship runs four git commands itself - `git worktree add -b` (step 1, only when needed; the write gate asks), then `git fetch`, `git add`, `git commit` in the worktree resolved in step 1, which the gate allows without a prompt. Every other write is printed for the human at the end.
+Fetch, check, commit, review, fix, repeat, until the reviewer reports no findings. Ship runs four git commands itself - `git worktree add -b` (step 1, only when needed; the write gate asks unless the repo is set to `claude-gate merge auto`), then `git fetch`, `git add`, `git commit` in the worktree resolved in step 1, which the gate allows without a prompt. Every other write is printed for the human at the end.
 
 With `--integrate`, Ship also integrates the default branch itself (step 3a) and again at hand-off, resolves conflicts, then pushes and opens a draft PR; the human marks it ready for review. These run without a prompt only in a repo set to `claude-gate merge auto` and `claude-gate remote auto`; otherwise the gate asks.
 
@@ -219,7 +219,7 @@ git -C "$worktree" add <path>... && git -C "$worktree" commit -m '<subject>'
 
 Resolve `<default>` and `<default-checkout>` as step 5 does.
 
-The review judges integrated code or nothing. When integration cannot run - `<default-checkout>` absent from `git worktree list`, or `pull --ff-only` failing (dirty or diverged default checkout) - stop before step 4: print the one command that unblocks it, wait, and resume at step 3a. Never review first and hand the human a rebase after.
+The review judges integrated code. When `<default-checkout>` is absent from `git worktree list`, stop before step 4: print the one command that unblocks it, wait, and resume at step 3a. When `pull --ff-only` fails - uncommitted paths in `<default-checkout>` overlap the incoming commits, or its `<default>` has diverged from origin - do not stop: `EnterWorktree` again, integrate against local `<default>` as it stands, and keep `integrated against local <default>, <N> behind origin/<default>: <git's error line>` for step 5, `<N>` from `git -C "$worktree" rev-list --count <default>..origin/<default>`. Never review first and hand the human a rebase after.
 
 The session sits in the worktree EnterWorktree isolated, and that isolation refuses any git aimed outside it, `-C` included. Leave it for the pull: `ExitWorktree` with `action: "keep"`, then the pull, then `EnterWorktree` with `path: "<worktree>"`, then the rebase.
 
@@ -284,7 +284,7 @@ With `--integrate`: after the fetch, behind (count above `0`) runs step 3a again
 
 - Write the PR body with the Write tool to `<git-common-dir>/ftl-pr-body.md` (outside the tree), ending with `Conflicts resolved` when step 3a resolved any and `Closes #N` when it finishes an issue.
 - `git -C <worktree> push -u origin <branch>`, then `cd <worktree> && gh pr create --draft --title '<subject>' --body-file <that path>`. Literal paths. Single-quote the title; one with an apostrophe goes in double quotes and carries no `$` or backtick.
-- Print the PR URL and nothing else - plus, when step 1 carried work over, the restore and clean line below for the human.
+- Print the PR URL and nothing else - plus step 3a's `integrated against local` line when its pull failed, and, when step 1 carried work over, the restore and clean line below for the human.
 
 Do not push when the loop ended at round 10 with findings open, step 3a stopped, or the gate or pre-push refuses: print the behind or current block for the human, as plain Ship does.
 
