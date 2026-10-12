@@ -18,7 +18,9 @@
 #     someone else's                -> deny (always)
 #   LOCAL merge/rebase              -> ask (default), deny (.claude-merge-off),
 #                                      or allow onto a named local branch from a
-#                                      clean tree (.claude-merge-auto)
+#                                      clean tree, a rebase --onto only from
+#                                      that branch's fork point
+#                                      (.claude-merge-auto)
 #   overwrite/modify EXISTING file  -> ask
 #   remote git writes (push), gh    -> ask (default) or deny (.claude-remote-off)
 #   push of the current branch,
@@ -688,7 +690,32 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
   #
   # The same pass judges the auto tier: every segment must be --abort/--continue
   # or name exactly one local branch, with no flag that reshapes the operation
-  # (-i, --onto, -X, -m …), and run in the repo the checks below inspect.
+  # (-i, -X, -m …), and run in the repo the checks below inspect. A rebase
+  # --onto passes only in the shape onto_fork_point_ok proves.
+  #
+  # `rebase --onto <local-branch> <upstream> [<current-branch>]` replays
+  # <upstream>..HEAD and drops everything below <upstream>. When <upstream> is
+  # the fork point git reads from <local-branch>'s reflog, what is dropped is
+  # that branch's old, rewritten history and none of this branch's own commits.
+  onto_fork_point_ok(){ # $1 = the segment's argument words, one per line
+    local w onto="" take=0 up fp
+    local -a pos=()
+    while IFS= read -r w; do
+      if [[ "$take" == 1 ]]; then onto="$w"; take=0
+      elif [[ "$w" == --onto ]]; then take=1
+      elif [[ "$w" == --onto=* ]]; then onto="${w#--onto=}"
+      elif [[ "$w" == -q || "$w" == --quiet ]]; then :
+      elif [[ "$w" == -* ]]; then return 1
+      else pos+=("$w"); fi
+    done <<< "$1"
+    [[ "$take" == 0 && -n "$onto" && -n "$cur" ]] || return 1
+    [[ "${#pos[@]}" == 1 || ( "${#pos[@]}" == 2 && "${pos[1]}" == "$cur" ) ]] || return 1
+    git -C "$gitdir" show-ref --verify --quiet "refs/heads/$onto" || return 1
+    up=$(git -C "$gitdir" rev-parse --verify --quiet "${pos[0]}^{commit}") || return 1
+    fp=$(git -C "$gitdir" merge-base --fork-point "refs/heads/$onto" HEAD) || return 1
+    [[ "$up" == "$fp" ]]
+  }
+
   op=""; is_remote=0
   auto_named=1; auto_work=0; auto_rebase=0; auto_segs=0
   c_raw=$(echo "$cmd" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*/\1/p')
@@ -718,6 +745,10 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
 
     auto_work=1; [[ "$s" == rebase ]] && auto_rebase=1
     words=$(git_args_of "$seg" | tr ' \t' '\n\n' | grep -v '^$' || true)
+    if [[ "$s" == rebase ]] && printf '%s\n' "$words" | grep -Eq -- '^--onto(=|$)'; then
+      onto_fork_point_ok "$words" || auto_named=0
+      continue
+    fi
     flags=$(printf '%s\n' "$words" | grep -E '^-' || true)
     targets_=$(printf '%s\n' "$words" | grep -vE '^-|^$' || true)
     [[ -n "$flags" ]] && printf '%s\n' "$flags" | grep -vqxE -- '--(no-ff|ff|ff-only|no-edit|stat|no-stat|quiet)|-q' \
@@ -754,7 +785,7 @@ If YOU run this yourself: git rewrites your local commits on top of the remote r
     bare_segs=$(segments | while IFS= read -r seg; do git_sub_of "$seg"; done | grep -cxE 'merge|rebase' || true)
     cd_segs=$(segments | while IFS= read -r seg; do word_of "$seg"; done | grep -cx 'cd' || true)
     if [[ "$auto_named" != 1 ]]; then
-      blocker="auto needs one named local branch (refs/heads/<target>) and no -i/--onto/-X/-m, or --abort/--continue"
+      blocker="auto needs one named local branch (refs/heads/<target>) and no -i/-X/-m, --onto <local-branch> <its fork point>, or --abort/--continue"
     elif [[ "$auto_segs" == 0 || "$bare_segs" != "$auto_segs" ]]; then
       blocker="could not match every merge/rebase segment on the line"
     elif [[ "$cd_segs" -gt 1 || ( "$cd_segs" == 1 && -z "$cd_arg" ) ]]; then
