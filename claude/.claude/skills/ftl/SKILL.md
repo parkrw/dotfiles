@@ -176,13 +176,13 @@ Follow the shape measured in Orient step 3: section, line, prefix, scope, issue 
 
 ## 7. Hand off
 
-Print these for the human to run, placeholders filled in. The branch name follows the naming measured in Orient step 3.
+Print these for the human to run, placeholders filled in. The branch name follows the naming measured in Orient step 3. Write the PR body to `<body-file>` first, as Ship step 5 does. A subject or commit body with an apostrophe goes in double quotes and carries no `$` or backtick.
 
 ```
 git switch -c <branch>
 git add <path>... && git commit -m '<subject>' -m '<body>'
 git push -u origin <branch>
-gh pr create --title '<subject>' --body '<body>'
+gh pr create --title '<subject>' --body-file <body-file>
 ```
 
 Then one line per adjacent smell found, and nothing else.
@@ -286,7 +286,7 @@ After round 10 with findings still open, or a round where every finding is wrong
 
 First rerun step 2's `fetch`, then `git -C "$worktree" rev-list --count HEAD..origin/HEAD`, since the review loop can outlast a merge to the default branch. The human pastes into a shell that sits in some other directory and has no `$worktree`, so every path is a literal absolute path and the block opens with `cd`. Print exactly one of the two blocks below, placeholders filled, and nothing else - no smell line, no summary.
 
-Before any block is printed or `--integrate` pushes, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree, and outside `.git`, which an `EnterWorktree` session may not write; `<branch-slug>` is `<branch>` with each `/` as `-`, so two worktrees never share one. The body ends with `Conflicts resolved` when step 3a resolved any, `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
+Before any block is printed or `--integrate` pushes, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<repo>-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree, and outside `.git`, which an `EnterWorktree` session may not write; `<branch-slug>` is `<branch>` with each `/` as `-`, so no two branches share one. The body ends with `Conflicts resolved` when step 3a resolved any, `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
 
 Count `0` - current. No `pull`, no `rebase`:
 
