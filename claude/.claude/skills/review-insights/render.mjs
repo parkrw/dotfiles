@@ -171,7 +171,7 @@ function aggregate(runs, findings, tax, runById) {
     runs: { n: runs.length, pass: count(runs, (r) => r.verdict === "PASS"), fail: count(runs, (r) => r.verdict === "FAIL"), none: count(runs, (r) => r.verdict === "none"), gate: count(runs, (r) => r.source === "gate"), transcript: count(runs, (r) => r.source === "transcript") },
     branchCount: chains.length,
     rounds: { median: quantile(rounds, 0.5), p90: quantile(rounds, 0.9), max: Math.max(0, ...rounds) },
-    cost: { total: round(sum(costs)), perReview: costs.length ? round(sum(costs) / costs.length) : null, minutesPerReview: mins.length ? round(sum(mins) / mins.length, 1) : null, priced: costs.length },
+    cost: { total: costs.length ? round(sum(costs)) : null, perReview: costs.length ? round(sum(costs) / costs.length) : null, minutesPerReview: mins.length ? round(sum(mins) / mins.length, 1) : null, priced: costs.length },
     findings: { n: findings.length, severity: bySeverity(findings), outcome: byOutcome(findings), categorized: categorized.length, perReview: runs.length ? round(findings.length / runs.length) : 0 },
     late: Object.fromEntries(groupBy(findings.filter((f) => f.late), (f) => f.late).map(([k, fs]) => [k, fs.length])),
     flaky: { rereviewed: rereviewed.length, flipped: rereviewed.filter(([, rs]) => new Set(rs.map((r) => r.verdict)).size > 1).length },
@@ -195,7 +195,7 @@ function digest(scopes) {
   L.push(`REVIEW LEDGER ${a.range.from.slice(0, 10)} .. ${a.range.to.slice(0, 10)}`);
   L.push(`reviews ${a.runs.n} (PASS ${a.runs.pass}, FAIL ${a.runs.fail}); ${a.runs.transcript} imported from transcripts, ${a.runs.gate} recorded by the gate`);
   L.push(`branches ${a.branchCount}; rounds per branch median ${a.rounds.median}, p90 ${a.rounds.p90}, max ${a.rounds.max}`);
-  L.push(`cost $${a.cost.total} over ${a.cost.priced} priced reviews, ${usd(a.cost.perReview)}/review, ${a.cost.minutesPerReview ?? "n/a"} min/review`);
+  L.push(`cost ${usd(a.cost.total)} over ${a.cost.priced} priced reviews, ${usd(a.cost.perReview)}/review, ${a.cost.minutesPerReview ?? "n/a"} min/review`);
   L.push(`findings ${a.findings.n} (${a.findings.perReview}/review): blocker ${a.findings.severity.blocker}, major ${a.findings.severity.major}, minor ${a.findings.severity.minor}; categorized ${a.findings.categorized}, uncategorized ${a.findings.n - a.findings.categorized}`);
   L.push(`outcomes ${OUTCOMES.map((o) => `${o} ${a.findings.outcome[o]}`).join(", ")}`);
   L.push(`flaky: ${a.flaky.flipped} of ${a.flaky.rereviewed} unchanged diffs reviewed twice changed verdict`);
