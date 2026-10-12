@@ -6,9 +6,10 @@
 #   create NEW file                 -> allow (no prompt)
 #   git pull --ff-only              -> allow (no prompt)
 #   git add / git commit (local)    -> allow (no prompt); --amend, --no-verify,
-#                                      detached HEAD, an unreadable pathspec
-#                                      ($var, ~, a .. climb, from a file,
-#                                      :! exclude) or an opaque line -> ask
+#                                      detached HEAD, a pathspec it cannot
+#                                      place in the repo (e.g. $var, ~, ..,
+#                                      a path outside it, a pathspec file,
+#                                      exclude magic) or an opaque line -> ask
 #   bulk staging (add -A/-u, commit
 #     -a, a whole-tree pathspec)    -> deny (always)
 #   other local git writes          -> ask
@@ -387,6 +388,7 @@ bulk_staging(){ # $1 = command line
       if (!paths && w ~ /^--./) {
         e = index(w, "="); if (index(w, X) && (!e || index(w, X) < e)) { unsure = 1; return }
         if (long(w, "pathspec-from-file", 11)) { unsure = 1; take = !e; return }
+        if (long(w, "dry-run", op == "commit" ? 2 : 1)) { dry = 1; return }
         if (op == "commit") {
           if (w == "--all") hit(w)
           else if (w ~ /^--(message|file|reuse-message|reedit-message|template|author|date|cleanup|fixup|squash|trailer)$/) take = 1
@@ -397,7 +399,7 @@ bulk_staging(){ # $1 = command line
         for (i = 2; i <= length(w); i++) {
           c = substr(w, i, 1)
           if (c == X) { unsure = 1; return }
-          if (op != "commit") { if (c == "A" || c == "u") { hit(w); return } continue }
+          if (op != "commit") { if (c == "n") dry = 1; else if (c == "A" || c == "u") hit(w); continue }
           if (c == "a") { hit(w); return }
           if (index("mFCct", c)) { take = (i == length(w)); return }
           if (index("Su", c)) return
@@ -406,18 +408,21 @@ bulk_staging(){ # $1 = command line
       }
       pathspec(w)
     }
-    function segment(   k) {
+    # Control words, assignments and launchers run the command after them;
+    # the options of a launcher are skipped with it.
+    function segment(   k, f0, u0) {
       k = 1
-      while (k <= nw && (words[k] ~ /^(if|then|else|elif|do|while|until|time|!|\{|\})$/ || words[k] ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) k++
-      if (words[k] != "git") return
+      while (k <= nw && (words[k] ~ /^(if|then|else|elif|do|while|until|time|!|\{|\}|command|builtin|exec|env|nohup|nice|xargs|sudo)$/ || words[k] ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || (k > 1 && words[k] ~ /^-/))) k++
+      if (words[k] !~ /^(.*\/)?git$/) return
       for (k++; k <= nw; k++) {
         if (words[k] !~ /^-/) break
         if (words[k] ~ /^(-C|-c|--git-dir|--work-tree|--namespace|--config-env|--attr-source)$/) k++
       }
       op = words[k]
       if (op != "add" && op != "stage" && op != "commit") return
-      paths = take = 0
+      paths = take = dry = 0; f0 = found; u0 = unsure
       for (k++; k <= nw; k++) arg(words[k])
+      if (dry) { found = f0; unsure = u0 }
     }
     function endword() {
       if (inword) {
