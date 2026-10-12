@@ -60,7 +60,22 @@ const quantile = (xs, q) => {
   return s[Math.min(s.length - 1, Math.floor(q * s.length))];
 };
 const round = (x, d = 2) => Math.round(x * 10 ** d) / 10 ** d;
-const repoName = (r) => path.basename(r.repo || r.worktree || "unknown");
+const repoPath = (r) => r.repo || r.worktree || "unknown";
+const repoName = (r) => repoLabels.get(repoPath(r)) ?? "unknown";
+const segments = (p, n) => p.split("/").filter(Boolean).slice(-n).join("/");
+// "all" keys the all-repos scope, so no repo label may be "all".
+function labelRepos(runs) {
+  const paths = [...new Set(runs.map(repoPath))];
+  return new Map(
+    paths.map((p) => {
+      const depth = p.split("/").filter(Boolean).length;
+      let n = 1;
+      while (n < depth && (segments(p, n) === "all" || paths.some((q) => q !== p && segments(q, n) === segments(p, n)))) n++;
+      const label = segments(p, n);
+      return [p, label && label !== "all" ? label : p];
+    }),
+  );
+}
 const sevRank = (s) => (SEVERITIES.indexOf(s) + 4) % 4;
 const reviewerOf = (r) => `${r.engine}/${r.run?.models?.[0] ?? r.model ?? "?"}${r.effort ? `/${r.effort}` : ""}`;
 
@@ -218,6 +233,7 @@ const findings = (ledger.findings ?? []).filter((f) => runById.has(f.run));
 for (const r of runs) r.findings = [];
 for (const f of findings) runById.get(f.run).findings.push(f);
 if (!runs.length) die("the ledger has no runs");
+const repoLabels = labelRepos(runs);
 
 const scopes = { all: aggregate(runs, findings, ledger.taxonomy, runById) };
 for (const [repo, rs] of groupBy(runs, repoName)) {
