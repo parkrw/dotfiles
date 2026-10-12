@@ -509,7 +509,12 @@ function workflowNames() {
 function commandsOf(sid, files, workflows, cache) {
   if (!sid || !files.has(sid)) return [];
   if (!cache.has(sid)) {
-    const raw = fs.readFileSync(files.get(sid), "utf8");
+    let raw = "";
+    try {
+      raw = fs.readFileSync(files.get(sid), "utf8");
+    } catch {
+      // Pruned since the scan; the run just shows no workflows.
+    }
     const names = [...raw.matchAll(/<command-name>\/?([\w:.-]+)<\/command-name>/g)].map((m) => m[1].split(":").pop());
     cache.set(sid, [...new Set(names.filter((n) => workflows.has(n)))]);
   }

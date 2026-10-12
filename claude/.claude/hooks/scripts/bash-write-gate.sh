@@ -7,9 +7,9 @@
 #   git pull --ff-only              -> allow (no prompt)
 #   git add / git commit (local)    -> allow (no prompt); --amend, --no-verify,
 #                                      detached HEAD, an unreadable pathspec
-#                                      (quoted, $var, ~, .., from a file,
+#                                      ($var, ~, a .. climb, from a file,
 #                                      :! exclude) or an opaque line -> ask
-#   bulk staging (add -A/-u/., commit
+#   bulk staging (add -A/-u, commit
 #     -a, a whole-tree pathspec)    -> deny (always)
 #   other local git writes          -> ask
 #   new branch whose name is taken
@@ -139,19 +139,7 @@ echo "$bare"    | grep -Eq '>\(|<\('             && opaque=1
 echo "$bare"    | grep -Eq '(^|[^&>])&([^&>]|$)' && opaque=1
 [[ "$cmd" == *$'\n'* ]] && opaque=1
 
-segments(){ echo "${1:-$bare}" | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}'; }
-
-# Drops heredoc bodies, which are data, not commands. Read from the raw line:
-# blanking empties a quoted delimiter. `<<<` is a here-string, not a heredoc.
-strip_heredocs(){
-  printf '%s\n' "$1" | awk '
-    body { t = $0; if (dash) sub(/^\t+/, "", t); if (t == delim) body = 0; next }
-    { print }
-    match($0, /(^|[^<])<<-?[[:space:]]*["\047]?[A-Za-z_][A-Za-z0-9_]*/) {
-      d = substr($0, RSTART, RLENGTH); dash = (d ~ /<<-/)
-      sub(/^[^<]*<<-?[[:space:]]*["\047]?/, "", d); delim = d; body = 1
-    }'
-}
+segments(){ echo "$bare" | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}'; }
 
 word_of(){ echo "$1" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*([[:space:]]+|$))*//' | awk '{print $1}'; }
 git_global='(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+|--no-pager|--paginate|-p)[[:space:]]+'
@@ -338,79 +326,149 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
   esac
 fi
 
-# The git command a segment runs. Control words and grouping are stripped as
-# segment_ok strips them, or `if true; then git add -A; fi` and `(git add .)`
-# would be allowed.
-seg_git_cmd(){
-  echo "$1" | sed -E 's/^[[:space:]]*([({!][[:space:]]*|(do|then|else|if|elif|while|until|time)[[:space:]]+)*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//; s/([[:space:]]*[)}])+[[:space:]]*$//' \
-    | grep -E '^git([[:space:]]|$)'
-}
-
-# Prints the word that makes a git add/stage/commit stage more than the paths
-# it names, `?` for a pathspec it cannot read (quoted and so blanked, a
-# variable, ~, a .. climb, a --pathspec-from-file list, exclude magic), or
-# nothing. Unquoted backslashes are dropped first, as the shell drops them, and
-# an absolute path under the root is read as the relative path it names. A
-# short cluster ends at commit's first option that takes a value, so -qam is -a
-# but -mam is a message.
-bulk_staging(){ # $1 = git command
-  git_args_of "$1" | tr -d '\\' | tr ' \t' '\n\n' | grep -v '^$' \
-    | awk -v op="$(git_sub_of "$1")" -v root="$repo_root" '
+# Prints the word that makes a git add/stage/commit on the line stage more
+# than the paths it names, `?` for a word the gate cannot read, or nothing.
+# The line is split into words as the shell splits it: quotes and backslashes
+# removed, comments and heredoc bodies dropped, redirections and their targets
+# skipped. A `$` or backtick expansion and a leading `~` become \001, since
+# what they expand to is unknown here. A short cluster ends at commit's first
+# option that takes a value, so -qam is -a but -mam is a message.
+bulk_staging(){ # $1 = command line
+  printf '%s\n' "$1" | awk -v root="$repo_root" '
     function hit(w) { if (!found) found = w }
     # git takes any unambiguous prefix of a long option.
     function long(w, name, min) { w = substr(w, 3); sub(/=.*/, "", w); return length(w) >= min && index(name, w) == 1 }
-    take  { take = 0; next }
-    found { next }
-    !paths && $0 == "--" { paths = 1; next }
-    !paths && /^--/ && long($0, "pathspec-from-file", 11) { unsure = 1; take = ($0 !~ /=/); next }
-    !paths && op == "commit" && /^-/ {
-      if ($0 == "--all") hit($0)
-      else if ($0 ~ /^--(message|file|reuse-message|reedit-message|template|author|date|cleanup|fixup|squash|trailer)$/) take = 1
-      else if ($0 ~ /^-[^-]/)
-        for (i = 2; i <= length($0); i++) {
-          c = substr($0, i, 1)
-          if (c == "a") { hit($0); break }
-          if (index("mFCct", c)) { take = (i == length($0)); break }
-          if (index("Su", c)) break
-        }
-      next
-    }
-    # --renormalize implies -u.
-    !paths && /^--/ && (long($0, "all", 1) || long($0, "update", 1) || long($0, "renormalize", 3) || long($0, "no-ignore-removal", 11)) { hit($0); next }
-    !paths && /^-[^-]/ && /[Au]/ { hit($0); next }
-    !paths && /^-/ { next }
-    # Pathspec magic: :/ and :(top) anchor at the root, so the path after
-    # them is what counts. Exclude magic stages everything it does not name.
-    /^:/ {
-      w = $0
-      if (w ~ /^:\(/) {
-        mg = substr(w, 3); sub(/\).*/, "", mg); rest = substr(w, length(mg) + 4)
-        if (mg "," !~ /^((top|icase|literal|glob),)+$/) { unsure = 1; next }
-      } else {
-        match(w, /^:[\/!^]*:?/); mg = substr(w, 2, RLENGTH - 1); rest = substr(w, RLENGTH + 1)
-        if (mg ~ /[!^]/) { unsure = 1; next }
+    # Drops empty and . components; sets dots when one is .. and globs when
+    # every other component is a bare * or ? glob.
+    function norm(p,   n, c, k, out) {
+      n = split(p, c, "/"); out = ""; dots = 0; globs = 1
+      for (k = 1; k <= n; k++) {
+        if (c[k] == "" || c[k] == ".") continue
+        if (c[k] == "..") dots = 1
+        else if (c[k] !~ /^[*?]+$/) globs = 0
+        out = out (out == "" ? "" : "/") c[k]
       }
-      if (rest == "") { hit(w); next }
-      $0 = rest
+      return out
     }
-    root != "" && /^\// {
-      p = $0; sub(/\/+$/, "", p)
-      if (index(root "/", p "/") == 1) { hit($0); next }
-      if (index($0, root "/") == 1) $0 = substr($0, length(root) + 2)
+    function pathspec(p,   w, mg, np, nr) {
+      w = p
+      if (index(p, X)) { unsure = 1; return }
+      # Pathspec magic: :/ and :(top) anchor at the root, so the path after
+      # them is what counts. Exclude magic stages everything it does not name.
+      if (p ~ /^:\(/) {
+        mg = substr(p, 3); sub(/\).*/, "", mg); p = substr(p, length(mg) + 4)
+        if (mg "," !~ /^((top|icase|literal|glob),)+$/) { unsure = 1; return }
+      } else if (p ~ /^:/) {
+        match(p, /^:[\/!^]*:?/); mg = substr(p, 2, RLENGTH - 1); p = substr(p, RLENGTH + 1)
+        if (mg ~ /[!^]/) { unsure = 1; return }
+      } else if (p ~ /^\//) {
+        if (root == "") return
+        np = norm(p); if (dots) { unsure = 1; return }
+        nr = norm(root)
+        if (index(nr "/", np "/") == 1 || np == "") { hit(w); return }
+        if (index(np, nr "/") != 1) return
+        p = substr(np, length(nr) + 2)
+      }
+      np = norm(p)
+      if (np == "" || globs) hit(w)
+      else if (dots) unsure = 1
     }
-    /^[.\/*]+$/ { hit($0); next }
-    /["\047$~]|(^|\/)\.\.(\/|$)/ { unsure = 1 }
-    END { if (found) print found; else if (unsure) print "?" }'
+    function arg(w,   i, c, e) {
+      if (found) return
+      if (take) { take = 0; return }
+      if (!paths && w == "--") { paths = 1; return }
+      if (!paths && w ~ /^--./) {
+        e = index(w, "="); if (index(w, X) && (!e || index(w, X) < e)) { unsure = 1; return }
+        if (long(w, "pathspec-from-file", 11)) { unsure = 1; take = !e; return }
+        if (op == "commit") {
+          if (w == "--all") hit(w)
+          else if (w ~ /^--(message|file|reuse-message|reedit-message|template|author|date|cleanup|fixup|squash|trailer)$/) take = 1
+        } else if (long(w, "all", 1) || long(w, "update", 1) || long(w, "renormalize", 3) || long(w, "no-ignore-removal", 11)) hit(w)
+        return
+      }
+      if (!paths && w ~ /^-./) {
+        for (i = 2; i <= length(w); i++) {
+          c = substr(w, i, 1)
+          if (c == X) { unsure = 1; return }
+          if (op != "commit") { if (c == "A" || c == "u") { hit(w); return } continue }
+          if (c == "a") { hit(w); return }
+          if (index("mFCct", c)) { take = (i == length(w)); return }
+          if (index("Su", c)) return
+        }
+        return
+      }
+      pathspec(w)
+    }
+    function segment(   k) {
+      k = 1
+      while (k <= nw && (words[k] ~ /^(if|then|else|elif|do|while|until|time|!|\{|\})$/ || words[k] ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) k++
+      if (words[k] != "git") return
+      for (k++; k <= nw; k++) {
+        if (words[k] == "-C" || words[k] == "-c") k++
+        else if (words[k] !~ /^(--git-dir=|--work-tree=|--no-pager$|--paginate$|-p$)/) break
+      }
+      op = words[k]
+      if (op != "add" && op != "stage" && op != "commit") return
+      paths = take = 0
+      for (k++; k <= nw; k++) arg(words[k])
+    }
+    function endword() {
+      if (inword) {
+        if (skip) skip = 0
+        else if (hdpend) { delim[++nd] = w; dash[nd] = hdash; hdpend = 0 }
+        else words[++nw] = w
+      }
+      w = ""; inword = 0
+    }
+    function endseg() { endword(); if (nw) segment(); nw = 0 }
+    function redirect(i,   op) {
+      if (inword && w ~ /^[0-9]+$/) { w = ""; inword = 0 } else endword()
+      if (substr(s, i, 3) == "<<<") { skip = 1; return i + 3 }
+      if (substr(s, i, 2) == "<<") { i += 2; hdash = (substr(s, i, 1) == "-"); hdpend = 1; return i + hdash }
+      while (index("<>&|", substr(s, i, 1))) { op = op substr(s, i, 1); i++ }
+      if (op ~ /&$/ && substr(s, i, 1) ~ /[0-9-]/) { while (substr(s, i, 1) ~ /[0-9-]/) i++; return i }
+      skip = 1; return i
+    }
+    function bodies(i,   k, e, t) {
+      for (k = 1; k <= nd; k++)
+        while (i <= n) {
+          e = index(substr(s, i), "\n"); if (!e) e = n - i + 2
+          t = substr(s, i, e - 1); i += e
+          if (dash[k]) sub(/^\t+/, "", t)
+          if (t == delim[k]) break
+        }
+      nd = 0; return i
+    }
+    { s = s $0 "\n" }
+    END {
+      X = "\001"; n = length(s); i = 1
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (q == "\047") { if (c == "\047") q = ""; else w = w c; i++; continue }
+        if (q == "\"") {
+          if (c == "\"") q = ""
+          else if (c == "\\") { d = substr(s, i + 1, 1); if (index("$`\"\\\n", d)) { if (d != "\n") w = w d; i++ } else w = w c }
+          else if (c == "$" || c == "`") w = w X
+          else w = w c
+          i++; continue
+        }
+        if (c == "\\") { d = substr(s, i + 1, 1); if (d != "\n") { w = w d; inword = 1 } i += 2; continue }
+        if (c == "\047" || c == "\"") { q = c; inword = 1; i++; continue }
+        if (c == "#" && !inword) { while (i <= n && substr(s, i, 1) != "\n") i++; continue }
+        if (c == " " || c == "\t") { endword(); i++; continue }
+        if (c == "\n") { endseg(); i = bodies(i + 1); continue }
+        if (c == "<" || c == ">" || substr(s, i, 2) == "&>") { i = redirect(i); continue }
+        if (index(";&|()", c)) { endseg(); i++; continue }
+        if (c == "$" || c == "`" || (c == "~" && !inword)) c = X
+        w = w c; inword = 1; i++
+      }
+      endseg()
+      if (found) print found; else if (unsure) print "?"
+    }'
 }
 
-staging=""
-while IFS= read -r seg; do
-  g=$(seg_git_cmd "$seg") || continue
-  case "$(git_sub_of "$g")" in add|stage|commit) ;; *) continue ;; esac
-  b=$(bulk_staging "$g")
-  [[ -n "$b" && "$b" != "?" ]] && emit deny "bulk staging ($b) sweeps in whatever else is in the tree — stage named paths: git add <path>… then git commit."
-  [[ -n "$b" ]] && staging="$b"
-done < <(segments "$(blank_quotes "$(strip_heredocs "$cmd")")")
+staging=$(bulk_staging "$cmd")
+[[ -n "$staging" && "$staging" != "?" ]] && emit deny "bulk staging ($staging) sweeps in whatever else is in the tree — stage named paths: git add <path>… then git commit."
 
 # `git pull` is fetch + integrate. The integrate half is a merge or rebase
 # against a remote ref, so only --ff-only survives: it can advance a branch

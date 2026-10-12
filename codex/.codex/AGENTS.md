@@ -34,7 +34,7 @@
 ## Source control
 
 - **Never integrate from a remote.** No `git merge origin/…`, no `git rebase origin/…`, no `git pull` or `git pull --rebase`, no `gh pr merge`. These are denied permanently and no toggle enables them. If one is genuinely needed, stop and tell me the exact command and what it will do to my tree — I will run it.
-- `git add` and `git commit` run without a prompt: they write only the local index and history. Committing on `main`/`master` is denied — branch first. `--amend`, `--no-verify`, a commit on a detached HEAD, and a pathspec the gate cannot read (quoted, `$var`, `~`, `..`, `--pathspec-from-file`, `:!` exclude) still ask; bulk staging is denied. Branching, stashing, merging, rebasing ask before running, except a local merge/rebase under `merge auto` (below).
+- `git add` and `git commit` run without a prompt: they write only the local index and history. Committing on `main`/`master` is denied — branch first. `--amend`, `--no-verify`, a commit on a detached HEAD, and a pathspec the gate cannot read (`$var`, `~`, a `..` climb, `--pathspec-from-file`, `:!` exclude) still ask; bulk staging is denied. Branching, stashing, merging, rebasing ask before running, except a local merge/rebase under `merge auto` (below).
 - Stage named paths only: `git add <path>…` from `git status --short`. Never `git add -A`, `git add .` or `git commit -a`.
 - Commit before a merge or rebase; the auto tier refuses a dirty tree, untracked files included.
 - Rebase only an unpushed branch. A pushed branch takes `git merge <default>` so review comments keep their shas.
