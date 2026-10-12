@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// review-insights render — the review ledger as one self-contained HTML page,
-// and a plain-text digest of the same numbers for writing its recommendations.
+// review-insights render — the review ledger as one HTML page with its data
+// embedded, and a plain-text digest of the same numbers for writing its
+// recommendations.
 //
 //   node render.mjs <ledger.json> --out <page.html> [--notes <notes.json>]
 //
