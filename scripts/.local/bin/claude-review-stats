@@ -199,7 +199,11 @@ function parseTranscript(sid, file) {
   const report =
     texts.filter((t) => t.includes("## Findings")).at(-1) ?? texts.filter((t) => t.includes("VERDICT:")).at(-1) ?? texts.at(-1) ?? "";
   const cost = recs.filter((r) => r.type === "cost-state").at(-1);
-  const models = Object.keys(cost?.modelUsage ?? {});
+  // Costliest first: a review also bills haiku for small internal calls, and
+  // models[0] is read as the reviewer.
+  const models = Object.entries(cost?.modelUsage ?? {})
+    .sort((a, b) => (b[1].costUSD ?? 0) - (a[1].costUSD ?? 0))
+    .map(([m]) => m);
   const run = {
     id: `t-${sid}`,
     source: "transcript",

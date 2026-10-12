@@ -397,7 +397,8 @@ record_run() {
     else
       r=$(jq -sc 'map(select(.type=="result")) | (last // {})
                   | {session_id, total_cost_usd, duration_ms, num_turns, usage,
-                     models: (.modelUsage // {} | keys)}' "$stream") && run=$r
+                     models: (.modelUsage // {} | to_entries
+                              | sort_by(-(.value.costUSD // 0)) | map(.key))}' "$stream") && run=$r
     fi
   fi
   common=$(git -C "$worktree" rev-parse --path-format=absolute --git-common-dir) || return 1
