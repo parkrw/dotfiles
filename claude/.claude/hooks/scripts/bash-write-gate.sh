@@ -409,11 +409,14 @@ bulk_staging(){ # $1 = command line
       }
       pathspec(w)
     }
-    # Control words, assignments and launchers run the command after them;
-    # the options of a launcher are skipped with it.
+    # Control words and assignments run the command after them. A launcher
+    # runs one further on, past options whose values are not knowable here,
+    # so its command is the next git word.
     function segment(   k) {
       k = 1
-      while (k <= nw && (words[k] ~ /^(if|then|else|elif|do|while|until|time|!|\{|\}|command|builtin|exec|env|nohup|nice|xargs|sudo)$/ || words[k] ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || (k > 1 && words[k] ~ /^-/))) k++
+      while (k <= nw && (words[k] ~ /^(if|then|else|elif|do|while|until|time|!|\{|\})$/ || words[k] ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) k++
+      if (words[k] ~ /^(command|builtin|exec|env|nohup|nice|xargs|sudo)$/)
+        while (k <= nw && words[k] !~ /^(.*\/)?git$/) k++
       if (words[k] !~ /^(.*\/)?git$/) return
       for (k++; k <= nw; k++) {
         if (words[k] !~ /^-/) break
@@ -440,6 +443,8 @@ bulk_staging(){ # $1 = command line
     function endseg() { endword(); if (nw) segment(); nw = 0 }
     function redirect(i,   op) {
       if (inword && w ~ /^[0-9]+$/) { w = ""; inword = 0 } else endword()
+      # <( and >( are process substitutions: a command, not a target.
+      if (substr(s, i + 1, 1) == "(") return i + 1
       if (substr(s, i, 3) == "<<<") { skip = 1; return i + 3 }
       if (substr(s, i, 2) == "<<") { i += 2; hdash = (substr(s, i, 1) == "-"); hdpend = 1; return i + hdash }
       while (index("<>&|", substr(s, i, 1))) { op = op substr(s, i, 1); i++ }
