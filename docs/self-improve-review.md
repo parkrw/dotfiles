@@ -4,13 +4,13 @@ Claude writes a change. A second Claude, in a fresh context, reviews it. Every f
 
 ## Jump right in
 
-- [ftl-ship.md](../docs/ftl-ship.md): install, then ship a task to a reviewed draft PR.
-- [context-handoff.md](../docs/context-handoff.md): hand off to a fresh session at 25% context. Needs tmux.
-- [review-insights.md](../docs/review-insights.md): read the review record and decide what to change.
+- [ftl-ship.md](ftl-ship.md): install, then ship a task to a reviewed draft PR.
+- [context-handoff.md](context-handoff.md): hand off to a fresh session at 25% context. Needs tmux.
+- [review-insights.md](review-insights.md): read the review record and decide what to change.
 
 ## A work in progress
 
-The tools here change every week. Rerun the install in [ftl-ship.md](../docs/ftl-ship.md) to pick up new versions; it overwrites any edits you've made to the copies.
+The tools here change every week. Rerun the install in [ftl-ship.md](ftl-ship.md) to pick up new versions; it overwrites any edits you've made to the copies.
 
 Claude Code will ask you to approve some commands. That's deliberate: a push, a `gh` command, a rebase or a new worktree asks unless you've opened that gate with `claude-gate`. Read the command before you approve it. A denial means a gate did its job, so don't work around it with `--no-verify` or by editing a hook. Ask Claude why the command was denied.
 
@@ -51,8 +51,6 @@ cd <worktree> && claude -p "<review prompt>" --model opus --effort <level> \
    - an **area**: what kind of defect it is, such as correctness, tests or docs.
    - a **cause**: why the change let it through, such as an edge case, an ignored rule, or a fact stated in two places with only one updated.
 4. `/review-insights` renders the numbers as a page. Claude then writes 3–5 recommendations, each one a concrete change to a named file, citing only numbers the page shows. Each run republishes to the same private claude.ai link.
-
-[review-insights-example.html](review-insights-example.html) shows a real one. Open it in a browser.
 
 ### Ask Claude to help you optimize
 

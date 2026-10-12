@@ -1,7 +1,9 @@
 # Parker's Dotfiles
 
 Personal macOS config, deployed with [GNU Stow](https://www.gnu.org/software/stow/).
-Each top-level dir (`nvim/`, `tmux/`, `scripts/`, `markdownlint/`, `claude/`, `codex/`, `karabiner/`, `zsh/`, `omz/`) is a Stow package; `stow <pkg>` symlinks it into `$HOME`. The deployed files are symlinks back into the repo, so editing here edits the live config.
+Each top-level dir (`nvim/`, `tmux/`, `scripts/`, `markdownlint/`, `claude/`, `codex/`, `karabiner/`, `zsh/`, `omz/`) is a Stow package; `stow <pkg>` symlinks it into `$HOME`. The deployed files are symlinks back into the repo, so editing here edits the live config. `docs/` is documentation, not a package.
+
+Self-improving review (ship, review, measure, adjust): [docs/self-improve-review.md](docs/self-improve-review.md).
 
 ## Table of Contents
 
