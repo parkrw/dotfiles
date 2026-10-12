@@ -246,7 +246,7 @@
       "**Primary use of Claude Code**: software development",
       "**Trusted repo**: CloudKey-io/core (this checkout and its origin remote), private — confidential material (non-secret) is fine to commit here; secrets and personal/regulated data are never cleared into it by visibility alone",
       "**Org-specific CLIs**: None configured",
-      "**routine under CloudKey-io/core prefix**: staging named paths and commit run without a prompt, except `--amend`, `--no-verify` and a detached-HEAD commit, which ask, and bulk staging (`git add -A`/`--all`/`.`, `git commit -a`/`--all`) and a commit on main/master, which are denied; other local git mutations (branch, stash, local merge/rebase) ask before running; read-only git/gh commands run without a prompt; `git push` and mutating `gh` commands always ask; integrating from a remote (`git pull`, `git merge origin/…`, `gh pr merge`) is permanently denied"
+      "**routine under CloudKey-io/core prefix**: staging named paths and commit run without a prompt, except `--amend`, `--no-verify`, a detached-HEAD commit and a quoted pathspec, which ask, and bulk staging (`git add -A`/`-u` or a whole-tree pathspec like `.`, `./`, `:/`, `*`; `git commit -a` in any flag cluster or with such a pathspec) and a commit on main/master, which are denied; other local git mutations (branch, stash, local merge/rebase) ask before running; read-only git/gh commands run without a prompt; `git push` and mutating `gh` commands always ask; integrating from a remote (`git pull`, `git merge origin/…`, `gh pr merge`) is permanently denied"
     ]
   },
   "voiceEnabled": true,

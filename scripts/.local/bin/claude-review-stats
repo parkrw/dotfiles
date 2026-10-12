@@ -336,6 +336,7 @@ function branchChange(r, file, cache) {
 function label(runs) {
   const chains = new Map();
   for (const r of runs) {
+    if (r.verdict === "none") continue;
     const key = `${r.worktree}\0${r.branch}`;
     if (!chains.has(key)) chains.set(key, []);
     chains.get(key).push(r);
@@ -624,7 +625,9 @@ function main() {
   let runs = loadRuns();
   const imported = importTranscripts(files, runs);
   runs = dedupe(runs).filter((r) => r.ts);
-  for (const r of runs) r.findings = parseFindings(r.report).map((f) => ({ ...f, key: findingKey(f), run: r.id }));
+  // A run with no verdict line never finished its report, so it is not a
+  // round: chaining it would mark the previous round's findings dropped.
+  for (const r of runs) r.findings = r.verdict === "none" ? [] : parseFindings(r.report).map((f) => ({ ...f, key: findingKey(f), run: r.id }));
   // Labelled before filtering, so a finding's next round counts even when it
   // falls outside --since.
   label(runs);

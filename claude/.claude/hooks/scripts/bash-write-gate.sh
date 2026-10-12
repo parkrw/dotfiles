@@ -322,6 +322,52 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
   esac
 fi
 
+# The git command a segment runs. Control words and grouping are stripped as
+# segment_ok strips them, or `if true; then git add -A; fi` would be allowed.
+seg_git_cmd(){
+  echo "$1" | sed -E 's/^[[:space:]]*([({!][[:space:]]*|(do|then|else|if|elif|while|until|time)[[:space:]]+)*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//' \
+    | grep -E '^git([[:space:]]|$)'
+}
+
+# Prints the word that makes a git add/stage/commit stage more than the paths
+# it names, `?` for a quoted pathspec (blanked, so unreadable), or nothing.
+# A short cluster ends at commit's first option that takes a value, so -qam is
+# -a but -mam is a message.
+bulk_staging(){ # $1 = git command
+  git_args_of "$1" | tr ' \t' '\n\n' | grep -v '^$' | awk -v op="$(git_sub_of "$1")" '
+    function hit(w) { if (!found) found = w }
+    take  { take = 0; next }
+    found { next }
+    !paths && $0 == "--" { paths = 1; next }
+    !paths && op == "commit" && /^-/ {
+      if ($0 == "--all") hit($0)
+      else if ($0 ~ /^--(message|file|reuse-message|reedit-message|template|author|date|cleanup|fixup|squash|trailer|pathspec-from-file)$/) take = 1
+      else if ($0 ~ /^-[^-]/)
+        for (i = 2; i <= length($0); i++) {
+          c = substr($0, i, 1)
+          if (c == "a") { hit($0); break }
+          if (index("mFCct", c)) { take = (i == length($0)); break }
+          if (index("Su", c)) break
+        }
+      next
+    }
+    !paths && /^--(a|al|all|u|up|upd|upda|updat|update|no-ignore-removal)$/ { hit($0); next }
+    !paths && /^-[^-]/ && /[Au]/ { hit($0); next }
+    !paths && /^-/ { next }
+    /^(:|[.\/*]+$)/ { hit($0); next }
+    /["\047]/ { quoted = 1 }
+    END { if (found) print found; else if (quoted) print "?" }'
+}
+
+staging=""
+while IFS= read -r seg; do
+  g=$(seg_git_cmd "$seg") || continue
+  case "$(git_sub_of "$g")" in add|stage|commit) ;; *) continue ;; esac
+  b=$(bulk_staging "$g")
+  [[ -n "$b" && "$b" != "?" ]] && emit deny "bulk staging ($b) sweeps in whatever else is in the tree — stage named paths: git add <path>… then git commit."
+  [[ -n "$b" ]] && staging="$b"
+done < <(segments)
+
 # `git pull` is fetch + integrate. The integrate half is a merge or rebase
 # against a remote ref, so only --ff-only survives: it can advance a branch
 # pointer or fail, never write a merge commit and never rewrite a sha. That
@@ -682,12 +728,13 @@ fi
 # without a prompt so a review loop can commit each fix and re-review
 # unattended. Commit on main/master was denied above. What is not a plain
 # local write still asks: --amend rewrites a sha, --no-verify skips the repo's
-# own hooks, a detached HEAD has no branch to hold the commit, and an opaque or
-# redirecting line may hide another command. Staging alone needs no branch: a
+# own hooks, a detached HEAD has no branch to hold the commit, a quoted
+# pathspec may be `.`, and an opaque or redirecting line may hide another
+# command. Staging alone needs no branch: a
 # rebase stopped on a conflict has a detached HEAD, and resolving it is `git add`.
 if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+(add|commit)([[:space:]]|$)'; then
   if { [[ -n "$cur" ]] || ! echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+commit([[:space:]]|$)'; } \
-     && ! echo "$bare" | grep -Eq -- '(^|[[:space:]])--amend\b'; then
+     && [[ -z "$staging" ]] && ! echo "$bare" | grep -Eq -- '(^|[[:space:]])--amend\b'; then
     seg_extra_git='add|commit'
     can_allow && emit allow "Local git add/commit — writes only this checkout's index and history."
     seg_extra_git=''
