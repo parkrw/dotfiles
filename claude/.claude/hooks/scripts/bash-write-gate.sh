@@ -162,6 +162,7 @@ seg_git='status|log|diff|show|reflog|shortlog|whatchanged|blame|describe|rev-par
 # marker rules adds it here before asking whether the rest of the line is safe.
 seg_extra_git=''
 seg_extra_gh=''
+wt_add_ok=0
 
 git_segment_ok(){
   local sub args
@@ -171,7 +172,8 @@ git_segment_ok(){
   [[ -n "$seg_extra_git" ]] && echo "$sub" | grep -Eq "^(${seg_extra_git})$" && return 0
   echo "$sub" | grep -Eq "^(${seg_git})$" && return 0
   case "$sub" in
-    worktree) echo "$args" | grep -Eq '^list([[:space:]]|$)' ;;
+    worktree) echo "$args" | grep -Eq '^list([[:space:]]|$)' \
+                || { [[ "$wt_add_ok" == 1 ]] && echo "$args" | grep -Eq '^add[[:space:]]'; } ;;
     # Any positional word is a branch to create, move or delete.
     branch)   ! echo "$args" | grep -Eq -- '(^|[[:space:]])([^-[:space:]]|--edit-description|--unset-upstream)' ;;
     tag)      [[ -z "$args" ]] || echo "$args" | grep -Eq '^(-l|--list|-n)' ;;
@@ -881,6 +883,42 @@ Approve to create '$new_branch' anyway."
 Starting '$new_branch' duplicates their work. Ask them, or take an issue that is yours."
         fi
       fi
+    fi
+  fi
+fi
+
+# ── new worktree on a new branch (.claude-merge-auto) ──
+#
+# `worktree add -b <new> <path> [HEAD|<local-branch>]` adds a branch and a
+# checkout and changes nothing that exists: -b refuses a taken name and the
+# path must be absent. -B, --force and the other flags can reset or reuse what
+# exists, so they ask. The origin and issue checks above have already denied a
+# name someone else holds.
+if [[ "$merge_auto" == 1 && "$merge_off" != 1 && -n "$new_branch" && -n "$repo_root" ]] \
+   && echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+worktree[[:space:]]+add\b'; then
+  n_wt=0; wt_seg=""
+  while IFS= read -r seg; do
+    [[ "$(git_sub_of "$seg")" == worktree ]] && { n_wt=$((n_wt + 1)); wt_seg="$seg"; }
+  done < <(segments)
+  if [[ "$n_wt" == 1 ]] && one_repo_seg "$wt_seg" \
+     && wt_pos=$(git_args_of "$wt_seg" | tr ' \t' '\n\n' | grep -v '^$' | awk '
+          NR == 1 { if ($0 != "add") bad = 1; next }
+          take    { take = 0; next }
+          /^-b$/  { take = 1; next }
+          /^(-q|--quiet)$/ { next }
+          /^-/    { bad = 1; next }
+                  { print; n++ }
+          END { exit (bad || take || n < 1 || n > 2) }'); then
+    wt_path=$(echo "$wt_pos" | sed -n 1p); wt_start=$(echo "$wt_pos" | sed -n 2p)
+    [[ "$wt_path" == /* ]] || wt_path="$gitdir/$wt_path"
+    if ! printf '%s\n' "$wt_pos" "$new_branch" | grep -vqE '^[A-Za-z0-9._/+-]+$' \
+       && [[ ! -e "$wt_path" && ! -L "$wt_path" ]] \
+       && { [[ -z "$wt_start" || "$wt_start" == HEAD ]] || git -C "$gitdir" show-ref --verify --quiet "refs/heads/$wt_start"; } \
+       && git check-ref-format --branch "$new_branch" >/dev/null 2>&1 \
+       && ! git -C "$gitdir" show-ref --verify --quiet "refs/heads/$new_branch"; then
+      wt_add_ok=1
+      can_allow && emit allow "New worktree on new branch '$new_branch' — changes no existing branch or checkout (.claude-merge-auto)."
+      wt_add_ok=0
     fi
   fi
 fi

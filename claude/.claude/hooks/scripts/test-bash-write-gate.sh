@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Pipe-test suite for ~/.claude/hooks/scripts/bash-write-gate.sh
-# Builds two throwaway repos: repoA on main, repoB on feat/x.
+# Builds throwaway repos: repoA on main, repoB on feat/x, and repoC (merge
+# auto) and repoD sharing a bare origin. HOOK overrides the gate under test.
 set -u
-HOOK="$HOME/.claude/hooks/scripts/bash-write-gate.sh"
+HOOK="${HOOK:-$HOME/.claude/hooks/scripts/bash-write-gate.sh}"
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 
@@ -39,6 +40,29 @@ check "git -C main commit denied"                "$T/repoB" "git -C $T/repoA com
 # The misfire class from insights: cd-prefixed compounds must resolve against
 # the cd target, not the session cwd.
 check "cd main && commit denied (no miss)"       "$T/repoB" "cd $T/repoA && git commit -m 'x: y'"      deny
+
+# New worktree on a new branch: allowed only under .claude-merge-auto. The
+# empty bare origin answers ls-remote with exit 2 (no such branch).
+git init -q --bare "$T/origin.git"
+for r in repoC repoD; do
+  mkrepo "$T/$r" main
+  git -C "$T/$r" remote add origin "$T/origin.git"
+done
+: > "$T/repoC/.claude-merge-auto"
+git -C "$T/repoC" branch taken
+mkdir "$T/exists"
+
+check "worktree add -b under merge auto allowed"  "$T/repoC" "git worktree add -b wt-new $T/repoC-wt-new HEAD"        allow
+check "worktree add -b to a sibling path allowed" "$T/repoC" "git worktree add -b wt-r ../repoC-wt-r HEAD"             allow
+check "worktree add -b via -C allowed"           "$T/repoB" "git -C $T/repoC worktree add -b wt-c $T/repoC-wt-c"     allow
+check "worktree add -b off a local branch"        "$T/repoC" "git worktree add -b wt-l $T/repoC-wt-l taken"           allow
+check "worktree add -b without marker asks"       "$T/repoD" "git worktree add -b wt-new $T/repoD-wt-new HEAD"        ask
+check "worktree add -B asks"                      "$T/repoC" "git worktree add -B wt-new $T/repoC-wt-new HEAD"        ask
+check "worktree add --force asks"                 "$T/repoC" "git worktree add --force -b wt-new $T/repoC-wt-new"     ask
+check "worktree add onto existing path asks"      "$T/repoC" "git worktree add -b wt-new $T/exists HEAD"              ask
+check "worktree add of a taken branch asks"       "$T/repoC" "git worktree add -b taken $T/repoC-taken HEAD"          ask
+check "worktree add off a remote ref asks"        "$T/repoC" "git worktree add -b wt-new $T/repoC-wt-new origin/main" ask
+check "worktree add then remove asks"             "$T/repoC" "git worktree add -b wt-new $T/repoC-wt-new HEAD && git worktree remove $T/exists" ask
 
 echo "---"
 echo "$pass passed, $fail failed"

@@ -34,7 +34,7 @@
 ## Source control
 
 - **Never integrate from a remote.** No `git merge origin/…`, no `git rebase origin/…`, no `git pull` or `git pull --rebase`, no `gh pr merge`. These are denied permanently and no toggle enables them. If one is genuinely needed, stop and tell me the exact command and what it will do to my tree — I will run it.
-- `git add` and `git commit` run without a prompt: they write only the local index and history. Committing on `main`/`master` is denied — branch first. `--amend`, `--no-verify`, a commit on a detached HEAD, and a pathspec the gate cannot place in the repo (for example `$var`, `~`, a `..` climb, an absolute path outside it, `--pathspec-from-file`, exclude or attr magic) still ask; bulk staging is denied. Branching, stashing, merging, rebasing ask before running, except a local merge/rebase under `merge auto` (below).
+- `git add` and `git commit` run without a prompt: they write only the local index and history. Committing on `main`/`master` is denied — branch first. `--amend`, `--no-verify`, a commit on a detached HEAD, and a pathspec the gate cannot place in the repo (for example `$var`, `~`, a `..` climb, an absolute path outside it, `--pathspec-from-file`, exclude or attr magic) still ask; bulk staging is denied. Branching, stashing, merging, rebasing ask before running, except a local merge/rebase and a new-branch `git worktree add -b` under `merge auto` (below).
 - Stage named paths only: `git add <path>…` from `git status --short`. Never `git add -A`, `git add .` or `git commit -a`.
 - Commit before a merge or rebase; the auto tier refuses a dirty tree, untracked files included.
 - Rebase only an unpushed branch. A pushed branch takes `git merge <default>` so review comments keep their shas.
@@ -49,10 +49,10 @@
 | Toggle | Default | On | Off |
 | --- | --- | --- | --- |
 | `remote` | on | `git push`, `gh` ask; `auto` allows `git push [-u] origin <current-branch>` and `gh pr create --draft` while pre-push's review gate is live, and turns `review` on | both denied |
-| `merge` | on | **local** merge/rebase ask; `auto` allows one onto a named local branch from a clean tree, a rebased branch unpushed | both denied |
+| `merge` | on | **local** merge/rebase ask; `auto` allows one onto a named local branch from a clean tree, a rebased branch unpushed, and `git worktree add -b <new-branch> <new-path> [HEAD\|<local-branch>]` | both denied |
 | `review` | off | push denied until the branch diff passes a fresh-context review | no review required |
 
-`remote` and `merge` are on unless the repo root carries an opt-out marker — `.claude-remote-off` or `.claude-merge-off` — so turning one off writes a file and turning it back on removes it. `review` is the reverse: off unless the repo is listed in `~/.claude/hooks/review-gate-repos`. `merge auto` is an opt-in marker, `.claude-merge-auto`; anything outside its rules — a sha, bare `git merge`, `-i`, `--onto`, a dirty tree, a branch on origin — falls back to ask, and `.claude-merge-off` wins over it. `remote auto` is `.claude-remote-auto`: a push asks when the review gate is not live, `origin/HEAD` is unset, the branch is the default, or origin's copy of the branch holds anyone else's commits; `.claude-remote-off` wins.
+`remote` and `merge` are on unless the repo root carries an opt-out marker — `.claude-remote-off` or `.claude-merge-off` — so turning one off writes a file and turning it back on removes it. `review` is the reverse: off unless the repo is listed in `~/.claude/hooks/review-gate-repos`. `merge auto` is an opt-in marker, `.claude-merge-auto`; anything outside its rules — a sha, bare `git merge`, `-i`, `--onto`, a dirty tree, a branch on origin, a worktree add with `-B`, `--force` or an existing path — falls back to ask, and `.claude-merge-off` wins over it. `remote auto` is `.claude-remote-auto`: a push asks when the review gate is not live, `origin/HEAD` is unset, the branch is the default, or origin's copy of the branch holds anyone else's commits; `.claude-remote-off` wins.
 
 The markers are per checkout, so a worktree tightens separately from its parent; the review toggle, `.claude-merge-auto` and `.claude-remote-auto` key off the main checkout instead and are shared with its worktrees. `~/.config/git/ignore` covers the markers, so they never reach a repo's tracked tree or show up in `git status`.
 

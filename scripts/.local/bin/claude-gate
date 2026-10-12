@@ -10,7 +10,8 @@
 #   claude-gate merge  on|off|auto
 #                               LOCAL merge/rebase:  ask <-> deny   (default on);
 #                               auto allows one onto a named local branch from a
-#                               clean tree, for the main checkout and its worktrees
+#                               clean tree, and a worktree add -b of a new branch
+#                               to a new path, for the main checkout and its worktrees
 #   claude-gate review on|off   require a fresh-context review before push
 #                                                                    (default off)
 #   claude-gate all off         tighten every toggle for this repo
@@ -63,7 +64,7 @@ state() {
 describe() {
   case $1 in
     remote) echo "git push / gh:        on = ask,   off = deny,  auto = allow own-branch push and draft PR" ;;
-    merge)  echo "LOCAL merge / rebase: on = ask,   off = deny,  auto = allow onto a local branch, clean tree" ;;
+    merge)  echo "LOCAL merge / rebase: on = ask,   off = deny,  auto = allow onto a local branch, clean tree; worktree add -b" ;;
     review) echo "on = push blocked until the branch diff passes review" ;;
   esac
 }
