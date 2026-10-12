@@ -336,7 +336,7 @@ fi
 # option that takes a value, so -qam is -a but -mam is a message.
 bulk_staging(){ # $1 = command line
   printf '%s\n' "$1" | awk -v root="$repo_root" -v root2="$root_alias" '
-    function hit(w) { if (!found) found = w }
+    function hit(w) { if (!hitw) hitw = w }
     # 1 when np is nr, above it or inside it; rel is then the path below nr.
     function under(np, nr) {
       rel = ""
@@ -360,34 +360,33 @@ bulk_staging(){ # $1 = command line
     }
     function pathspec(p,   w, mg, np, nr) {
       w = p
-      if (index(p, X)) { unsure = 1; return }
+      if (index(p, X)) { segu = 1; return }
       # Pathspec magic: :/ and :(top) anchor at the root, so the path after
       # them is what counts. Exclude magic stages everything it does not name.
       if (p ~ /^:\(/) {
         mg = substr(p, 3); sub(/\).*/, "", mg); p = substr(p, length(mg) + 4)
-        if (mg "," !~ /^((top|icase|literal|glob),)+$/) { unsure = 1; return }
+        if (mg "," !~ /^((top|icase|literal|glob),)+$/) { segu = 1; return }
       } else if (p ~ /^:/) {
         match(p, /^:[\/!^]*:?/); mg = substr(p, 2, RLENGTH - 1); p = substr(p, RLENGTH + 1)
-        if (mg ~ /[!^]/) { unsure = 1; return }
+        if (mg ~ /[!^]/) { segu = 1; return }
       } else if (p ~ /^\//) {
         # Outside the root as either spelling has it, the path may still
         # reach it through some other symlink.
-        np = norm(p); if (dots) { unsure = 1; return }
-        if (!under(np, norm(root)) && !(root2 != "" && under(np, norm(root2)))) { unsure = 1; return }
+        np = norm(p); if (dots) { segu = 1; return }
+        if (!under(np, norm(root)) && !(root2 != "" && under(np, norm(root2)))) { segu = 1; return }
         if (rel == "") { hit(w); return }
         p = rel
       }
       np = norm(p)
       if (np == "" || globs) hit(w)
-      else if (dots) unsure = 1
+      else if (dots) segu = 1
     }
     function arg(w,   i, c, e) {
-      if (found) return
       if (take) { take = 0; return }
       if (!paths && w == "--") { paths = 1; return }
       if (!paths && w ~ /^--./) {
-        e = index(w, "="); if (index(w, X) && (!e || index(w, X) < e)) { unsure = 1; return }
-        if (long(w, "pathspec-from-file", 11)) { unsure = 1; take = !e; return }
+        e = index(w, "="); if (index(w, X) && (!e || index(w, X) < e)) { segu = 1; return }
+        if (long(w, "pathspec-from-file", 11)) { segu = 1; take = !e; return }
         # commit also has --no-date, so --no-d is ambiguous there.
         if (long(w, "no-dry-run", op == "commit" ? 5 : 4)) { dry = 0; return }
         if (long(w, "dry-run", op == "commit" ? 2 : 1)) { dry = 1; return }
@@ -400,7 +399,7 @@ bulk_staging(){ # $1 = command line
       if (!paths && w ~ /^-./) {
         for (i = 2; i <= length(w); i++) {
           c = substr(w, i, 1)
-          if (c == X) { unsure = 1; return }
+          if (c == X) { segu = 1; return }
           if (op != "commit") { if (c == "n") dry = 1; else if (c == "A" || c == "u") hit(w); continue }
           if (c == "a") { hit(w); return }
           if (index("mFCct", c)) { take = (i == length(w)); return }
@@ -412,7 +411,7 @@ bulk_staging(){ # $1 = command line
     }
     # Control words, assignments and launchers run the command after them;
     # the options of a launcher are skipped with it.
-    function segment(   k, f0, u0) {
+    function segment(   k) {
       k = 1
       while (k <= nw && (words[k] ~ /^(if|then|else|elif|do|while|until|time|!|\{|\}|command|builtin|exec|env|nohup|nice|xargs|sudo)$/ || words[k] ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || (k > 1 && words[k] ~ /^-/))) k++
       if (words[k] !~ /^(.*\/)?git$/) return
@@ -422,9 +421,13 @@ bulk_staging(){ # $1 = command line
       }
       op = words[k]
       if (op != "add" && op != "stage" && op != "commit") return
-      paths = take = dry = 0; f0 = found; u0 = unsure
+      # Every word is read before judging: git lets the last of -n and
+      # --no-dry-run win, wherever the bulk flag sits.
+      paths = take = dry = segu = 0; hitw = ""
       for (k++; k <= nw; k++) arg(words[k])
-      if (dry) { found = f0; unsure = u0 }
+      if (dry) return
+      if (hitw != "" && found == "") found = hitw
+      if (segu) unsure = 1
     }
     function endword() {
       if (inword) {
