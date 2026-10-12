@@ -278,7 +278,7 @@ Run it in the background and wait for it; a review takes minutes and a foregroun
   - Add the test that fails without the fix, if the repo has tests. A doc or prose finding needs none.
   - A finding that is wrong gets no code change. Keep it, as `path:line - defect - reason`, for the PR body's `Disputed findings` section: the human sees every finding the author dismissed.
 
-  Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged: a fix is new code the checkers have not seen. Fix what fails and add those paths again, or name it as left out and why, as Check allows. Then `git -C "$worktree" commit -m '<fix subject>'`, with `-m '<reason>'` for each disputed finding, and start round N+1.
+  Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged: a fix is new code the checkers have not seen. Fix what fails and add those paths again, or name it as left out and why, as Check allows. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
 
 After round 10 with findings still open, or a round where every finding is wrong - nothing to commit, so the next round would judge the same diff - stop: print each open finding as `path:line - defect`, with the reason for each one judged wrong, then hand off anyway. The human decides.
 
@@ -286,12 +286,14 @@ After round 10 with findings still open, or a round where every finding is wrong
 
 First rerun step 2's `fetch`, then `git -C "$worktree" rev-list --count HEAD..origin/HEAD`, since the review loop can outlast a merge to the default branch. The human pastes into a shell that sits in some other directory and has no `$worktree`, so every path is a literal absolute path and the block opens with `cd`. Print exactly one of the two blocks below, placeholders filled, and nothing else - no smell line, no summary.
 
+Before either, write the PR body with the Write tool to `<git-common-dir>/ftl-pr-body.md` (outside the tree), ending with `Conflicts resolved` when step 3a resolved any, `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
+
 Count `0` - current. No `pull`, no `rebase`:
 
 ```
 cd <worktree>
 git push -u origin <branch>
-gh pr create --title '<subject>' --body '<body>'
+gh pr create --title '<subject>' --body-file <git-common-dir>/ftl-pr-body.md
 ```
 
 Count above `0` - behind:
@@ -301,15 +303,14 @@ cd <worktree>
 git -C <default-checkout> pull --ff-only
 git rebase <default>
 git push -u origin <branch>
-gh pr create --title '<subject>' --body '<body>'
+gh pr create --title '<subject>' --body-file <git-common-dir>/ftl-pr-body.md
 ```
 
 With `--integrate`: after the fetch, behind (count above `0`) runs step 3a again, then `claude-review -C "$worktree" --status`; anything but `already approved` goes back to step 4. Then, instead of printing a block:
 
-- Write the PR body with the Write tool to `<git-common-dir>/ftl-pr-body.md` (outside the tree), ending with `Conflicts resolved` when step 3a resolved any, `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue.
-- `git -C <worktree> push -u origin <branch>`, then `cd <worktree> && gh pr create --draft --title '<subject>' --body-file <that path>`. Literal paths. Single-quote the title; one with an apostrophe goes in double quotes and carries no `$` or backtick.
+- `git -C <worktree> push -u origin <branch>`, then `cd <worktree> && gh pr create --draft --title '<subject>' --body-file <git-common-dir>/ftl-pr-body.md`. Literal paths. Single-quote the title; one with an apostrophe goes in double quotes and carries no `$` or backtick.
 - Print the PR URL and nothing else - plus step 3a's `integrated against local` line when its pull failed, and, when step 1 carried work over, the restore and clean line below for the human.
 
 Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), step 3a stopped, or the gate or pre-push refuses: print the behind or current block for the human, as plain Ship does.
 
-`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `git merge <default>` in place of `git rebase <default>`. When step 1 carried uncommitted work over, either block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy before a `pull --ff-only` that a dirty tree would block. Subject and body follow Check step 6; the body carries step 4's `Disputed findings` section when there is one, and a PR that finishes an issue ends its body with `Closes #N`.
+`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `git merge <default>` in place of `git rebase <default>`. When step 1 carried uncommitted work over, either block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy before a `pull --ff-only` that a dirty tree would block. Subject and body follow Check step 6; a PR that finishes an issue ends its body with `Closes #N`.
