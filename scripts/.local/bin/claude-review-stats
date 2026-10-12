@@ -18,15 +18,15 @@
 // Outcome of a finding, judged against the next review of the same branch:
 //   repeated  the next round reports it again
 //   fixed     gone, and the branch's own change to its file differs
-//   dropped   gone, though the branch's change to its file is the same: the
-//             reviewer changed its mind, the closest thing to a false
-//             positive on record
-//   resolved  gone, and the shas needed to tell fixed from dropped are unknown
+//   elsewhere gone, and only other files changed: fixed there, or dropped
+//   dropped   gone, though nothing in the branch changed: the reviewer changed
+//             its mind, the closest thing to a false positive on record
+//   resolved  gone, and the shas needed to tell these apart are unknown
 //   open      the branch's last review failed with it
 //   shipped   the branch's last review passed with it still listed
-// A late find is one no earlier review of the branch raised. In a file the
-// commits since the previous review left untouched, that review could have
-// seen it too: a coverage gap in the reviewer, not a defect a fix introduced.
+// A late find is one no earlier review of the branch raised. When nothing in
+// the branch changed since the previous review, that review could have seen
+// it too: missed earlier, a coverage gap in the reviewer.
 "use strict";
 
 const { execFileSync, spawnSync } = require("node:child_process");
@@ -194,9 +194,11 @@ function parseTranscript(sid, file) {
   const first = recs.find((r) => r.type === "user");
   const prompt = textOf(first?.message?.content);
   if (!prompt.startsWith(REVIEW_PROMPT) || !first.cwd || !first.timestamp) return null;
-  const texts = recs
-    .filter((r) => r.type === "assistant")
-    .flatMap((r) => (r.message?.content ?? []).filter((c) => c.type === "text").map((c) => c.text));
+  const assistant = recs.filter((r) => r.type === "assistant");
+  // A review cut off mid-turn (Ctrl-C, a crash) never reached the gate's
+  // verdict check either; importing it would add a round that never happened.
+  if (assistant.at(-1)?.message?.stop_reason !== "end_turn") return null;
+  const texts = assistant.flatMap((r) => (r.message?.content ?? []).filter((c) => c.type === "text").map((c) => c.text));
   const report =
     texts.filter((t) => t.includes("## Findings")).at(-1) ?? texts.filter((t) => t.includes("VERDICT:")).at(-1) ?? texts.at(-1) ?? "";
   const cost = recs.filter((r) => r.type === "cost-state").at(-1);
@@ -217,7 +219,7 @@ function parseTranscript(sid, file) {
     tip: null,
     diff: null,
     engine: "claude",
-    model: recs.filter((r) => r.type === "assistant").at(-1)?.message?.model ?? null,
+    model: assistant.at(-1).message.model ?? null,
     effort: recs.find((r) => typeof r.effort === "string")?.effort ?? null,
     verdict: verdictOf(report),
     run: { session_id: sid, total_cost_usd: cost?.totalCostUSD ?? null, duration_ms: cost?.totalDuration ?? null, models },
@@ -303,19 +305,29 @@ function similarity(a, b) {
 
 const sameFinding = (f, g) => g.path === f.path && similarity(f.text, g.text) >= 0.35;
 
-// What the branch itself does to a file at one review: the +/- lines of
-// base...tip. A rebase onto a moved default branch leaves them as they were,
-// so they differ between two reviews only when the author changed the file.
+// What the branch itself does at one review, to one file or ("" for file) to
+// all of them: the file names and +/- lines of base...tip. A rebase onto a
+// moved default branch leaves these as they were, so they differ between two
+// reviews only when the author changed something.
 function branchChange(r, file, cache) {
   if (!r.tip || !r.base_sha) return null;
   const k = `${r.repo}\0${r.base_sha}\0${r.tip}\0${file}`;
   if (!cache.has(k)) {
-    const out = git(r.repo, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--end-of-options", `${r.base_sha}...${r.tip}`, "--", file);
+    // Rendering pinned as review-branch.sh's branch_diff pins it, so a git
+    // config change between two runs of this cannot read as an author's edit.
+    const out = git(r.repo,
+      "-c", "diff.algorithm=myers", "-c", "diff.renames=true", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false",
+      "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--end-of-options", `${r.base_sha}...${r.tip}`, "--", ...(file ? [file] : []));
     if (out === null) cache.set(k, null);
     else {
-      const lines = out.split("\n");
-      const hunks = lines.findIndex((l) => l.startsWith("@@"));
-      cache.set(k, hunks < 0 ? "" : lines.slice(hunks).filter((l) => /^[+-]/.test(l)).join("\n"));
+      const kept = [];
+      let inHunk = false;
+      for (const l of out.split("\n")) {
+        if (l.startsWith("diff --git ")) (inHunk = false), kept.push(l);
+        else if (l.startsWith("@@")) inHunk = true;
+        else if (inHunk && /^[+-]/.test(l)) kept.push(l);
+      }
+      cache.set(k, kept.join("\n"));
     }
   }
   return cache.get(k);
@@ -329,10 +341,18 @@ function label(runs) {
     chains.get(key).push(r);
   }
   const cache = new Map();
-  const touched = (a, b, file) => {
+  const changedBetween = (a, b, file) => {
     const ca = branchChange(a, file, cache);
     const cb = branchChange(b, file, cache);
     return ca === null || cb === null ? null : ca !== cb;
+  };
+  // "file": its own file changed; "none": nothing in the branch changed;
+  // "other": only other files did; null: the shas to tell are unknown.
+  const whatChanged = (a, b, file) => {
+    const own = changedBetween(a, b, file);
+    if (own === null) return null;
+    if (own) return "file";
+    return changedBetween(a, b, "") ? "other" : "none";
   };
   const findings = [];
   for (const chain of chains.values()) {
@@ -345,14 +365,14 @@ function label(runs) {
       const next = chain[i + 1];
       for (const f of r.findings) {
         if (prev && !earlier.some((g) => sameFinding(f, g))) {
-          const t = touched(prev, r, f.path);
-          f.late = t === null ? "unknown" : t ? "touched" : "untouched";
+          const c = whatChanged(prev, r, f.path);
+          f.late = { file: "after-file-change", other: "after-other-change", none: "missed-earlier" }[c] ?? "unknown";
         }
         if (!next) f.outcome = r.verdict === "PASS" ? "shipped" : "open";
         else if (next.findings.some((g) => sameFinding(f, g))) f.outcome = "repeated";
         else {
-          const t = touched(r, next, f.path);
-          f.outcome = t === null ? "resolved" : t ? "fixed" : "dropped";
+          const c = whatChanged(r, next, f.path);
+          f.outcome = { file: "fixed", other: "elsewhere", none: "dropped" }[c] ?? "resolved";
         }
         findings.push(f);
       }
@@ -544,10 +564,10 @@ function report(runs, findings, cats, imported) {
   const flipped = rereviewed.filter(([, rs]) => new Set(rs.map((r) => r.verdict)).size > 1);
   if (gate.length) say(`  flaky      ${flipped.length} of ${rereviewed.length} unchanged diffs reviewed twice got different verdicts`);
   say(`  findings   ${findings.length}: blocker ${count(findings, (f) => f.severity === "blocker")}, major ${count(findings, (f) => f.severity === "major")}, minor ${count(findings, (f) => f.severity === "minor")}`);
-  const outcomes = ["fixed", "dropped", "resolved", "repeated", "open", "shipped"];
+  const outcomes = ["fixed", "elsewhere", "dropped", "resolved", "repeated", "open", "shipped"];
   say(`  outcomes   ${outcomes.map((o) => `${o} ${count(findings, (f) => f.outcome === o)}`).join("  ")}`);
   const late = findings.filter((f) => f.late);
-  say(`  late finds ${late.length} (${pct(late.length, findings.length)}) raised by no earlier review of the branch: ${count(late, (f) => f.late === "touched")} in a file the author changed since the previous review, ${count(late, (f) => f.late === "untouched")} in an unchanged file (missed earlier), ${count(late, (f) => f.late === "unknown")} unknown (no shas)`);
+  say(`  late finds ${late.length} (${pct(late.length, findings.length)}) raised by no earlier review of the branch: ${count(late, (f) => f.late === "after-file-change")} after its file changed, ${count(late, (f) => f.late === "after-other-change")} after other files changed, ${count(late, (f) => f.late === "missed-earlier")} with nothing changed (missed earlier), ${count(late, (f) => f.late === "unknown")} unknown (no shas)`);
   say();
   const outcomeRow = (fs) => [fs.length, ...outcomes.map((o) => pct(count(fs, (f) => f.outcome === o), fs.length))];
   say(table(["by severity", "n", ...outcomes], ["blocker", "major", "minor"].map((s) => [s, ...outcomeRow(findings.filter((f) => f.severity === s))])));
