@@ -618,8 +618,8 @@ td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
     document.getElementById("about").replaceChildren(
       p(`${nf.format(a.runs.transcript)} of ${nf.format(a.runs.n)} reviews were imported from reviewer transcripts, which carry no commit shas. Their findings can only be marked resolved; fixed, elsewhere and dropped need reviews the gate recorded with shas (${nf.format(a.runs.gate)} here).`),
       p(`A finding's outcome is judged against the next review of the same branch. Late finds, raised by no earlier review of the branch: ${nf.format(late["missed-earlier"] || 0)} with nothing changed since (missed earlier), ${nf.format((late["after-file-change"] || 0) + (late["after-other-change"] || 0))} after a change, ${nf.format(late.unknown || 0)} unknown. Flaky verdicts: ${a.flaky.flipped} of ${a.flaky.rereviewed} unchanged diffs reviewed twice.`),
-      DATA.uncategorized
-        ? p(`${nf.format(DATA.uncategorized)} findings have no area or cause yet. `, code("claude-review-stats --categorize"), " classifies them with haiku and asks before it spends.")
+      a.findings.n - a.findings.categorized
+        ? p(`${nf.format(a.findings.n - a.findings.categorized)} findings have no area or cause yet. `, code("claude-review-stats --categorize"), " classifies them with haiku and asks before it spends.")
         : p("Every finding has an area and a cause."),
       p(`Built from `, code("claude-review-stats --json"), ` on ${dayYear(DATA.generated)}. Rerun `, code("/review-insights"), " to refresh."));
   }

@@ -170,7 +170,7 @@ function aggregate(runs, findings, tax, runById) {
   };
 }
 
-function digest(scopes, uncategorized) {
+function digest(scopes) {
   const a = scopes.all;
   const pct = (x) => `${Math.round(x * 100)}%`;
   const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s);
@@ -179,7 +179,7 @@ function digest(scopes, uncategorized) {
   L.push(`reviews ${a.runs.n} (PASS ${a.runs.pass}, FAIL ${a.runs.fail}); ${a.runs.transcript} imported from transcripts, ${a.runs.gate} recorded by the gate`);
   L.push(`branches ${a.branchCount}; rounds per branch median ${a.rounds.median}, p90 ${a.rounds.p90}, max ${a.rounds.max}`);
   L.push(`cost $${a.cost.total} over ${a.cost.priced} priced reviews, $${a.cost.perReview}/review, ${a.cost.minutesPerReview} min/review`);
-  L.push(`findings ${a.findings.n} (${a.findings.perReview}/review): blocker ${a.findings.severity.blocker}, major ${a.findings.severity.major}, minor ${a.findings.severity.minor}; categorized ${a.findings.categorized}, uncategorized ${uncategorized}`);
+  L.push(`findings ${a.findings.n} (${a.findings.perReview}/review): blocker ${a.findings.severity.blocker}, major ${a.findings.severity.major}, minor ${a.findings.severity.minor}; categorized ${a.findings.categorized}, uncategorized ${a.findings.n - a.findings.categorized}`);
   L.push(`outcomes ${OUTCOMES.map((o) => `${o} ${a.findings.outcome[o]}`).join(", ")}`);
   L.push(`flaky: ${a.flaky.flipped} of ${a.flaky.rereviewed} unchanged diffs reviewed twice changed verdict`);
   L.push("");
@@ -223,14 +223,13 @@ for (const [repo, rs] of groupBy(runs, repoName)) {
   const ids = new Set(rs.map((r) => r.id));
   scopes[repo] = aggregate(rs, findings.filter((f) => ids.has(f.run)), ledger.taxonomy, runById);
 }
-const uncategorized = new Set(findings.filter((f) => !f.cause).map((f) => f.key)).size;
 
 const explorer = findings.map((f) => {
   const r = runById.get(f.run);
   return { s: f.severity, p: f.path, l: f.line ?? null, t: f.text, e: f.effect ?? "", a: f.area ?? "", c: f.cause ?? "", o: f.outcome, r: repoName(r), b: r.branch, ts: r.ts.slice(0, 10) };
 });
 
-const data = { generated: new Date().toISOString(), uncategorized, taxonomy: ledger.taxonomy, scopes, explorer, notes };
+const data = { generated: new Date().toISOString(), taxonomy: ledger.taxonomy, scopes, explorer, notes };
 const here = path.dirname(fileURLToPath(import.meta.url));
 const template = fs.readFileSync(path.join(here, "page.html"), "utf8");
 const marker = "__REVIEW_INSIGHTS_DATA__";
@@ -238,5 +237,5 @@ if (!template.includes(marker)) die(`page.html has no ${marker} marker`);
 // A finding's text can hold "</script>"; escaping every "<" keeps it inside the JSON block.
 const page = template.replace(marker, () => JSON.stringify(data).replace(/</g, "\\u003c"));
 fs.writeFileSync(opts.out, page);
-process.stdout.write(digest(scopes, uncategorized));
+process.stdout.write(digest(scopes));
 process.stderr.write(`review-insights: wrote ${opts.out} (${Math.round(page.length / 1024)} KB)${notes ? "" : " without recommendations"}\n`);
