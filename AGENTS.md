@@ -47,7 +47,7 @@ Custom shell tools deployed to `~/.local/bin`:
 
 - `reqd` — **moved to its own repo** at `~/Developments/work/ck/programmin/reqd`; what's here is an untracked, gitignored symlink keeping it on PATH.
 - `cht.sh` — **vendored third-party** cheat.sh shell client (has its own `update`/`version` self-management). Don't hand-edit; treat as upstream.
-- `claude-review-stats` — zero-dependency Node. Reports on `~/.claude/review-ledger/`, where `review-branch.sh` records every review: verdicts, cost, what became of each finding in the branch's next review, and the finding categories (area and cause) assigned by `--categorize` with haiku. Each run also imports the reviewer's own headless transcripts from `~/.claude/projects` before Claude Code's `cleanupPeriodDays` deletes them.
+- `claude-review-stats` — zero-dependency Node. Reports on `~/.claude/review-ledger/`, where `review-branch.sh` records every review: verdicts, cost, what became of each finding in the branch's next review, and the finding categories (area and cause) assigned by `--categorize` with haiku. Each run also imports the reviewer's own headless transcripts from `~/.claude/projects` before Claude Code's `cleanupPeriodDays` deletes them. `--json` carries the area/cause taxonomy with the runs and findings; the `review-insights` skill renders it as a page.
 
 The `claude` file (untracked) is **not** part of these dotfiles. It's a symlink the Claude Code installer wrote to `~/.local/bin/claude` (pointing at `~/.local/share/claude/versions/<ver>`); because `~/.local/bin` is a folded Stow symlink to this directory, that write landed inside the repo. It's machine- and version-specific — don't commit it (gitignore it, or unfold the dir so `~/.local/bin` holds per-file symlinks).
 
@@ -58,7 +58,7 @@ Global Claude Code config. `~/.claude/` is a real directory full of machine stat
 Stowed:
 
 - `AGENTS.md` — global cross-project instructions; `settings.json` — permissions, hooks wiring, status line, plugins; `keybindings.json`; `statusline-command.sh`; `extra-system-prompt.txt`.
-- `commands/` — custom slash commands. `skills/` — one dir per skill, each holding a `SKILL.md`: planning (`cycle`, `cycle-issues`, `delib`), execution (`slice`, `implementer`), session plumbing (`handoff`, `spawn`), and `pm`. `skills/shared/` is **not** a skill — it holds cross-skill reference docs (`next-command.md`, the next-command routing table) that skills read by path; without a `SKILL.md` the loader ignores it.
+- `commands/` — custom slash commands. `skills/` — one dir per skill, each holding a `SKILL.md`: planning (`cycle`, `cycle-issues`, `delib`), execution (`slice`, `implementer`), session plumbing (`handoff`, `spawn`), `pm`, and `review-insights` (the review ledger as an artifact, with recommendations; `render.mjs` and `page.html` live beside its `SKILL.md`). `skills/shared/` is **not** a skill — it holds cross-skill reference docs (`next-command.md`, the next-command routing table) that skills read by path; without a `SKILL.md` the loader ignores it.
 - `hooks/scripts/` — `bash-write-gate.sh` (PreToolUse(Bash) gate), `rename-plans.sh` (Stop hook), and their `common.sh` lib. **Vendored** from the now-archived `review-hooks` repo and wired via the `hooks` block in `settings.json`; edit here = live. The dormant scripts and `patterns/` from that repo were intentionally left behind.
 
 `settings.local.json` is machine-local and deliberately **not** stowed.

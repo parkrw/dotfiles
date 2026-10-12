@@ -1,0 +1,654 @@
+<title>Review Ledger Insights</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one 1120px column read top to bottom - summary, what to change, the evidence behind it, then every finding. */
+:root {
+  --bg: #f3f5f7;
+  --surface: #ffffff;
+  --ink: #12161b;
+  --ink-2: #4a535e;
+  --muted: #727b86;
+  --line: #e1e5ea;
+  --grid: #e7eaee;
+  --chip: #edf0f3;
+  --accent: #2a78d6;
+  --accent-wash: rgba(42, 120, 214, 0.1);
+  --shadow: 0 8px 24px rgba(18, 22, 27, 0.12);
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --font-ui: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1013; --surface: #161a1f; --ink: #eef1f4; --ink-2: #b8c0c9; --muted: #8b949e;
+    --line: #262c33; --grid: #22282e; --chip: #20262d; --accent: #3987e5; --accent-wash: rgba(57, 135, 229, 0.16);
+    --shadow: 0 8px 24px rgba(0, 0, 0, 0.5); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1013; --surface: #161a1f; --ink: #eef1f4; --ink-2: #b8c0c9; --muted: #8b949e;
+  --line: #262c33; --grid: #22282e; --chip: #20262d; --accent: #3987e5; --accent-wash: rgba(57, 135, 229, 0.16);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.5); color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font-ui); }
+.page { max-width: 1120px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 64px; display: grid; gap: 28px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+h1 { font-size: 2rem; line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.15rem; font-weight: 600; }
+h3 { font-size: 1rem; font-weight: 600; }
+p { margin: 0; }
+.mono { font-family: var(--font-mono); font-size: 0.86em; }
+.muted { color: var(--muted); }
+.sub { color: var(--ink-2); max-width: 68ch; }
+.eyebrow { font: 500 0.75rem/1 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+
+.masthead { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 16px 24px; }
+.masthead > div { display: grid; gap: 8px; min-width: 0; }
+.lede { color: var(--ink-2); max-width: 68ch; }
+.scope { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 9px; background: var(--chip); }
+.scope button { font: 500 0.86rem/1 var(--font-ui); color: var(--ink-2); background: transparent; border: 0; border-radius: 7px; padding: 8px 12px; cursor: pointer; }
+.scope button[aria-checked="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
+button:focus-visible, [tabindex]:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; display: grid; gap: 16px; min-width: 0; }
+.panel-head { display: grid; gap: 4px; }
+section { display: grid; gap: 14px; min-width: 0; }
+.section-head { display: grid; gap: 4px; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.tile { padding: 16px 18px; display: grid; gap: 4px; align-content: start; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 0 -1px -1px 0; min-width: 0; }
+.tile .label { font-size: 0.82rem; color: var(--ink-2); }
+.tile .value { font-size: 1.85rem; font-weight: 600; line-height: 1.15; }
+.tile .detail { font-size: 0.82rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 10px; }
+
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.sev { display: inline-flex; align-items: center; gap: 6px; font: 500 0.78rem/1 var(--font-mono); color: var(--ink-2); white-space: nowrap; }
+.tag { display: inline-flex; align-items: center; gap: 6px; font: 500 0.75rem/1 var(--font-mono); color: var(--ink-2); background: var(--chip); border-radius: 5px; padding: 4px 7px; white-space: nowrap; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.82rem; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+.recs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+.rec { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.rec .kv { display: grid; gap: 2px; }
+.rec .k { font: 500 0.72rem/1.4 var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.rec .where { font-family: var(--font-mono); font-size: 0.82rem; overflow-wrap: anywhere; color: var(--ink-2); }
+.empty { border: 1px dashed var(--line); border-radius: var(--radius); padding: 18px 20px; color: var(--ink-2); }
+
+.causes { display: grid; }
+.cause { border-top: 1px solid var(--line); }
+.cause:first-child { border-top: 0; }
+.cause summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(160px, 1.3fr) minmax(0, 2fr); gap: 6px 20px; padding: 14px 4px; align-items: start; }
+.cause summary::-webkit-details-marker { display: none; }
+.cause summary:hover { background: var(--accent-wash); }
+.cause .name { display: grid; gap: 4px; }
+.cause .name b { font: 600 0.9rem/1.3 var(--font-mono); }
+.cause .name small { color: var(--ink-2); font-size: 0.84rem; }
+.share { display: grid; gap: 6px; }
+.share .bar { height: 10px; background: var(--chip); border-radius: 0 4px 4px 0; overflow: hidden; }
+.share .bar i { display: block; height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; }
+.share .nums { font-size: 0.84rem; color: var(--ink-2); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.remedy { font-size: 0.9rem; }
+.remedy .k { display: block; font: 500 0.72rem/1.4 var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.examples { list-style: none; margin: 0 0 14px; padding: 0 4px; display: grid; gap: 10px; }
+.examples li, .attn li { display: grid; gap: 4px; min-width: 0; }
+.loc { font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink-2); overflow-wrap: anywhere; }
+.ftext { font-size: 0.92rem; overflow-wrap: anywhere; }
+.chevron { color: var(--muted); font-size: 0.8rem; display: inline-block; }
+.cause[open] .chevron { transform: rotate(90deg); }
+
+.hbars { display: grid; gap: 10px; }
+.hbar { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 4px 16px; align-items: center; }
+.hbar .lab { display: grid; }
+.hbar .lab b { font: 600 0.86rem/1.3 var(--font-mono); }
+.hbar .lab small { color: var(--muted); font-size: 0.78rem; line-height: 1.3; }
+.track { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.segs { display: flex; gap: 2px; height: 18px; min-width: 2px; }
+.segs span { display: block; height: 100%; min-width: 2px; cursor: default; }
+.segs span:last-child { border-radius: 0 4px 4px 0; }
+.segs span:hover, .segs span:focus-visible { filter: brightness(1.12); }
+.track .n { font-size: 0.84rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+.chart { width: 100%; min-height: 210px; }
+.chart svg { display: block; overflow: visible; }
+.chart .grid { stroke: var(--grid); stroke-width: 1; }
+.chart .base { stroke: var(--line); stroke-width: 1; }
+.chart .tick { fill: var(--muted); font: 11px var(--font-ui); }
+.chart .endlabel { fill: var(--ink); font: 600 12px var(--font-ui); }
+.chart .hit { fill: transparent; cursor: crosshair; }
+.chart .m-good { fill: var(--good); }
+.chart .m-critical { fill: var(--critical); }
+.chart .m-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .m-area { fill: var(--accent-wash); }
+.chart .m-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.chart .xhair { stroke: var(--muted); stroke-width: 1; }
+
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+th { text-align: left; font: 500 0.74rem/1.3 var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); padding: 0 12px 8px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
+.minibar { display: inline-flex; gap: 2px; height: 8px; width: 64px; vertical-align: middle; }
+.minibar span { display: block; height: 100%; }
+.minibar span:last-child { border-radius: 0 3px 3px 0; }
+
+.attn { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.attn .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.more { justify-self: start; font: 500 0.86rem/1 var(--font-ui); color: var(--accent); background: transparent; border: 1px solid var(--line); border-radius: 7px; padding: 8px 12px; cursor: pointer; }
+
+.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.filters label { display: grid; gap: 4px; font-size: 0.78rem; color: var(--ink-2); }
+.filters input, .filters select { font: 0.9rem var(--font-ui); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; }
+.filters input { width: min(280px, 100%); }
+.filters .count { margin-left: auto; font-size: 0.84rem; color: var(--muted); }
+.ftable td:first-child { width: 92px; }
+.ftable .eff summary { cursor: pointer; color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
+.ftable .eff p { color: var(--ink-2); font-size: 0.86rem; margin-top: 4px; overflow-wrap: anywhere; }
+.ftable .ctx { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+
+.about { display: grid; gap: 8px; color: var(--ink-2); font-size: 0.9rem; max-width: 80ch; }
+.about code { font-family: var(--font-mono); font-size: 0.85em; background: var(--chip); border-radius: 4px; padding: 1px 5px; }
+
+.tip { position: fixed; z-index: 10; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 8px 10px; font-size: 0.82rem; display: grid; gap: 4px; max-width: 280px; }
+.tip-row { display: flex; align-items: center; gap: 8px; }
+.tip-row i { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+.tip-row b { font-variant-numeric: tabular-nums; }
+.tip-row span { color: var(--ink-2); }
+
+@media (max-width: 720px) {
+  .cause summary { grid-template-columns: 1fr; }
+  .hbar { grid-template-columns: 1fr; }
+  h1 { font-size: 1.6rem; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="page">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">claude-review ledger</p>
+      <h1>Review insights</h1>
+      <p class="lede" id="lede"></p>
+    </div>
+    <div class="scope" role="radiogroup" aria-label="Repository" id="scope"></div>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section aria-labelledby="h-change">
+    <div class="section-head">
+      <h2 id="h-change">What to change</h2>
+      <p class="sub" id="change-sub"></p>
+    </div>
+    <div id="recs"></div>
+  </section>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Why findings get through</h2>
+      <p class="sub">Each categorized finding is filed under the reason the author's change let it through. The remedy is the standing change for that reason. Open a row for real findings.</p>
+    </div>
+    <div class="causes" id="causes"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>What the findings are</h2>
+      <p class="sub">Findings by area, split by severity.</p>
+    </div>
+    <div class="legend" id="sev-legend"></div>
+    <div class="hbars" id="areas"></div>
+  </div>
+
+  <div class="two">
+    <div class="panel">
+      <div class="panel-head"><h2>Reviews per week</h2><p class="sub">Each column is one week of reviews, by verdict.</p></div>
+      <div class="legend"><span><i style="background: var(--good)"></i>PASS</span><span><i style="background: var(--critical)"></i>FAIL</span></div>
+      <div class="chart" id="chart-weeks"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Findings per review</h2><p class="sub">Weekly mean. Falling means changes arrive at review cleaner.</p></div>
+      <div class="chart" id="chart-rate"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Still listed</h2>
+      <p class="sub" id="attn-sub"></p>
+    </div>
+    <ul class="attn" id="attn"></ul>
+  </div>
+
+  <div class="two">
+    <div class="panel">
+      <div class="panel-head"><h2>Hotspots</h2><p class="sub">Files the reviewer flags most often.</p></div>
+      <div class="tablewrap" id="hotspots"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Longest review loops</h2><p class="sub">Branches by review rounds.</p></div>
+      <div class="tablewrap" id="branches"></div>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="panel">
+      <div class="panel-head"><h2>Reviewers</h2><p class="sub">By engine, model and effort.</p></div>
+      <div class="tablewrap" id="reviewers"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Repositories</h2><p class="sub">Where the reviews ran.</p></div>
+      <div class="tablewrap" id="repos"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Every finding</h2><p class="sub">Search the findings in this view.</p></div>
+    <div class="filters">
+      <label for="f-q">Search<input id="f-q" type="search" placeholder="path, text, branch"></label>
+      <label for="f-sev">Severity<select id="f-sev"></select></label>
+      <label for="f-area">Area<select id="f-area"></select></label>
+      <label for="f-cause">Cause<select id="f-cause"></select></label>
+      <label for="f-out">Outcome<select id="f-out"></select></label>
+      <span class="count" id="f-count"></span>
+    </div>
+    <div class="tablewrap"><table class="ftable"><thead><tr><th>Severity</th><th>Finding</th><th>Area · cause</th><th>Where</th></tr></thead><tbody id="f-body"></tbody></table></div>
+    <button class="more" id="f-more" type="button">Show 50 more</button>
+  </div>
+
+  <section aria-labelledby="h-about">
+    <h2 id="h-about">About these numbers</h2>
+    <div class="about" id="about"></div>
+  </section>
+</div>
+<div class="tip" id="tip" role="tooltip" hidden></div>
+
+<script id="data" type="application/json">__REVIEW_INSIGHTS_DATA__</script>
+<script>
+(() => {
+  const DATA = JSON.parse(document.getElementById("data").textContent);
+  const SEV = ["blocker", "major", "minor"];
+  const SEV_COLOR = { blocker: "var(--critical)", major: "var(--serious)", minor: "var(--warning)" };
+  const nf = new Intl.NumberFormat("en-US");
+  const pct = (n, d) => (d ? `${Math.round((100 * n) / d)}%` : "–");
+  const money = (x) => (x == null ? "–" : x >= 1000 ? `$${(x / 1000).toFixed(1)}K` : `$${x.toFixed(x < 10 ? 2 : 0)}`);
+  const day = (s) => new Date(s.length === 10 ? `${s}T00:00:00Z` : s).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  const dayYear = (s) => new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  const loc = (p, l) => (l ? `${p}:${l}` : p);
+  const listJoin = (xs) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+
+  function h(tag, attrs, ...kids) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v == null || v === false) continue;
+      if (k === "class") el.className = v;
+      else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? "" : v);
+    }
+    for (const c of kids.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    return el;
+  }
+  const NS = "http://www.w3.org/2000/svg";
+  function s(tag, attrs, ...kids) {
+    const el = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) if (v != null) el.setAttribute(k, v);
+    for (const c of kids.flat()) if (c != null) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    return el;
+  }
+  const sev = (x) => h("span", { class: "sev" }, h("i", { class: "dot", style: `background:${SEV_COLOR[x] || "var(--muted)"}` }), x || "?");
+  const verdict = (v) => h("span", { class: "sev" }, h("i", { class: "dot", style: `background:${v === "PASS" ? "var(--good)" : v === "FAIL" ? "var(--critical)" : "var(--muted)"}` }), v);
+  const minibar = (counts, total) =>
+    h("span", { class: "minibar", "aria-label": SEV.map((x) => `${counts[x]} ${x}`).join(", ") },
+      SEV.filter((x) => counts[x]).map((x) => h("span", { style: `background:${SEV_COLOR[x]};width:${(100 * counts[x]) / total}%` })));
+
+  // ── tooltip ──
+  const tip = document.getElementById("tip");
+  const tipRow = (value, label, color) => h("div", { class: "tip-row" }, color ? h("i", { style: `background:${color}` }) : null, h("b", {}, value), h("span", {}, label));
+  function placeTip(x, y) {
+    const pad = 12, tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = x + pad;
+    if (left + tw > innerWidth - 8) left = x - pad - tw;
+    let top = y - th - pad;
+    if (top < 8) top = y + pad;
+    tip.style.left = `${Math.max(8, left)}px`;
+    tip.style.top = `${top}px`;
+  }
+  function showTip(rows, e) {
+    tip.replaceChildren(...rows);
+    tip.hidden = false;
+    if (e && e.clientX != null && e.type && e.type.startsWith("pointer")) placeTip(e.clientX, e.clientY);
+    else {
+      const r = e.target.getBoundingClientRect();
+      placeTip(r.left + r.width / 2, r.top);
+    }
+  }
+  const hideTip = () => (tip.hidden = true);
+  function hover(el, rows) {
+    const show = (e) => showTip(rows(), e);
+    el.addEventListener("pointerenter", show);
+    el.addEventListener("pointermove", (e) => placeTip(e.clientX, e.clientY));
+    el.addEventListener("pointerleave", hideTip);
+    el.addEventListener("focus", show);
+    el.addEventListener("blur", hideTip);
+  }
+
+  // ── scope ──
+  const scopeKeys = Object.keys(DATA.scopes);
+  let scope = "all";
+  try {
+    const saved = localStorage.getItem("review-insights-scope");
+    if (saved && DATA.scopes[saved]) scope = saved;
+  } catch {}
+  const scopeEl = document.getElementById("scope");
+  function renderScope() {
+    scopeEl.replaceChildren(
+      ...scopeKeys.map((k) =>
+        h("button", {
+          type: "button", role: "radio", "aria-checked": String(k === scope), tabindex: k === scope ? "0" : "-1",
+          onclick: () => setScope(k),
+          onkeydown: (e) => {
+            const i = scopeKeys.indexOf(scope), d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+            if (!d) return;
+            e.preventDefault();
+            setScope(scopeKeys[(i + d + scopeKeys.length) % scopeKeys.length]);
+            scopeEl.querySelector('[aria-checked="true"]').focus();
+          },
+        }, k === "all" ? "All repos" : k)));
+  }
+  function setScope(k) {
+    scope = k;
+    try { localStorage.setItem("review-insights-scope", k); } catch {}
+    shown = PAGE;
+    render();
+  }
+
+  // ── sections ──
+  function renderLede(a) {
+    const repos = a.repos.map((r) => r.key);
+    document.getElementById("lede").textContent =
+      `${nf.format(a.runs.n)} reviews of ${nf.format(a.branchCount)} branches in ${listJoin(repos)}, ${dayYear(a.range.from)} to ${dayYear(a.range.to)}.`;
+  }
+
+  function renderTiles(a) {
+    const f = a.findings;
+    const tiles = [
+      ["Reviews", nf.format(a.runs.n), [h("span", {}, verdict("PASS"), ` ${nf.format(a.runs.pass)}`), h("span", {}, verdict("FAIL"), ` ${nf.format(a.runs.fail)}`)]],
+      ["Findings", nf.format(f.n), [`${f.perReview} per review`, minibar(f.severity, Math.max(1, f.n))]],
+      ["Rounds per branch", `${a.rounds.median}`, [`median · p90 ${a.rounds.p90} · max ${a.rounds.max}`]],
+      ["Reviewer spend", money(a.cost.total), [`${money(a.cost.perReview)} and ${a.cost.minutesPerReview ?? "–"} min per review`]],
+      ["Still listed", nf.format(a.attention.open + a.attention.shipped), [`${a.attention.open} open · ${a.attention.shipped} shipped`]],
+      ["Categorized", pct(f.categorized, f.n), [`${nf.format(f.n - f.categorized)} without a cause`]],
+    ];
+    document.getElementById("tiles").replaceChildren(
+      ...tiles.map(([label, value, detail]) => h("div", { class: "tile" }, h("span", { class: "label" }, label), h("span", { class: "value" }, value), h("span", { class: "detail" }, detail))));
+  }
+
+  function renderRecs() {
+    const n = DATA.notes, sub = document.getElementById("change-sub"), box = document.getElementById("recs");
+    if (!n || !Array.isArray(n.recommendations) || !n.recommendations.length) {
+      sub.textContent = "Recommendations are written from the ledger each time /review-insights runs.";
+      box.replaceChildren(h("p", { class: "empty" }, "This render has no recommendations. The remedies in the next section still apply."));
+      return;
+    }
+    sub.textContent = n.summary || "";
+    box.replaceChildren(h("div", { class: "recs" }, n.recommendations.map((r) =>
+      h("article", { class: "rec" },
+        r.cause ? h("span", { class: "tag", style: "justify-self:start" }, r.cause) : null,
+        h("h3", {}, r.title || ""),
+        r.change ? h("div", { class: "kv" }, h("span", { class: "k" }, "Change"), h("p", {}, r.change)) : null,
+        r.where ? h("div", { class: "kv" }, h("span", { class: "k" }, "Where"), h("p", { class: "where" }, r.where)) : null,
+        r.why ? h("div", { class: "kv" }, h("span", { class: "k" }, "Evidence"), h("p", { class: "muted" }, r.why)) : null))));
+  }
+
+  function renderCauses(a) {
+    const max = Math.max(1, ...a.causes.map((c) => c.n));
+    const el = document.getElementById("causes");
+    if (!a.causes.length) return el.replaceChildren(h("p", { class: "empty" }, "No categorized findings in this view."));
+    el.replaceChildren(...a.causes.map((c) =>
+      h("details", { class: "cause" },
+        h("summary", {},
+          h("div", { class: "name" }, h("b", {}, h("span", { class: "chevron", "aria-hidden": "true" }, "▸ "), c.key), h("small", {}, c.meaning)),
+          h("div", { class: "share" },
+            h("div", { class: "bar" }, h("i", { style: `width:${(100 * c.n) / max}%` })),
+            h("div", { class: "nums" }, h("span", { class: "num" }, `${nf.format(c.n)} findings`), h("span", {}, `${Math.round(c.share * 100)}% of categorized`), c.repeated ? h("span", {}, `${c.repeated} repeated`) : null)),
+          h("div", { class: "remedy" }, h("span", { class: "k" }, "Remedy"), c.remedy || "No standing remedy.")),
+        h("ul", { class: "examples" }, c.examples.map((e) =>
+          h("li", {}, h("div", { class: "meta" }, sev(e.severity), " ", h("span", { class: "loc" }, `${e.repo} · ${loc(e.path, e.line)}`)), h("p", { class: "ftext" }, e.text)))))));
+  }
+
+  function renderAreas(a) {
+    document.getElementById("sev-legend").replaceChildren(...SEV.map((x) => h("span", {}, h("i", { style: `background:${SEV_COLOR[x]}` }), x)));
+    const max = Math.max(1, ...a.areas.map((r) => r.n));
+    const el = document.getElementById("areas");
+    if (!a.areas.length) return el.replaceChildren(h("p", { class: "empty" }, "No categorized findings in this view."));
+    el.replaceChildren(...a.areas.map((r) =>
+      h("div", { class: "hbar" },
+        h("div", { class: "lab" }, h("b", {}, r.key), h("small", {}, DATA.taxonomy.areas[r.key] || "")),
+        h("div", { class: "track" },
+          h("div", { class: "segs", style: `width:${(100 * r.n) / max}%` },
+            SEV.filter((x) => r.severity[x]).map((x) => {
+              const seg = h("span", { tabindex: "0", style: `flex:${r.severity[x]} 1 0;background:${SEV_COLOR[x]}`, "aria-label": `${r.key}: ${r.severity[x]} ${x}` });
+              hover(seg, () => [tipRow(nf.format(r.severity[x]), `${x} · ${r.key}`, SEV_COLOR[x]), tipRow(pct(r.severity[x], r.n), `of ${r.key}`)]);
+              return seg;
+            })),
+          h("span", { class: "n" }, nf.format(r.n))))));
+  }
+
+  // ── charts ──
+  const niceMax = (v) => {
+    if (v <= 0) return 1;
+    const p = 10 ** Math.floor(Math.log10(v)), f = v / p;
+    return [1, 2, 3, 4, 5, 6, 8, 10].find((n) => f <= n) * p;
+  };
+  const tickText = (t) => (t >= 1000 ? `${+(t / 1000).toPrecision(3)}K` : String(+t.toPrecision(3)));
+  const barPath = (x, y, w, hgt, r) => {
+    r = Math.min(r, w / 2, hgt);
+    return `M${x},${y + hgt}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + hgt}Z`;
+  };
+  function frame(el, label, max) {
+    const W = Math.max(260, el.clientWidth), H = 210, m = { l: 34, r: 30, t: 14, b: 28 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const y = (v) => m.t + ih - (v / max) * ih;
+    const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label });
+    for (const t of [0, max / 2, max]) {
+      svg.append(s("line", { x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), class: t ? "grid" : "base" }));
+      svg.append(s("text", { x: m.l - 8, y: y(t), class: "tick", "text-anchor": "end", "dominant-baseline": "middle" }, tickText(t)));
+    }
+    return { W, H, m, iw, ih, y, svg };
+  }
+  function xLabels(f, weeks, xOf) {
+    const every = Math.max(1, Math.ceil(weeks.length / Math.max(1, Math.floor(f.iw / 70))));
+    weeks.forEach((w, i) => {
+      if (i % every === 0) f.svg.append(s("text", { x: xOf(i), y: f.H - 8, class: "tick", "text-anchor": "middle" }, day(w.week)));
+    });
+  }
+
+  function weeksChart(weeks) {
+    const el = document.getElementById("chart-weeks");
+    if (!weeks.length) return el.replaceChildren();
+    const f = frame(el, "Reviews per week by verdict", niceMax(Math.max(...weeks.map((w) => w.reviews))));
+    const band = f.iw / weeks.length, bw = Math.min(24, band * 0.62), base = f.y(0);
+    weeks.forEach((w, i) => {
+      const x = f.m.l + band * i + (band - bw) / 2, passTop = f.y(w.pass), failTop = f.y(w.pass + w.fail);
+      if (w.pass) f.svg.append(s("path", { class: "m-good", d: barPath(x, passTop, bw, base - passTop, w.fail ? 0 : 4) }));
+      if (w.fail) {
+        const hgt = passTop - failTop - (w.pass ? 2 : 0);
+        if (hgt > 0) f.svg.append(s("path", { class: "m-critical", d: barPath(x, failTop, bw, hgt, 4) }));
+      }
+      const hit = s("rect", { class: "hit", x: f.m.l + band * i, y: f.m.t, width: band, height: f.ih, tabindex: "0", "aria-label": `Week of ${day(w.week)}: ${w.reviews} reviews, ${w.pass} pass, ${w.fail} fail` });
+      hover(hit, () => [tipRow(nf.format(w.reviews), `reviews, week of ${day(w.week)}`), tipRow(nf.format(w.pass), "PASS", "var(--good)"), tipRow(nf.format(w.fail), "FAIL", "var(--critical)")]);
+      f.svg.append(hit);
+    });
+    xLabels(f, weeks, (i) => f.m.l + band * i + band / 2);
+    el.replaceChildren(f.svg);
+  }
+
+  function rateChart(weeks) {
+    const el = document.getElementById("chart-rate");
+    if (!weeks.length) return el.replaceChildren();
+    const f = frame(el, "Findings per review by week", niceMax(Math.max(...weeks.map((w) => w.perReview))));
+    const xOf = (i) => f.m.l + (weeks.length === 1 ? f.iw / 2 : (f.iw * i) / (weeks.length - 1));
+    const pts = weeks.map((w, i) => [xOf(i), f.y(w.perReview)]);
+    const line = pts.map(([x, y], i) => `${i ? "L" : "M"}${x},${y}`).join("");
+    if (pts.length > 1) f.svg.append(s("path", { class: "m-area", d: `${line}L${pts[pts.length - 1][0]},${f.y(0)}L${pts[0][0]},${f.y(0)}Z` }));
+    f.svg.append(s("path", { class: "m-line", d: line }));
+    const [ex, ey] = pts[pts.length - 1];
+    f.svg.append(s("circle", { class: "m-dot", cx: ex, cy: ey, r: 4 }));
+    f.svg.append(s("text", { class: "endlabel", x: ex + 8, y: ey, "dominant-baseline": "middle" }, String(weeks[weeks.length - 1].perReview)));
+    xLabels(f, weeks, xOf);
+    const xhair = s("line", { class: "xhair", y1: f.m.t, y2: f.m.t + f.ih, visibility: "hidden" });
+    const cursor = s("circle", { class: "m-dot", r: 4, visibility: "hidden" });
+    f.svg.append(xhair, cursor);
+    const overlay = s("rect", { class: "hit", x: f.m.l, y: f.m.t, width: f.iw, height: f.ih, tabindex: "0", "aria-label": "Findings per review by week; use arrow keys to step through weeks" });
+    let at = weeks.length - 1;
+    const mark = (i, e) => {
+      at = Math.max(0, Math.min(weeks.length - 1, i));
+      const [x, y] = pts[at], w = weeks[at];
+      for (const el of [xhair, cursor]) el.setAttribute("visibility", "visible");
+      xhair.setAttribute("x1", x); xhair.setAttribute("x2", x);
+      cursor.setAttribute("cx", x); cursor.setAttribute("cy", y);
+      tip.replaceChildren(tipRow(String(w.perReview), `findings per review, week of ${day(w.week)}`, "var(--accent)"), tipRow(nf.format(w.findings), `findings in ${w.reviews} reviews`));
+      tip.hidden = false;
+      const r = overlay.getBoundingClientRect();
+      if (e && e.clientX != null) placeTip(e.clientX, e.clientY);
+      else placeTip(r.left + (x - f.m.l) * (r.width / f.iw), r.top + (y - f.m.t) * (r.height / f.ih));
+    };
+    const nearest = (e) => {
+      const r = overlay.getBoundingClientRect(), px = ((e.clientX - r.left) / r.width) * f.iw + f.m.l;
+      let best = 0;
+      pts.forEach(([x], i) => { if (Math.abs(x - px) < Math.abs(pts[best][0] - px)) best = i; });
+      return best;
+    };
+    const clear = () => { hideTip(); for (const el of [xhair, cursor]) el.setAttribute("visibility", "hidden"); };
+    overlay.addEventListener("pointermove", (e) => mark(nearest(e), e));
+    overlay.addEventListener("pointerleave", clear);
+    overlay.addEventListener("focus", () => mark(at));
+    overlay.addEventListener("blur", clear);
+    overlay.addEventListener("keydown", (e) => {
+      const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      if (d) { e.preventDefault(); mark(at + d); }
+    });
+    f.svg.append(overlay);
+    el.replaceChildren(f.svg);
+  }
+
+  // ── lists and tables ──
+  let attnAll = false;
+  function renderAttention(a) {
+    document.getElementById("attn-sub").textContent =
+      `Findings the branch's last review still listed: open when that review failed, shipped when it passed with the finding still in its report. ${a.attention.open} open, ${a.attention.shipped} shipped.`;
+    const items = attnAll ? a.attention.items : a.attention.items.slice(0, 8);
+    const el = document.getElementById("attn");
+    if (!a.attention.items.length) return el.replaceChildren(h("li", { class: "empty" }, "Nothing is still listed in this view."));
+    el.replaceChildren(...items.map((f) =>
+      h("li", {},
+        h("div", { class: "meta" }, h("span", { class: "tag" }, f.outcome), sev(f.severity), h("span", { class: "loc" }, loc(f.path, f.line)), h("span", { class: "muted", style: "font-size:.8rem" }, `${f.repo} · ${f.branch} · ${day(f.ts)}`)),
+        h("p", { class: "ftext" }, f.text))));
+    const total = a.attention.open + a.attention.shipped;
+    if (a.attention.items.length > 8)
+      el.append(h("li", {}, h("button", { class: "more", type: "button", onclick: () => { attnAll = !attnAll; renderAttention(a); } },
+        attnAll ? "Show fewer" : `Show ${a.attention.items.length - 8} more${total > a.attention.items.length ? ` (the ${a.attention.items.length} most severe of ${total})` : ""}`)));
+  }
+
+  const table = (cols, rows) =>
+    h("table", {}, h("thead", {}, h("tr", {}, cols.map(([label, right]) => h("th", { class: right ? "r" : null }, label)))),
+      h("tbody", {}, rows.map((r) => h("tr", {}, r.map((cell, i) => h("td", { class: cols[i][1] ? "r" : null }, cell))))));
+
+  function renderTables(a) {
+    document.getElementById("hotspots").replaceChildren(table(
+      [["File"], ["Findings", 1], ["Branches", 1], ["Severity"]],
+      a.hotspots.map((x) => [h("span", { class: "loc" }, h("span", { class: "muted" }, `${x.repo} · `), x.path), nf.format(x.n), nf.format(x.branches), minibar(x.severity, x.n)])));
+    document.getElementById("branches").replaceChildren(table(
+      [["Branch"], ["Rounds", 1], ["Findings", 1], ["Cost", 1], ["Last"]],
+      a.branches.map((b) => [h("div", {}, h("span", { class: "loc" }, b.branch), h("div", { class: "muted", style: "font-size:.78rem" }, `${b.repo} · ${day(b.last)}`)), nf.format(b.rounds), nf.format(b.findings), money(b.cost), verdict(b.verdict)])));
+    document.getElementById("reviewers").replaceChildren(table(
+      [["Reviewer"], ["Reviews", 1], ["FAIL", 1], ["Findings / review", 1], ["$ / review", 1]],
+      a.reviewers.map((r) => [h("span", { class: "loc" }, r.key), nf.format(r.reviews), pct(r.fail, r.reviews), String(r.perReview), money(r.costPerReview)])));
+    document.getElementById("repos").replaceChildren(table(
+      [["Repo"], ["Reviews", 1], ["FAIL", 1], ["Findings / review", 1], ["Median rounds", 1], ["Cost", 1]],
+      a.repos.map((r) => [h("span", { class: "loc" }, r.key), nf.format(r.reviews), pct(r.fail, r.reviews), String(r.perReview), String(r.roundsMedian), money(r.cost)])));
+  }
+
+  // ── explorer ──
+  const PAGE = 50;
+  let shown = PAGE;
+  const fq = document.getElementById("f-q"), fsev = document.getElementById("f-sev"), farea = document.getElementById("f-area"), fcause = document.getElementById("f-cause"), fout = document.getElementById("f-out");
+  const fill = (sel, label, values) => sel.replaceChildren(h("option", { value: "" }, `Any ${label}`), ...values.map((v) => h("option", { value: v }, v)));
+  fill(fsev, "severity", SEV);
+  fill(farea, "area", Object.keys(DATA.taxonomy.areas));
+  fill(fcause, "cause", Object.keys(DATA.taxonomy.causes));
+  fill(fout, "outcome", ["fixed", "elsewhere", "dropped", "resolved", "repeated", "open", "shipped"]);
+  for (const el of [fq, fsev, farea, fcause, fout]) el.addEventListener("input", () => { shown = PAGE; renderExplorer(); });
+  document.getElementById("f-more").addEventListener("click", () => { shown += PAGE; renderExplorer(); });
+
+  function renderExplorer() {
+    const q = fq.value.trim().toLowerCase();
+    const rows = DATA.explorer.filter((f) =>
+      (scope === "all" || f.r === scope) &&
+      (!fsev.value || f.s === fsev.value) && (!farea.value || f.a === farea.value) &&
+      (!fcause.value || f.c === fcause.value) && (!fout.value || f.o === fout.value) &&
+      (!q || `${f.p} ${f.t} ${f.e} ${f.b} ${f.r}`.toLowerCase().includes(q)));
+    rows.sort((x, y) => y.ts.localeCompare(x.ts) || SEV.indexOf(x.s) - SEV.indexOf(y.s));
+    document.getElementById("f-count").textContent = `Showing ${nf.format(Math.min(shown, rows.length))} of ${nf.format(rows.length)}`;
+    document.getElementById("f-body").replaceChildren(...rows.slice(0, shown).map((f) =>
+      h("tr", {},
+        h("td", {}, sev(f.s)),
+        h("td", {}, h("div", { class: "loc" }, loc(f.p, f.l)), h("p", { class: "ftext" }, f.t),
+          f.e ? h("details", { class: "eff" }, h("summary", {}, "Effect"), h("p", {}, f.e)) : null),
+        h("td", {}, h("div", { style: "display:grid;gap:4px;justify-items:start" }, f.a ? h("span", { class: "tag" }, f.a) : null, f.c ? h("span", { class: "tag" }, f.c) : h("span", { class: "muted", style: "font-size:.8rem" }, "uncategorized"))),
+        h("td", { class: "ctx" }, h("div", {}, f.b), h("div", {}, `${f.r} · ${day(f.ts)} · ${f.o}`)))));
+    document.getElementById("f-more").hidden = shown >= rows.length;
+  }
+
+  function renderAbout(a) {
+    const late = a.late || {};
+    const p = (...kids) => h("p", {}, ...kids);
+    const code = (t) => h("code", {}, t);
+    document.getElementById("about").replaceChildren(
+      p(`${nf.format(a.runs.transcript)} of ${nf.format(a.runs.n)} reviews were imported from reviewer transcripts, which carry no commit shas. Their findings can only be marked resolved; fixed, elsewhere and dropped need reviews the gate recorded with shas (${nf.format(a.runs.gate)} here).`),
+      p(`A finding's outcome is judged against the next review of the same branch. Late finds, raised by no earlier review of the branch: ${nf.format(late["missed-earlier"] || 0)} with nothing changed since (missed earlier), ${nf.format((late["after-file-change"] || 0) + (late["after-other-change"] || 0))} after a change, ${nf.format(late.unknown || 0)} unknown. Flaky verdicts: ${a.flaky.flipped} of ${a.flaky.rereviewed} unchanged diffs reviewed twice.`),
+      DATA.uncategorized
+        ? p(`${nf.format(DATA.uncategorized)} findings have no area or cause yet. `, code("claude-review-stats --categorize"), " classifies them with haiku and asks before it spends.")
+        : p("Every finding has an area and a cause."),
+      p(`Built from `, code("claude-review-stats --json"), ` on ${dayYear(DATA.generated)}. Rerun `, code("/review-insights"), " to refresh."));
+  }
+
+  function render() {
+    const a = DATA.scopes[scope];
+    renderScope();
+    renderLede(a);
+    renderTiles(a);
+    renderCauses(a);
+    renderAreas(a);
+    weeksChart(a.weeks);
+    rateChart(a.weeks);
+    renderAttention(a);
+    renderTables(a);
+    renderExplorer();
+    renderAbout(a);
+  }
+
+  renderRecs();
+  render();
+  let lastWidth = 0;
+  new ResizeObserver(([entry]) => {
+    const w = Math.round(entry.contentRect.width);
+    if (w === lastWidth) return;
+    lastWidth = w;
+    const a = DATA.scopes[scope];
+    weeksChart(a.weeks);
+    rateChart(a.weeks);
+  }).observe(document.getElementById("chart-weeks"));
+})();
+</script>
