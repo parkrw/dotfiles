@@ -102,7 +102,7 @@ function aggregate(runs, findings, tax, runById) {
   const chains = groupBy(runs, (r) => `${r.worktree}\0${r.branch}`).map(([, rs]) => rs.sort((a, b) => a.ts.localeCompare(b.ts)));
   const rounds = chains.map(roundsOf).filter(Boolean);
   const categorized = findings.filter((f) => f.cause && tax.causes[f.cause]);
-  const rereviewed = groupBy(runs.filter((r) => r.diff), (r) => r.diff).filter(([, rs]) => rs.length > 1);
+  const rereviewed = groupBy(runs.filter((r) => r.diff && r.verdict !== "none"), (r) => r.diff).filter(([, rs]) => rs.length > 1);
 
   const causes = groupBy(categorized, (f) => f.cause)
     .map(([k, fs]) => ({
