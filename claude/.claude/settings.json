@@ -13,6 +13,7 @@
       "Read",
       "Artifact",
       "EnterWorktree",
+      "ExitWorktree",
       "Bash(gh list:*)",
       "Bash(gh issue view:*)",
       "Bash(gh pr view:*)",
@@ -39,10 +40,6 @@
     ],
     "ask": [
       "Agent",
-      "Bash(git push:*)",
-      "Bash(git pull:*)",
-      "Bash(git merge:*)",
-      "Bash(git rebase:*)",
       "Bash(git stash:*)",
       "Bash(git reset:*)",
       "Bash(git cherry-pick:*)",
