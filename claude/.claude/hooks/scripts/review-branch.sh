@@ -147,19 +147,25 @@ done < <(git -C "$worktree" diff --name-only "$base...$tip")
 state="$HOME/.claude/hooks/state"; mkdir -p "$state"
 # Content-keyed: the approval belongs to the diff, not to a checkout path.
 sentinel="$state/review-ok-branch-$hash"
-# Report, live log, and per-engine scratch stay path-keyed so a repo has one
-# readable latest report.
+# Report and live log stay path-keyed so a repo has one readable latest report.
 repokey=$(printf '%s' "$worktree" | shasum -a 256 | awk '{print $1}')
 report="$state/review-branch-$repokey.md"
 live="/tmp/claude-review-branch-$repokey.log"
-stream="$state/review-branch-$repokey.stream.jsonl"
-codex_last="$state/review-branch-$repokey.last"
 
 if [[ -n "$dry_run" ]]; then
   printf 'worktree=%s\nbase=%s\ntip=%s\ndiff=%s\nsentinel=%s\nlines=%s\ndocs_only=%s\nengine=%s\n' \
     "$worktree" "$base" "$tip" "$hash" "$sentinel" "$branch_lines" "$docs_only" "$engine"
   exit 0
 fi
+
+# The verdict is read back from these, so they are per run, never per path:
+# two reviews of one worktree do overlap (a background review and a terminal
+# push), and a shared file hands the slower one a stream the other truncated
+# mid-write (jq exits 5) or the other's final message as its own verdict.
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/review-branch.XXXXXX")
+trap 'rm -rf "$scratch"' EXIT
+stream="$scratch/stream.jsonl"
+codex_last="$scratch/last.md"
 
 : > "$live"
 echo "review-branch: live log: $live" >&2
