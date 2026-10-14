@@ -1,6 +1,6 @@
 ---
 name: spawn
-description: Open a new interactive Claude Code session in a new tmux window (like prefix+c) of the current tmux session, running this session's model and effort (never max). Seeds it with a handoff pickup (task file's Handoff section, or HANDOFF.md) and a 25%/30% context-budget rule; optional argument appends the task; --fresh skips the handoff pickup, e.g. /spawn, /spawn "continue task 07c2", /spawn --fresh "task".
+description: Open a new interactive Claude Code session in a new tmux window (like prefix+c) of the current tmux session, running this session's model and effort (never max). Seeds it with a handoff pickup (task file's Handoff section, or HANDOFF.md) and a 25%/30% context-budget rule; optional argument appends the task; --fresh skips the handoff pickup; --cwd <dir> opens the window in <dir> instead of $PWD, e.g. /spawn, /spawn "continue task 07c2", /spawn --fresh "task".
 ---
 
 ## Help
@@ -19,6 +19,7 @@ verbatim and **stop — do not execute the skill**.
   /spawn                         new session, picks up the existing handoff
   /spawn "continue task 07c2"    new session seeded with a task
   /spawn --fresh "task"          seeded with the task only, no handoff pickup
+  /spawn --cwd <dir> "task"      open the window in <dir> instead of $PWD
   /spawn --help                  show this help
 
   See also:
@@ -36,18 +37,17 @@ Open a fresh interactive `claude` in a **new window of the current tmux session*
 
 - `[ -n "$TMUX" ]` — if unset, stop and tell the user this only works inside tmux.
 - Capture the session name: `session=$(tmux display-message -p '#S')`.
+- `dir` is the `--cwd` value parsed in step 2, else `$PWD`. `[ -d "$dir" ]` — if not, stop and say so: tmux silently starts a window whose `-c` dir is missing in `$HOME`.
 
 ## 2. Build the seed prompt
 
-If `$ARGUMENTS` starts with `--fresh`, remember that and strip the flag; every item below reads the stripped `$ARGUMENTS`.
+Strip the leading flags from `$ARGUMENTS`, in any order, and remember them: `--fresh`, and `--cwd <dir>` (an absolute path, quoted if it holds spaces). Every item below reads the stripped `$ARGUMENTS`.
 
 The new session always starts with an initial prompt composed of, in order:
 
 1. **Handoff pickup** — omit under `--fresh`: the task arrives complete, and an older handoff would compete with it. Otherwise resolve where the handoff lives, in this order:
-   - `TODO/README.md` exists → `Read TODO/README.md, follow its Resume pointer
-     to the task file, and continue from that file's Handoff section.`
-   - else `HANDOFF.md` exists in `$PWD` (`[ -f HANDOFF.md ]`) →
-     `Read HANDOFF.md first and continue from it.`
+   - `$dir/TODO/README.md` exists → `Read TODO/README.md, follow its Resume pointer to the task file, and continue from that file's Handoff section.`
+   - else `HANDOFF.md` exists in `$dir` (`[ -f "$dir/HANDOFF.md" ]`) → `Read HANDOFF.md first and continue from it.`
    - else omit this line.
 2. **Context budget** — always include, verbatim:
 
@@ -61,11 +61,7 @@ The new session always starts with an initial prompt composed of, in order:
    > `--effort max`, and do implementation work yourself rather than
    > delegating it.
 
-3. **Next command** — when `$ARGUMENTS` is empty, route via
-   `~/.claude/skills/shared/next-command.md` and append the resulting command
-   as the task (`Start with: /fan.`). A seeded session that has to
-   re-derive which command to run burns context on a decision this session
-   already has the state for. Omit only when the routing finds no plan store.
+3. **Next command** — when `$ARGUMENTS` is empty, route via `~/.claude/skills/shared/next-command.md`, running its checks in `$dir` (`(cd "$dir" && gh repo view …)`, `git -C "$dir" …`), and append the resulting command as the task (`Start with: /fan.`). A seeded session that has to re-derive which command to run burns context on a decision this session already has the state for. Omit only when the routing finds no plan store.
 4. **`$ARGUMENTS`** — if non-empty, appended last as the actual task, and it
    overrides the routed command.
 
@@ -78,7 +74,7 @@ target for verification:
 
 ```bash
 read -r pane target <<<"$(tmux new-window -P -F '#{pane_id} #{session_name}:#{window_index}' \
-  -n cc -c "$PWD" "claude --model '<model-id>' --effort <effort>")"   # per the rule above; drop --effort if unknown
+  -n cc -c "$dir" "claude --model '<model-id>' --effort <effort>")"   # per the rule above; drop --effort if unknown
 ```
 
 Then deliver the seed by tmux buffer, which has no quoting surface:
@@ -109,5 +105,4 @@ tmux list-windows -t "$session" -F '#{session_name}:#{window_index} #{window_nam
 - The target from step 2 must appear in this list. If it does not, report the
   failure — re-run the launch command in the current pane's shell context to
   surface the error, don't silently retry.
-- Report to the user: window target (e.g. `dotfiles:3`), window name, and the
-  model launched.
+- Report to the user: window target (e.g. `dotfiles:3`), window name, `$dir`, and the model launched.
