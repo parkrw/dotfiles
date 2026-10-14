@@ -1,6 +1,6 @@
 ---
 name: newchat
-description: Compose a paste-ready prompt for starting a task in a fresh Claude session, centered on a "Context a fresh read won't give you" section. Use when asked to "prompt a new chat", "draft a prompt for a new session", or hand a task to another session. `--spawn` also saves the prompt to a file and opens it in a new tmux window via /spawn; `--spawn --replace` then ends this session, for a context handoff.
+description: Compose a paste-ready prompt for starting a task in a fresh Claude session, centered on a "Context a fresh read won't give you" section. Use when asked to "prompt a new chat", "draft a prompt for a new session", or hand a task to another session. `--spawn` also saves the prompt to a file and opens it via /spawn in a new tmux window started in the work's checkout; `--spawn --replace` then ends this session, for a context handoff.
 ---
 
 Produce exactly one fenced code block the user can paste into a new session. Nothing after the block, except what `--spawn` adds below.
@@ -8,15 +8,16 @@ Produce exactly one fenced code block the user can paste into a new session. Not
 Structure, in order:
 
 1. **The task** — one line, imperative, with issue/PR numbers and where to read them (`gh issue view N`). Name the parent epic if there is one.
-2. **"Context a fresh read won't give you:"** — the payload. Only facts the new session cannot derive from the repo, the issues, or the docs:
+2. **Where** — in a git repo, one line: `Branch <branch> in <absolute checkout path>; work there.` The checkout is the one the next task continues in — where this session edited and committed, which can differ from `$PWD`. Resolve it with `git -C <a path you edited> rev-parse --show-toplevel` and `branch --show-current`; a detached HEAD reads `detached at <short sha>`. Outside a repo, omit the line.
+3. **"Context a fresh read won't give you:"** — the payload. Only facts the new session cannot derive from the repo, the issues, or the docs:
    - decisions settled in conversation, stated as settled (with the why in one clause, e.g. "no palette value changes — values are #261's, blocked on the brand owner")
    - exact values, measurements, or names established during the session
    - traps discovered: things that look like X but are Y ("the two token blocks share names but are deliberately different themes")
    - file:line anchors for the places the work starts
    - invariants to preserve that aren't written down anywhere
-3. **Gates** — the tests/lint/checks that define done.
-4. **Standing rules** — keep output as concise as possible: lead with the result, no preamble, no recaps, shortest response that fully answers. Branch first, never work on main. git and gh reads are fine without asking; every git write and every mutating gh command needs the user's approval individually.
-5. **After-merge reminders** — comments to post, people to ping, follow-up issues.
+4. **Gates** — the tests/lint/checks that define done.
+5. **Standing rules** — keep output as concise as possible: lead with the result, no preamble, no recaps, shortest response that fully answers. Branch first, never work on main. git and gh reads are fine without asking; every git write and every mutating gh command needs the user's approval individually.
+6. **After-merge reminders** — comments to post, people to ping, follow-up issues.
 
 Rules:
 - Every bullet must earn its place: if a fresh session would find it within 30 seconds of reading the issue, cut it.
@@ -28,7 +29,7 @@ Rules:
 When `$ARGUMENTS` starts with `--spawn`, drop the flag (and a following `--replace`) from the task text, compose the block as above, then:
 
 1. Write the block's contents, without the fences, to `$HOME/.local/state/claude/newchat/<repo>-<YYYYMMDD-HHMMSS>.md` (`mkdir -p` the directory). `<repo>` is `basename "$(git rev-parse --show-toplevel)"`, or `basename "$PWD"` outside a repo. The file lives outside the repo so nothing lands in the tracked tree, and it survives a `/clear`.
-2. If `$TMUX` is set, invoke the `spawn` skill with the argument `--fresh Read <absolute file path> and do the task in it.` `--fresh` stops spawn from adding a handoff pickup that would compete with this task. Pass the path, never the prompt: spawn's seed must be one line, and a multi-line prompt either gets joined into one line or submits at its first newline. The spawned session counts toward the 6-worker cap.
+2. If `$TMUX` is set, invoke the `spawn` skill with the argument `--cwd <Where's checkout path> --fresh Read <absolute file path> and do the task in it.` `--cwd` starts the new `claude` in that checkout, so the tmux status line, which names each window by its `pane_current_path`, shows it; a `cd` in this session cannot move it. Drop `--cwd` when the block has no Where line. `--fresh` stops spawn from adding a handoff pickup that would compete with this task. Pass the path, never the prompt: spawn's seed must be one line, and a multi-line prompt either gets joined into one line or submits at its first newline. The spawned session counts toward the 6-worker cap.
 3. Print the block, then the file path, then spawn's report: its window target, or its failure. Without `$TMUX`, skip step 2 and print `@<absolute file path>` instead, for the user to send after `/clear`.
 
 ## `--replace`

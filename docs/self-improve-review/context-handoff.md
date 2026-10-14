@@ -19,7 +19,7 @@ tmux new -s work         # then start claude inside it
    - **In tmux:** it blocks the stop, and its message becomes Claude's next instruction: finish or checkpoint the current sub-task, wait for any background review, build or test run, then run `/newchat --spawn --replace "continue: <task>"`.
    - **Outside tmux:** it shows a warning and does nothing else.
    - **Mid-rebase or mid-merge:** it stays quiet and checks again at the next turn.
-3. **`/newchat --spawn`:** writes the handoff prompt to `~/.local/state/claude/newchat/<repo>-<timestamp>.md`, then `/spawn --fresh` opens a new window running the same model and effort, seeded with that file.
+3. **`/newchat --spawn`:** writes the handoff prompt to `~/.local/state/claude/newchat/<repo>-<timestamp>.md`, naming the branch and checkout the work is on, then `/spawn --cwd <checkout> --fresh` opens a new window in that checkout, so the tmux status line shows it, running the same model and effort, seeded with that file.
 4. **`--replace`:** once the new window is confirmed alive, it kills the old pane. If the spawn failed, the old session stays open.
 
 Sessions opened by `/spawn` are also told the rule directly: hand off at 25%, never go past 30%. A `/fan` lead uses 15% and 20%, because its plan file carries the resume point.
