@@ -168,20 +168,20 @@ A doc line this diff adds states the rule, not the list of callers or cases that
 
 Follow the shape measured in Orient step 3: section, line, prefix, scope, issue reference. The line says what the reader can now do or rely on. A scope that is not in the count needs a reason.
 
-## 6. Commit subject and body
+## 6. Commit subject
 
-- Subject: the measured shape - case, length, prefix. It states what the reader can now rely on. Close the issue from the subject or body the way the lead does.
-- Body: the mechanism that was wrong and what now holds, as prose. For a multi-item change the body is the CHANGELOG bullets. One paragraph per line, no hard wrap.
-- If CI judges the PR description, write the body under the same prose rules.
+- Subject: the measured shape - case, length, prefix. It states what the reader can now rely on. Close the issue from the subject or the PR body the way the lead does.
+- No commit body.
+- If CI judges the PR description, write the PR body under the repo's prose rules.
 - No `Co-authored-by`, no `Claude-Session`.
 
 ## 7. Hand off
 
-Print these for the human to run, placeholders filled in. The branch name follows the naming measured in Orient step 3. Write the PR body to `<body-file>` first, as Ship step 5 does. A subject or commit body with an apostrophe goes in double quotes and carries no `$` or backtick.
+Print these for the human to run, placeholders filled in. The branch name follows the naming measured in Orient step 3. Write the PR body to `<body-file>` first, as Ship step 5 does. A subject with an apostrophe goes in double quotes and carries no `$` or backtick.
 
 ```
 git switch -c <branch>
-git add <path>... && git commit -m '<subject>' -m '<body>'
+git add <path>... && git commit -m '<subject>'
 git push -u origin <branch>
 gh pr create --title '<subject>' --body-file <body-file>
 ```
@@ -314,4 +314,4 @@ With `--integrate`, no fetch, no second rebase or merge and no re-review: push t
 
 Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), step 3a stopped, or the gate or pre-push refuses: print the behind or current block for the human, as plain Ship does.
 
-`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `git merge <default>` in place of `git rebase <default>`. When step 1 carried uncommitted work over, either block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy before a `pull --ff-only` that a dirty tree would block. Subject and body follow Check step 6; a PR that finishes an issue ends its body with `Closes #N`.
+`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `git merge <default>` in place of `git rebase <default>`. When step 1 carried uncommitted work over, either block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy before a `pull --ff-only` that a dirty tree would block. The subject follows Check step 6; a PR that finishes an issue ends its body with `Closes #N`.
