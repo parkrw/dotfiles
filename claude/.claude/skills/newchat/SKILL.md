@@ -8,7 +8,7 @@ Produce exactly one fenced code block the user can paste into a new session. Not
 Structure, in order:
 
 1. **The task** — one line, imperative, with issue/PR numbers and where to read them (`gh issue view N`). Name the parent epic if there is one.
-2. **Where** — in a git repo, one line: `Branch <branch> in <absolute checkout path>; work there.` The checkout is the one the next task continues in — where this session edited and committed, which can differ from `$PWD`. Resolve it with `git -C <a path you edited> rev-parse --show-toplevel` and `branch --show-current`; a detached HEAD reads `detached at <short sha>`. Outside a repo, omit the line.
+2. **Where** — in a git repo, one line: `Branch <branch> in <absolute checkout path>; work there.` The checkout is the one the next task continues in — where this session edited and committed, which can differ from `$PWD`. Resolve it with `git -C "$(dirname <a file you edited>)" rev-parse --show-toplevel`, and `branch --show-current` the same way; a detached HEAD reads `detached at <short sha>`. Outside a repo, omit the line.
 3. **"Context a fresh read won't give you:"** — the payload. Only facts the new session cannot derive from the repo, the issues, or the docs:
    - decisions settled in conversation, stated as settled (with the why in one clause, e.g. "no palette value changes — values are #261's, blocked on the brand owner")
    - exact values, measurements, or names established during the session
