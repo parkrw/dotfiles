@@ -27,8 +27,9 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
                    the working tree), then the commands for the human
   /ftl ship       worktree (created on main/detached), fetch, check,
                    commit, then claude-review (opus, xhigh)
-                   in a loop - fix each finding's class, rerun the
-                   checks, commit, re-review - until zero
+                   in a loop - run each runtime proof's test,
+                   fix each finding it does not refute as a class,
+                   rerun the checks, commit, re-review - until zero
                    findings; then print cd, push and gh pr create,
                    with a rebase first only when behind
   /ftl ship --integrate
@@ -274,9 +275,14 @@ Run it in the background and wait for it; a review takes minutes and a foregroun
 
 - `## Findings` is exactly `none`: the loop is done. `VERDICT: PASS` alone is not enough, since PASS can carry minors. `## Adjacent smells` never counts: it is advisory, outside the diff, and not this PR's to fix.
 - `already approved`: this exact diff passed earlier. Read the report file (`~/.claude/hooks/state/review-branch-<key>.md`); if its `diff sha256` matches the one printed and its findings are `none`, done. Otherwise fix those findings; the next commit changes the hash and the next round reviews afresh.
-- Anything else: print `round N: <count> findings`. Fix each finding in `"$worktree"`, most severe first, as a class, not an instance - most later-round findings land in a file an earlier round flagged:
+- Anything else: print `round N: <count> findings`. The reviewer writes a runtime finding's test but never runs it, so run it before fixing anything. For each `Proof: runtime` finding, paste its test into the test file its neighbors use and run that file at HEAD. Adapt only the harness - imports, fixtures, render helpers - never the input or the expected value. Print `proof <path:line>: confirmed|disputed|unrun`:
+  - The assertion on the proof's expected value fails: confirmed. Keep the test; it is the finding's regression test.
+  - The test passes: disputed. Remove the test and treat the finding as wrong, with the reason `proof test passes`.
+  - The test errors before that assertion and the harness cannot be fixed, or the repo has no runner for that file: unrun. Judge the finding by reading, as one without a runtime proof.
+
+  Then fix each finding that is not disputed in `"$worktree"`, most severe first, as a class, not an instance - most later-round findings land in a file an earlier round flagged:
   - Grep `git -C "$worktree" diff origin/<default>...HEAD`, the diff the reviewer reads, for the same pattern and fix every occurrence, not only the line cited.
-  - Add the test that fails without the fix, if the repo has tests. A doc or prose finding needs none.
+  - Add the test that fails without the fix, if the repo has tests; for a confirmed finding, that is its proof test. A doc or prose finding needs none.
   - A finding that is wrong gets no code change. Keep it, as `path:line - defect - reason`, for the PR body's `Disputed findings` section: the human sees every finding the author dismissed.
 
   Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged: a fix is new code the checkers have not seen. Fix what fails and add those paths again, or name it as left out and why, as Check allows. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
