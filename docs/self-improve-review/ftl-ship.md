@@ -43,7 +43,17 @@ Merge into `~/.claude/settings.json`:
         { "type": "command", "command": "~/.claude/hooks/scripts/bash-write-gate.sh", "timeout": 5 },
         { "type": "command", "command": "~/.claude/hooks/scripts/pr-size-gate.sh", "timeout": 10 } ] },
       { "matcher": "Edit|Write|MultiEdit", "hooks": [
-        { "type": "command", "command": "~/.claude/hooks/scripts/outcome-assert-gate.sh", "timeout": 5 } ] }
+        { "type": "command", "command": "~/.claude/hooks/scripts/outcome-assert-gate.sh", "timeout": 5 } ] },
+      { "matcher": "Skill", "hooks": [
+        { "type": "command", "command": "~/.claude/hooks/scripts/ftl-mode.sh", "timeout": 5 } ] }
+    ],
+    "UserPromptExpansion": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "~/.claude/hooks/scripts/ftl-mode.sh", "timeout": 5 } ] }
+    ],
+    "Stop": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "~/.claude/hooks/scripts/ftl-stop-gate.sh", "timeout": 15 } ] }
     ]
   }
 }
@@ -79,6 +89,7 @@ Always denied: `gh pr merge`, `git pull` (except `--ff-only`), and merging or re
 - `bash-write-gate.sh`: writes on main, bulk staging, `--no-verify`, and integrating from a remote.
 - `pre-push`: pushes to main, force-pushes, and any push without a review approval for the diff's sha256.
 - `outcome-assert-gate.sh`: mocks, call-shape asserts, and `.skip` in tests.
+- `ftl-stop-gate.sh`: a ship turn that ends without its hand-off (the branch's files committed, subject-only commits, a passing review, the PR body file, a PR URL or the push block), unless it ends where the skill says to wait: a question, commands printed for you, variants, open findings or a running review. It logs to `~/.claude/hooks/logs/ftl-stop-gate.jsonl` and blocks only after `touch ~/.claude/hooks/.ftl-stop-gate-enforce`. `ftl-mode.sh` tells it which `/ftl` mode the session is in.
 
 ## Extras
 
