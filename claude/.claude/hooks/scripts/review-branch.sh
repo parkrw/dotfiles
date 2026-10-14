@@ -170,10 +170,23 @@ codex_last="$scratch/last.md"
 : > "$live"
 echo "review-branch: live log: $live" >&2
 
+# claude-review-stats recognizes a reviewer transcript by the first words of
+# this prompt, "You are a senior reviewer. Review the branch diff" — change
+# both together, or imported reviews silently stop counting.
+#
+# The goal is approval and an unproven finding is dropped, because every
+# finding costs the author a fix-and-rereview round (/ftl ship loops until zero
+# findings) whether it is real or not. A runtime defect proves itself with a
+# failing test the author runs, so the reviewer stays read-only; any other
+# defect proves itself by quoting both sides. The search is still told to
+# assume a defect: the verdict follows mechanically from Findings, so the only
+# place a pull toward approval can act is a search that stops looking early.
 prompt='You are a senior reviewer. Review the branch diff that a pull request
-would show: `git diff '"$base"'...HEAD`. Work through this scope in order — a
-reviewer who just "reviews the code" returns style notes and misses the
-contract breaks.
+would show: `git diff '"$base"'...HEAD`. Your goal is to approve this pull
+request, but only if it is fit for release. Search the whole scope below as
+if a defect is there; approve only when none survives the proof rule. Work
+through this scope in order — a reviewer who just "reviews the code" returns
+style notes and misses the contract breaks.
 
 Scope: a finding is a defect this diff introduces or changes — in its added
 and edited lines, or in behaviour that changes because of them (a caller a
@@ -182,8 +195,16 @@ not touch is out of scope for Findings even when it is wrong: it is not this
 PR'\''s to fix, and a FAIL on it blocks a change that did not cause it.
 Every bullet below is judged against the diff, not the repo.
 
-- Correctness. Every finding carries a concrete failure: the input or state
-  that produces a wrong result, a crash, or a hang. No scenario, no finding.
+Proof: a finding without proof is an opinion. Drop it, and do not move it to
+Unverified either.
+- A runtime defect (a wrong result, crash, hang, exploitable input, lost or
+  double-applied write, race) needs a failing test case: the exact input or
+  state, the expected and the actual result, and a test the author can paste
+  and run. Write the test; never run it — you read, the author runs.
+- Any other defect needs quoted proof: the diff line, and the rule, test, CI
+  step, or second statement it breaks, each quoted with its path:line.
+
+- Correctness. A wrong result, a crash, or a hang on some input or state.
 - Security, data integrity, reliability. Injection; secrets or tokens in the
   diff; widened permissions; a bypassed gate (--no-verify, a repo-local
   core.hooksPath, a hand-written marker). Lost or double-applied writes, and
@@ -191,11 +212,11 @@ Every bullet below is judged against the diff, not the repo.
   missing timeouts.
 - Repo rules. Read this repo'\''s CLAUDE.md/AGENTS.md and the docs whose trigger
   matches the diff, then judge the diff against those — not against generic
-  best practice.
-- Patterns and style. Match the surrounding code and each file'\''s own
-  prevailing convention: naming, error handling, comment policy, prose wrap.
-- Tests. Changed behaviour with no test is a finding. Judge by READING the test
-  files. Each assertion must check an observable outcome: a result, return
+  best practice. Naming, error handling, comments, and style are findings only
+  when one of those written rules states them.
+- Tests. Changed behaviour with no test is a finding; its proof is the changed
+  line and the test files you read that do not cover it. Judge by READING the
+  test files. Each assertion must check an observable outcome: a result, return
   code, emitted header or output, or side effect. Asserting call shape
   (calledWith, arity, call counts, a query'\''s field list) is a finding. So is a
   stub that neuters the path under test, because it turns a green suite into no
@@ -217,13 +238,16 @@ only — a live secret, data loss or a security hole reachable on the normal
 path, today. Nothing less: no style, naming, dead code, or missing tests in
 untouched files. "none" is the expected content.
 
-VERDICT is decided by Findings alone. Adjacent smells and Unverified never
-move it.
+VERDICT is decided by Findings alone, and fit for release means Findings is
+"none": one proven finding of any severity is FAIL. Adjacent smells and
+Unverified never move it.
 
 Output exactly this shape:
 ## Findings
 path:line — blocker|major|minor — defect (most severe first; "none" if none)
-  Evidence: quoted text or command output
+  Proof: runtime — input <exact input or state>; expected <x>; actual <y>
+    <the failing test, every line indented four spaces>
+  Proof: otherwise — path:line <quoted text>, one Proof line per side
   Effect: the concrete failure
 ## Adjacent smells
 path:line — defect in code the diff did not touch (emergency only; "none" otherwise)
