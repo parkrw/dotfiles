@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ftl-mode.sh — UserPromptExpansion and PreToolUse(Skill). Records which /ftl
-# mode the session is in, for ftl-stop-gate.sh. Two events because each sees
-# one way in only: a typed /ftl expands without a Skill tool call, and a Skill
-# call by Claude never expands a prompt.
+# mode the session is in, and the prompt that started it, for
+# ftl-stop-gate.sh. Two events because each sees one way in only: a typed /ftl
+# expands without a Skill tool call, and a Skill call by Claude never expands
+# a prompt.
 # Kill switch: ~/.claude/hooks/.no-ftl-mode
 source "$HOME/.claude/hooks/scripts/common.sh"
 
@@ -43,4 +44,4 @@ esac
 STATE_DIR="$HOOKS_DIR/state"
 mkdir -p "$STATE_DIR"
 find "$STATE_DIR" -name 'ftl-mode-*' -type f -mtime +7 -delete 2>/dev/null || true
-printf '%s\n' "$mode" > "$STATE_DIR/ftl-mode-$session"
+printf '%s\n%s\n' "$mode" "$(jq -r '.prompt_id // ""' <<<"$INPUT")" > "$STATE_DIR/ftl-mode-$session"
