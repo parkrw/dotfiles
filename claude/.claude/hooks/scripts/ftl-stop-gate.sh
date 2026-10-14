@@ -128,8 +128,12 @@ else
   elif [[ -z "$branch" || "$branch" == "$default" ]]; then
     failed+=("on ${branch:-a detached HEAD}; Ship step 1 creates a worktree first")
   else
-    [[ -z "$(git -C "$wt" status --porcelain 2>/dev/null)" ]] ||
-      failed+=("uncommitted changes in $wt; every round commits before it reviews")
+    # Only files the branch changes: Ship commits the change's own paths, and
+    # step 1 carries every untracked file over, so others may stay dirty.
+    unreviewed=$(comm -12 <(git -C "$wt" diff --name-only HEAD 2>/dev/null | sort -u) \
+                          <(git -C "$wt" diff --name-only "origin/$default...HEAD" 2>/dev/null | sort -u) | paste -sd ' ' -)
+    [[ -z "$unreviewed" ]] ||
+      failed+=("uncommitted changes to $unreviewed, which the branch changes; every round commits before it reviews")
     bodies=$(git -C "$wt" log --format=%b "origin/$default..HEAD" 2>/dev/null || true)
     [[ -z "${bodies//[[:space:]]/}" ]] ||
       failed+=("a commit on $branch has a body or trailer; Check step 6 allows a subject only")
