@@ -95,6 +95,6 @@ Always denied: `gh pr merge`, `git pull` (except `--ff-only`), and merging or re
 
 - `claude-review --status`: whether this diff is already approved, without running a review.
 - `/fan <issues>`: one worktree and tmux pane per issue. `/fan`, `/spawn` and `/newchat --spawn` need Claude Code running inside tmux.
-- [context-handoff.md](context-handoff.md): hand off to a fresh session at 25% context.
+- [context-handoff.md](context-handoff.md): hand off to a fresh session at 20% context.
 - `git worktree remove <path>`: after the PR merges.
 - `touch ~/.claude/hooks/.disabled`: kill switch for every hook.

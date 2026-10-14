@@ -1,6 +1,6 @@
 ---
 name: spawn
-description: Open a new interactive Claude Code session in a new tmux window (like prefix+c) of the current tmux session, running this session's model and effort (never max). Seeds it with a handoff pickup (task file's Handoff section, or HANDOFF.md) and a 25%/30% context-budget rule; optional argument appends the task; --fresh skips the handoff pickup; --cwd <dir> opens the window in <dir> instead of $PWD, e.g. /spawn, /spawn "continue task 07c2", /spawn --fresh "task".
+description: Open a new interactive Claude Code session in a new tmux window (like prefix+c) of the current tmux session, running this session's model and effort (never max). Seeds it with a handoff pickup (task file's Handoff section, or HANDOFF.md) and a 20%/30% context-budget rule; optional argument appends the task; --fresh skips the handoff pickup, e.g. /spawn, /spawn "continue task 07c2", /spawn --fresh "task".
 ---
 
 ## Help
@@ -13,7 +13,7 @@ verbatim and **stop — do not execute the skill**.
 
   Open a new interactive Claude Code session in a new tmux window (like
   prefix+c) of the current tmux session, running this session's model and
-  effort (never max). Seeds it with a handoff pickup (if present) and a 25%/30%
+  effort (never max). Seeds it with a handoff pickup (if present) and a 20%/30%
   context-budget rule; optional argument appends the task.
 
   /spawn                         new session, picks up the existing handoff
@@ -51,9 +51,9 @@ The new session always starts with an initial prompt composed of, in order:
    - else omit this line.
 2. **Context budget** — always include, verbatim:
 
-   > Context budget: when context use reaches 25% of the window, run
+   > Context budget: when context use reaches 20% of the window, run
    > /newchat --spawn --replace "continue: <the current task>" so a fresh
-   > session takes over and this one ends. NEVER exceed 30% total: treat 25%
+   > session takes over and this one ends. NEVER exceed 30% total: treat 20%
    > as the signal to gauge remaining work and wind down — finish or
    > checkpoint the current sub-task and leave a concrete next step in the
    > newchat prompt. Never leave a task or sub-task hanging with no plan there.
