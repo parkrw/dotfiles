@@ -68,6 +68,11 @@
             "type": "command",
             "command": "~/.claude/hooks/scripts/ctx-handoff-nudge.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/scripts/ftl-stop-gate.sh",
+            "timeout": 15
           }
         ]
       }
@@ -127,6 +132,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/scripts/ftl-mode.sh",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -158,6 +173,18 @@
           {
             "type": "command",
             "command": "~/.claude/hooks/scripts/turn-reminder.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/scripts/ftl-mode.sh",
             "timeout": 5
           }
         ]
