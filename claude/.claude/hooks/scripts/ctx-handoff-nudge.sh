@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ctx-handoff-nudge.sh — Stop hook. When context USED reaches
-# CTX_NUDGE_USED% (default 25), hand the work to a fresh session, once per
+# CTX_NUDGE_USED% (default 20), hand the work to a fresh session, once per
 # session (marker file).
 #
 # Inside tmux the hook blocks the stop, which makes Claude continue with the
@@ -21,7 +21,7 @@ check_disabled
 require_jq
 read_input
 
-THRESHOLD="${CTX_NUDGE_USED:-25}"
+THRESHOLD="${CTX_NUDGE_USED:-20}"
 STATE_DIR="${CTX_STATE_DIR:-$HOOKS_DIR/state}"
 
 session_id=$(echo "$INPUT" | jq -r '.session_id // empty')
