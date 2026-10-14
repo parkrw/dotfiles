@@ -70,7 +70,9 @@ fi
 
 # Captured before grepping: under pipefail, grep -q exiting early SIGPIPEs the
 # writer and the pipeline reads as no match.
-reviews=$(pgrep -lf 'review-branch\.sh' 2>/dev/null || true)
+# Each line gets a trailing space so a worktree path matches only as a whole
+# argument: ../repo is a prefix of every sibling worktree ../repo-<name>.
+reviews=$(pgrep -lf 'review-branch\.sh' 2>/dev/null | sed 's/$/ /' || true)
 question_re='\?[[:space:]*`]*$'
 escape="" resumes=false
 if [[ "$last_line" =~ $question_re ]]; then
@@ -85,19 +87,29 @@ elif grep -qE 'https://claude\.ai/(code/)?artifact/' <<<"$msg"; then
   escape="variants" resumes=true
 elif grep -qE '^[-*[:space:]]*`?[^[:space:]`]+:([0-9]+|\?)`? - ' <<<"$msg"; then
   escape="open findings"
-elif { [[ -n "$wt" ]] && grep -qF -- "review-branch.sh $wt" <<<"$reviews"; } ||
+elif { [[ -n "$wt" ]] && grep -qF -- "review-branch.sh $wt " <<<"$reviews"; } ||
      grep -qE 'claude-review|review-branch' <<<"$background"; then
   escape="review running" resumes=true
 fi
 
 # The PR body's directory is the session scratchpad, which Stop input does not
 # name, so the body is found where Ship step 5 wrote it: a Write in the transcript.
+# Matched by whole file name: by suffix, branch x would find feat-x's body.
+# <repo> is the main checkout's name (Ship step 1's ../<repo>-<name>), or the
+# worktree's own, should Claude read it that way.
 body_written() {
-  local slug="${branch//\//-}" path
-  compgen -G "${TMPDIR:-/tmp}/ftl-pr-body-*-$slug.md" >/dev/null && return 0
+  local slug="${branch//\//-}" common names=() name path
+  common=$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  [[ -n "$common" ]] && names+=("ftl-pr-body-$(basename "${common%/.git}")-$slug.md")
+  names+=("ftl-pr-body-$(basename "$wt")-$slug.md")
+  for name in "${names[@]}"; do
+    [[ -f "${TMPDIR:-/tmp}/$name" ]] && return 0
+  done
   [[ -f "$transcript" ]] || return 1
   while IFS= read -r path; do
-    [[ "$path" == *"-$slug.md" && -f "$path" ]] && return 0
+    for name in "${names[@]}"; do
+      [[ "${path##*/}" == "$name" && -f "$path" ]] && return 0
+    done
   done < <(grep -oE '"file_path":"[^"]*/ftl-pr-body-[^"]*\.md"' "$transcript" | sed 's/^"file_path":"//; s/"$//' | sort -u)
   return 1
 }
