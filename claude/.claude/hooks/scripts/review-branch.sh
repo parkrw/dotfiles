@@ -178,12 +178,15 @@ echo "review-branch: live log: $live" >&2
 # finding costs the author a fix-and-rereview round (/ftl ship loops until zero
 # findings) whether it is real or not. A runtime defect proves itself with a
 # failing test the author runs, so the reviewer stays read-only; any other
-# defect proves itself by quoting both sides.
+# defect proves itself by quoting both sides. The search is still told to
+# assume a defect: the verdict follows mechanically from Findings, so the only
+# place a pull toward approval can act is a search that stops looking early.
 prompt='You are a senior reviewer. Review the branch diff that a pull request
 would show: `git diff '"$base"'...HEAD`. Your goal is to approve this pull
-request, but only if it is fit for release. Work through this scope in order —
-a reviewer who just "reviews the code" returns style notes and misses the
-contract breaks.
+request, but only if it is fit for release. Search the whole scope below as
+if a defect is there; approve only when none survives the proof rule. Work
+through this scope in order — a reviewer who just "reviews the code" returns
+style notes and misses the contract breaks.
 
 Scope: a finding is a defect this diff introduces or changes — in its added
 and edited lines, or in behaviour that changes because of them (a caller a
