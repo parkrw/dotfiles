@@ -41,6 +41,7 @@
 - Read-only git and gh commands (log, diff, status, show, blame, pr view, issue list, etc.) run without a prompt.
 - `git push` and mutating `gh` commands ask, except under `remote auto` (below): a push of the current branch to origin and `gh pr create --draft`. `gh pr merge` stays denied. `git pull --ff-only` is allowed outright: it advances a branch pointer or fails, so it can neither write a merge commit nor rewrite a sha.
 - Never work around a gate. `--no-verify`, a repo-local `core.hooksPath`, and hand-writing or deleting a marker file are all off limits; ask me instead.
+- Never edit `CHANGELOG.md` directly, in any repo; a change adds a `changelog.d/<slug>.md` fragment. A repo without fragment tooling gets it set up the way CloudKey core does (`/ftl` Check section 5).
 
 ### Per-repo toggles
 
