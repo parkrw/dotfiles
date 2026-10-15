@@ -41,6 +41,17 @@ check "git -C main commit denied"                "$T/repoB" "git -C $T/repoA com
 # the cd target, not the session cwd.
 check "cd main && commit denied (no miss)"       "$T/repoB" "cd $T/repoA && git commit -m 'x: y'"      deny
 
+# A read chained to a line that would ask is sent back to be split, so the
+# read runs unprompted and only the write asks.
+check "read && merge sent back to split"         "$T/repoB" 'git status --short && git merge feat/y'   deny
+check "read; push sent back to split"            "$T/repoB" 'git log --oneline -3 | head -1; git push' deny
+check "split counts cd and echo as no read"      "$T/repoB" "cd $T/repoB && echo --- && git merge feat/y" ask
+check "a write piped to a filter asks"           "$T/repoB" 'git merge feat/y 2>&1 | tail -3'          ask
+check "a read redirected to a file is no read"   "$T/repoB" "git log > $T/repoB/log.txt && git merge feat/y" ask
+check "a loop is never split"                    "$T/repoB" 'for b in feat/y; do git status; git merge feat/y; done' ask
+check "a substitution is never split"            "$T/repoB" 'git status && git merge $(echo feat/y)'  ask
+check "reads alone stay allowed"                 "$T/repoB" 'git status && git log -3 | head -1'      allow
+
 # New worktree on a new branch: allowed only under .claude-merge-auto. The
 # empty bare origin answers ls-remote with exit 2 (no such branch).
 git init -q --bare "$T/origin.git"
