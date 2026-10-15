@@ -284,8 +284,8 @@ segment_ok(){
 
 # A redirect into a file turns a read line into a write. /dev/null and the
 # temp dirs are exempt, as in the redirect block at the end.
-writes_a_file(){
-  echo "$bare" | grep -oE '[0-9]?>>?[[:space:]]*[^[:space:]&|;<>]+' \
+writes_a_file(){ # $1 = part of the line, default all of it
+  echo "${1:-$bare}" | grep -oE '[0-9]?>>?[[:space:]]*[^[:space:]&|;<>]+' \
     | sed -E 's/^[0-9]?>>?[[:space:]]*//' \
     | grep -vE '^(/dev/|/tmp/|/private/tmp/|/var/tmp/|/var/folders/)' | grep -q .
 }
@@ -298,6 +298,30 @@ can_allow(){
     segment_ok "$seg" || return 1
   done < <(segments)
   return 0
+}
+
+# A line that chains a read to a write asks as a whole, and a refusal drops the
+# read with it; split, the read runs unprompted. A list element is a read when
+# every pipeline stage is one and a stage does more than move or print. The
+# blocks' own seg_extra grants are not reads here.
+reads_beside_a_write(){
+  [[ "$opaque" == 1 ]] && return 1
+  local seg_extra_git='' seg_extra_gh='' local_ok=0
+  local el stage w reads=0 writes=0 is_read real
+  while IFS= read -r el; do
+    [[ -z "${el//[[:space:]]/}" ]] && continue
+    case "$(word_of "$el")" in for|while|until|if|case|do|then|else|elif|fi|done|esac) return 1 ;; esac
+    is_read=1; real=0
+    while IFS= read -r stage; do
+      if ! segment_ok "$stage" || writes_a_file "$stage"; then is_read=0; break; fi
+      w=$(word_of "$(echo "$stage" | sed -E 's/^[[:space:]]*[({][[:space:]]*//')")
+      case "$w" in cd|echo|printf|true|false|:|pwd|date|sleep|test|\[|\[\[|read) ;; *) real=1 ;; esac
+    done < <(echo "$el" | tr '|' '\n')
+    if [[ "$is_read" == 0 ]]; then writes=1
+    elif [[ "$real" == 1 ]]; then reads=1
+    fi
+  done < <(echo "$bare" | awk '{gsub(/\|\||&&|;/,"\n"); print}')
+  [[ "$reads" == 1 && "$writes" == 1 ]]
 }
 
 # The line acts on the repo the gate inspected: a -C in the segment is the

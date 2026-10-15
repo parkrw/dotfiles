@@ -86,8 +86,8 @@ Find the lead: `git shortlog -sn --no-merges | head -3`. Then, with `--author='<
 | --- | --- | --- |
 | subjects | `git log --format=%s -60` | case, length range, prefix pattern, how an issue is closed |
 | bodies | `git log --format='%s%n%b%n---' -20` | prose or bullets, trailers, what a squash merge leaves |
-| footprint | `git log --format= --shortstat -30` | files per commit; whether tests, docs and CHANGELOG land together |
-| CHANGELOG | `sed -n '1,30p' CHANGELOG.md`; `grep -oE '^- (fix\()?[a-z]+' CHANGELOG.md \| sort \| uniq -c \| sort -rn` | section shape, line shape, scopes in use |
+| footprint | `git log --format= --shortstat -30` | files per commit; whether tests, docs and the changelog entry land together |
+| changelog | `ls changelog.d`; `cat changelog.d/README.md`; `sed -n '1,30p' CHANGELOG.md`; `grep -oE '^- (fix\()?[a-z]+' CHANGELOG.md \| sort \| uniq -c \| sort -rn` | fragment directory and its spec, or its absence; line shape, scopes in use |
 | done | the rules file; else `grep -hE '^\s+run:' .github/workflows/*.yml`; else `package.json` scripts or `Makefile` targets | the commands the checklist will run |
 | branches | `git branch -r --format='%(refname:short)' \| head -20` | the branch naming the lead pushes |
 
@@ -135,7 +135,7 @@ Every item is pass or fail with the output line that shows it. Do not hand off w
 ## 1. Shape
 
 - `git status --short` and `git diff --cached --stat`. The diff is one behavior. A second behavior is a second PR.
-- If the repo keeps a CHANGELOG, write its line first (section 5). If the line cannot say what a customer or staffer now gets, the change is not shaped yet.
+- If the repo keeps a CHANGELOG, write its fragment first (section 5). If the line cannot say what a customer or staffer now gets, the change is not shaped yet.
 - An adjacent smell becomes one line at the end of the handoff.
 - `git fetch origin`, then `git log --oneline HEAD..origin/HEAD`. Output means the branch is behind: apply Orient step 4.
 
@@ -165,9 +165,11 @@ A doc line this diff adds states the rule, not the list of callers or cases that
 - Tests match the neighboring files' runner and fixtures. A test name is a behavior sentence. Assert outcomes; asserting call shape tests the test.
 - If the repo has a prose checker, run it. Fix its notes in touched lines even when they do not fail.
 
-## 5. CHANGELOG
+## 5. Changelog
 
-Follow the shape measured in Orient step 3: section, line, prefix, scope, issue reference. The line says what the reader can now do or rely on. A scope that is not in the count needs a reason.
+Never edit `CHANGELOG.md`. The entry is one new fragment file in `changelog.d/`, named and shaped the way `changelog.d/README.md` says; its line follows the shape measured in Orient step 3: prefix, scope, issue reference. The line says what the reader can now do or rely on. A scope that is not in the count needs a reason.
+
+A repo with `CHANGELOG.md` and no fragment tooling gets it set up first, as its own commit ahead of the change, the way CloudKey core does it (`~/Developments/work/ck/programmin/core`: `changelog.d/README.md`, `scripts/changelog/`, the `changelog*` scripts in `package.json`, the CI job in `.github/workflows/ci.yml`): a README spec, an assemble script that folds the fragments into a dated section at release and deletes them, a guard that fails a PR whose `CHANGELOG.md` differs from what assemble writes, and tests for both, in the repo's own language and runner with no new dependency. The hand-off names that commit so the lead can split it out.
 
 ## 6. Commit subject
 
@@ -222,7 +224,7 @@ Drop from both lists every file where `git -C "$worktree" check-attr merge -- <f
 
 - No file on both lists: go on. The rebase in step 5 applies cleanly.
 - A file on both lists: a review of this diff would judge code the rebase is about to change. Integrate now, as step 3a does, then go on.
-- `CHANGELOG.md` on both lists and `check-attr` does not say `union`: first run `echo 'CHANGELOG.md merge=union' >> $(git rev-parse --git-common-dir)/info/attributes`. Never edit `.gitattributes`; that is the lead's file.
+- `CHANGELOG.md` on this branch's list: the entry belongs in a fragment (Check section 5). Move it there and commit before going on.
 
 ## 3. Check and commit
 
@@ -259,7 +261,7 @@ Abort instead (`rebase --abort` or `merge --abort`) and stop, naming the conflic
 
 After the last `--continue`: `git -C <worktree> diff <default> | grep -nE '^\+(<{7}|>{7})( |$)'` prints nothing (a rebase runs no pre-commit hook), then rerun Check step 2's commands and fix and commit what fails. Note each resolved file, one line on how, for the PR body's `Conflicts resolved` section.
 
-Then `git -C "$worktree" diff <default> -- CHANGELOG.md`. A union merge keeps both sides of a reworded line without a conflict: a line that appears twice, or an old and new wording of one entry, gets fixed and committed before step 4.
+Then `git -C "$worktree" diff --name-only <default> -- CHANGELOG.md` prints nothing: the change's entry is its fragment.
 
 ## 4. Review loop
 

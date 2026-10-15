@@ -41,6 +41,17 @@ check "git -C main commit denied"                "$T/repoB" "git -C $T/repoA com
 # the cd target, not the session cwd.
 check "cd main && commit denied (no miss)"       "$T/repoB" "cd $T/repoA && git commit -m 'x: y'"      deny
 
+# A read chained to a line that would ask is sent back to be split, so the
+# read runs unprompted and only the write asks.
+check "read && push sent back to split"         "$T/repoB" 'git status --short && git push'   deny
+check "read; push sent back to split"            "$T/repoB" 'git log --oneline -3 | head -1; git push' deny
+check "split counts cd and echo as no read"      "$T/repoB" "cd $T/repoB && echo --- && git push" ask
+check "a write piped to a filter asks"           "$T/repoB" 'git push 2>&1 | tail -3'          ask
+check "a read redirected to a file is no read"   "$T/repoB" "git log > $T/repoB/log.txt && git push" ask
+check "a loop is never split"                    "$T/repoB" 'for b in feat/y; do git status; git push; done' ask
+check "a substitution is never split"            "$T/repoB" 'git status && git push $(echo origin)'  ask
+check "reads alone stay allowed"                 "$T/repoB" 'git status && git log -3 | head -1'      allow
+
 # Worktrees are local writes; only a forced removal, which discards the
 # worktree's uncommitted work, asks. The empty bare origin answers ls-remote
 # with exit 2 (no such branch).
