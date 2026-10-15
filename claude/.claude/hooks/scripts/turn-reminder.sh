@@ -7,7 +7,7 @@ source "$HOME/.claude/hooks/scripts/common.sh"
 check_disabled
 require_jq
 
-REMINDER='REMINDER: Be concise. Shortest response that fully answers. No preamble, no recap, no restated question. This covers ALL written output, not just chat: documentation, git commit messages, and PR descriptions are concise too. Plans terse (bullets/steps). Tool preambles: one short line or nothing. Follow every CLAUDE.md rule — per-command git write approval, no AI attribution — no skipping. Priorities: security, data integrity, reliability first; then readability; then performance.'
+REMINDER='REMINDER: Be concise. Shortest response that fully answers. No preamble, no recap, no restated question. This covers ALL written output, not just chat: documentation, git commit messages, and PR descriptions are concise too. Plans terse (bullets/steps). Tool preambles: one short line or nothing. Follow every CLAUDE.md rule — no AI attribution — no skipping. Local git writes need no approval: run them and let the hooks allow, ask or deny. Priorities: security, data integrity, reliability first; then readability; then performance.'
 
 jq -n --arg ctx "$REMINDER" \
   '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$ctx}}'

@@ -30,7 +30,7 @@ cp "$src"/claude/.claude/hooks/scripts/* ~/.claude/hooks/scripts/
 cp -R "$src"/claude/.claude/skills/{ftl,newchat,spawn,fan,review-insights} ~/.claude/skills/
 rm -rf "$src"
 git config --global core.hooksPath ~/.config/git/hooks
-printf '%s\n' .claude-merge-off .claude-remote-off .claude-merge-auto .claude-remote-auto >> ~/.config/git/ignore
+printf '%s\n' .claude-merge-off .claude-remote-off .claude-remote-auto >> ~/.config/git/ignore
 ```
 
 Merge into `~/.claude/settings.json`:
@@ -59,7 +59,7 @@ Merge into `~/.claude/settings.json`:
 }
 ```
 
-Then, in each repo: `claude-gate merge auto && claude-gate remote auto`.
+Then, in each repo: `claude-gate remote auto`.
 
 - `core.hooksPath` is machine-wide. A repo's own `.git/hooks` stop running, except `pre-commit`, which chains to it.
 - Reviews run `claude -p` on your account. `codex` is optional, for `--engine codex`.

@@ -40,10 +40,6 @@
     ],
     "ask": [
       "Agent",
-      "Bash(git stash:*)",
-      "Bash(git reset:*)",
-      "Bash(git cherry-pick:*)",
-      "Bash(git revert:*)",
       "Bash(rm:*)",
       "Bash(rmdir:*)"
     ],

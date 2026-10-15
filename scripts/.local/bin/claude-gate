@@ -7,20 +7,16 @@
 #                               auto allows a push of the current branch and a
 #                               draft PR, and turns review on, since pre-push's
 #                               review gate is what makes that push safe
-#   claude-gate merge  on|off|auto
-#                               LOCAL merge/rebase:  ask <-> deny   (default on);
-#                               auto allows one onto a named local branch from a
-#                               clean tree, and a worktree add -b of a new branch
-#                               to a new path, for the main checkout and its worktrees
+#   claude-gate merge  on|off   LOCAL merge/rebase:  allow <-> deny (default on)
 #   claude-gate review on|off   require a fresh-context review before push
 #                                                                    (default off)
 #   claude-gate all off         tighten every toggle for this repo
 #
 # remote and merge are on unless the repo root carries an opt-out marker, so
 # "off" writes a file and "on" removes it. review is the reverse: it is off
-# unless the repo is listed in review-gate-repos. merge auto and remote auto
-# are opt-in markers, .claude-merge-auto and .claude-remote-auto, in the main
-# checkout; a checkout's -off marker still wins over them.
+# unless the repo is listed in review-gate-repos. remote auto is an opt-in
+# marker, .claude-remote-auto, in the main checkout; a checkout's -off marker
+# still wins over it.
 #
 # Flipping one toggle offers the others, because the failure mode is tightening
 # a repo months ago and forgetting the rest are still set.
@@ -36,7 +32,7 @@ die() { echo "claude-gate: $1" >&2; exit 1; }
 
 root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repo"
 
-# review-gate and merge auto key off the main checkout, not the worktree, so a
+# review-gate and remote auto key off the main checkout, not the worktree, so a
 # linked worktree shares its parent's setting while keeping its own -off markers.
 common=$(git rev-parse --git-common-dir)
 [[ "$common" != /* ]] && common=$(cd "$common" && pwd)
@@ -53,10 +49,7 @@ state() {
       if   [[ -f "$root/.claude-remote-off" ]]; then echo off
       elif [[ -f "$review_root/.claude-remote-auto" ]]; then echo auto
       else echo on; fi ;;
-    merge)
-      if   [[ -f "$root/.claude-merge-off" ]]; then echo off
-      elif [[ -f "$review_root/.claude-merge-auto" ]]; then echo auto
-      else echo on; fi ;;
+    merge)  [[ -f "$root/.claude-merge-off" ]] && echo off || echo on ;;
     review) [[ -f "$REPOS_FILE" ]] && grep -Fxq "$review_root" "$REPOS_FILE" && echo on || echo off ;;
   esac
 }
@@ -64,7 +57,7 @@ state() {
 describe() {
   case $1 in
     remote) echo "git push / gh:        on = ask,   off = deny,  auto = allow own-branch push and draft PR" ;;
-    merge)  echo "LOCAL merge / rebase: on = ask,   off = deny,  auto = allow onto a local branch, clean tree; worktree add -b" ;;
+    merge)  echo "LOCAL merge / rebase: on = allow, off = deny" ;;
     review) echo "on = push blocked until the branch diff passes review" ;;
   esac
 }
@@ -76,9 +69,8 @@ apply() { # toggle on|off
     remote:auto)
       : > "$review_root/.claude-remote-auto"; rm -f "$review_root/.claude-remote-off"
       apply review on ;;
-    merge:on)   rm -f "$root/.claude-merge-off" "$review_root/.claude-merge-auto" ;;
-    merge:off)  : > "$root/.claude-merge-off"; rm -f "$review_root/.claude-merge-auto" ;;
-    merge:auto) : > "$review_root/.claude-merge-auto"; rm -f "$review_root/.claude-merge-off" ;;
+    merge:on)   rm -f "$root/.claude-merge-off" ;;
+    merge:off)  : > "$root/.claude-merge-off" ;;
     review:on)
       mkdir -p "$(dirname "$REPOS_FILE")"
       grep -Fxq "$review_root" "$REPOS_FILE" 2>/dev/null || echo "$review_root" >> "$REPOS_FILE" ;;
@@ -95,15 +87,15 @@ apply() { # toggle on|off
 
 status() {
   echo "repo: $root"
-  [[ "$review_root" != "$root" ]] && echo "main checkout: $review_root (review-gate and merge auto are shared with it)"
+  [[ "$review_root" != "$root" ]] && echo "main checkout: $review_root (review-gate and remote auto are shared with it)"
   for t in remote merge review; do
     printf '  %-7s %-4s  %s\n' "$t" "$(state "$t")" "$(describe "$t")"
   done
-  # The markers used to be opt-IN (.claude-*-ok). Leftovers now do nothing, and
-  # silently reading as "still configured" is exactly the confusion to avoid.
-  for legacy in .claude-remote-ok .claude-merge-ok; do
-    [[ -f "$root/$legacy" ]] &&
-      echo "  note: $legacy is a leftover from the old opt-in scheme and has no effect — delete it"
+  # Retired markers do nothing, and silently reading as "still configured" is
+  # exactly the confusion to avoid.
+  for legacy in "$root/.claude-remote-ok" "$root/.claude-merge-ok" "$review_root/.claude-merge-auto"; do
+    [[ -f "$legacy" ]] &&
+      echo "  note: $legacy is a retired marker and has no effect — delete it"
   done
   return 0
 }
@@ -127,12 +119,12 @@ case "${1:-}" in
   all)
     [[ "${2:-}" == off ]] || die "only 'all off' is supported"
     for t in remote merge review; do apply "$t" off; done ;;
-  remote|merge)
-    case "${2:-}" in on|off|auto) ;; *) die "usage: claude-gate $1 on|off|auto" ;; esac
+  remote)
+    case "${2:-}" in on|off|auto) ;; *) die "usage: claude-gate remote on|off|auto" ;; esac
     apply "$1" "$2"
     offer_others "$1" "$2" ;;
-  review)
-    case "${2:-}" in on|off) ;; *) die "usage: claude-gate review on|off" ;; esac
+  merge|review)
+    case "${2:-}" in on|off) ;; *) die "usage: claude-gate $1 on|off" ;; esac
     apply "$1" "$2"
     offer_others "$1" "$2" ;;
   *) die "unknown toggle '${1}' — try: status, remote, merge, review, all off" ;;

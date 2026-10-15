@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pipe-test suite for ~/.claude/hooks/scripts/bash-write-gate.sh
-# Builds throwaway repos: repoA on main, repoB on feat/x, and repoC (merge
-# auto) and repoD sharing a bare origin. HOOK overrides the gate under test.
+# Builds throwaway repos: repoA on main, repoB on feat/x, and repoC and repoD
+# sharing a bare origin. HOOK overrides the gate under test.
 set -u
 HOOK="${HOOK:-$HOME/.claude/hooks/scripts/bash-write-gate.sh}"
 T=$(mktemp -d)
@@ -28,7 +28,7 @@ check() { # $1=desc $2=cwd $3=cmd $4=expected decision (deny|ask|allow|defer)
 check "commit on main (plain) denied"            "$T/repoA" 'git commit -m "x: y"'                     deny
 check "push from main denied"                    "$T/repoA" 'git push'                                 deny
 check "push explicit main denied"                "$T/repoB" 'git push origin main'                     deny
-check "local merge asks by default"               "$T/repoB" 'git merge feat/y'                         ask
+check "local merge allowed by default"            "$T/repoB" 'git merge feat/y'                         allow
 check "remote merge denied"                      "$T/repoB" 'git merge origin/feat/y'                  deny
 check "remote rebase denied"                     "$T/repoB" 'git rebase origin/feat/y'                 deny
 check "plain pull denied"                        "$T/repoB" 'git pull'                                 deny
@@ -41,28 +41,28 @@ check "git -C main commit denied"                "$T/repoB" "git -C $T/repoA com
 # the cd target, not the session cwd.
 check "cd main && commit denied (no miss)"       "$T/repoB" "cd $T/repoA && git commit -m 'x: y'"      deny
 
-# New worktree on a new branch: allowed only under .claude-merge-auto. The
-# empty bare origin answers ls-remote with exit 2 (no such branch).
+# Worktrees are local writes; only a forced removal, which discards the
+# worktree's uncommitted work, asks. The empty bare origin answers ls-remote
+# with exit 2 (no such branch).
 git init -q --bare "$T/origin.git"
 for r in repoC repoD; do
   mkrepo "$T/$r" main
   git -C "$T/$r" remote add origin "$T/origin.git"
 done
-: > "$T/repoC/.claude-merge-auto"
 git -C "$T/repoC" branch taken
 mkdir "$T/exists"
 
-check "worktree add -b under merge auto allowed"  "$T/repoC" "git worktree add -b wt-new $T/repoC-wt-new HEAD"        allow
+check "worktree add -b allowed"                  "$T/repoC" "git worktree add -b wt-new $T/repoC-wt-new HEAD"        allow
 check "worktree add -b to a sibling path allowed" "$T/repoC" "git worktree add -b wt-r ../repoC-wt-r HEAD"             allow
 check "worktree add -b via -C allowed"           "$T/repoB" "git -C $T/repoC worktree add -b wt-c $T/repoC-wt-c"     allow
 check "worktree add -b off a local branch"        "$T/repoC" "git worktree add -b wt-l $T/repoC-wt-l taken"           allow
-check "worktree add -b without marker asks"       "$T/repoD" "git worktree add -b wt-new $T/repoD-wt-new HEAD"        ask
-check "worktree add -B asks"                      "$T/repoC" "git worktree add -B wt-new $T/repoC-wt-new HEAD"        ask
-check "worktree add --force asks"                 "$T/repoC" "git worktree add --force -b wt-new $T/repoC-wt-new"     ask
-check "worktree add onto existing path asks"      "$T/repoC" "git worktree add -b wt-new $T/exists HEAD"              ask
-check "worktree add of a taken branch asks"       "$T/repoC" "git worktree add -b taken $T/repoC-taken HEAD"          ask
-check "worktree add off a remote ref asks"        "$T/repoC" "git worktree add -b wt-new $T/repoC-wt-new origin/main" ask
-check "worktree add then remove asks"             "$T/repoC" "git worktree add -b wt-new $T/repoC-wt-new HEAD && git worktree remove $T/exists" ask
+check "worktree add -b in another repo allowed"   "$T/repoD" "git worktree add -b wt-new $T/repoD-wt-new HEAD"        allow
+check "worktree add -B allowed"                   "$T/repoC" "git worktree add -B wt-new $T/repoC-wt-new HEAD"        allow
+check "worktree add --force allowed"              "$T/repoC" "git worktree add --force -b wt-new $T/repoC-wt-new"     allow
+check "worktree add onto existing path allowed"   "$T/repoC" "git worktree add -b wt-new $T/exists HEAD"              allow
+check "worktree add of a taken branch allowed"    "$T/repoC" "git worktree add -b taken $T/repoC-taken HEAD"          allow
+check "worktree add off a remote ref allowed"     "$T/repoC" "git worktree add -b wt-new $T/repoC-wt-new origin/main" allow
+check "worktree add then remove --force asks"     "$T/repoC" "git worktree add -b wt-new $T/repoC-wt-new HEAD && git worktree remove --force $T/exists" ask
 
 echo "---"
 echo "$pass passed, $fail failed"

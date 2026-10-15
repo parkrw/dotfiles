@@ -5,22 +5,20 @@
 #   reads + read-only git/gh        -> allow (no prompt)
 #   create NEW file                 -> allow (no prompt)
 #   git pull --ff-only              -> allow (no prompt)
-#   git add / git commit (local)    -> allow (no prompt); --amend, --no-verify,
-#                                      detached HEAD, a pathspec it cannot
-#                                      place in the repo (e.g. $var, ~, ..,
-#                                      a path outside it, a pathspec file,
-#                                      exclude magic) or an opaque line -> ask
+#   local git writes (add, commit,
+#     branch, switch, stash, merge,
+#     rebase, worktree, reset …)    -> allow (no prompt)
+#   …that discard uncommitted work,
+#     config/remote writes, a
+#     pathspec it cannot place in
+#     the repo, --no-verify, or an
+#     opaque line                   -> ask
 #   bulk staging (add -A/-u, commit
 #     -a, a whole-tree pathspec)    -> deny (always)
-#   other local git writes          -> ask
 #   new branch whose name is taken
 #     on origin, or whose issue is
 #     someone else's                -> deny (always)
-#   LOCAL merge/rebase              -> ask (default), deny (.claude-merge-off),
-#                                      or allow onto a named local branch from a
-#                                      clean tree, a rebase --onto only from
-#                                      that branch's fork point
-#                                      (.claude-merge-auto)
+#   LOCAL merge/rebase              -> allow (default), deny (.claude-merge-off)
 #   overwrite/modify EXISTING file  -> ask
 #   remote git writes (push), gh    -> ask (default) or deny (.claude-remote-off)
 #   push of the current branch,
@@ -34,9 +32,7 @@
 # repo below the default; their absence is the permissive default:
 #   .claude-remote-off  push/gh            ask   -> deny
 #   .claude-merge-off   LOCAL merge/rebase allow -> deny
-# Two opt-IN markers, read from the main checkout so linked worktrees share them:
-#   .claude-merge-auto  LOCAL merge/rebase ask -> allow, when the target is a
-#                       named local branch and the tree is clean; -off wins
+# One opt-IN marker, read from the main checkout so linked worktrees share it:
 #   .claude-remote-auto push of the current branch and a draft PR ask -> allow,
 #                       when pre-push's review gate is live; -off wins
 # None affects a merge or rebase whose target is a remote ref, and nothing
@@ -86,8 +82,7 @@ if [[ -n "$repo_root" ]]; then
   [[ -n "$common" && "$common" != /* ]] && common="$gitdir/$common"
   [[ -n "$common" ]] && main_root=$(cd "$(dirname "$common")" 2>/dev/null && pwd -P || true)
 fi
-merge_auto=0; remote_auto=0
-[[ -n "$main_root" && -f "$main_root/.claude-merge-auto"  ]] && merge_auto=1
+remote_auto=0
 [[ -n "$main_root" && -f "$main_root/.claude-remote-auto" ]] && remote_auto=1
 
 remote_gate(){
@@ -164,7 +159,42 @@ seg_git='status|log|diff|show|reflog|shortlog|whatchanged|blame|describe|rev-par
 # marker rules adds it here before asking whether the rest of the line is safe.
 seg_extra_git=''
 seg_extra_gh=''
-wt_add_ok=0
+# Set by the local-write block once every deny and deliberate ask is behind it.
+local_ok=0
+
+has_opt(){ echo "$1" | grep -Eq -- "(^|[[:space:]])($2)([[:space:]=]|\$)"; } # $1=args $2=alternation
+
+# Local writes touch only this checkout's refs, index, tree and stash, and the
+# reflog keeps every commit they move. What it cannot return is uncommitted
+# work, so the shapes that throw that away are refused here and ask. config and
+# remote writes stay out too: they can repoint the hooks or the push target.
+git_local_ok(){ # $1 = segment
+  local sub args w
+  sub=$(git_sub_of "$1"); args=$(git_args_of "$1")
+  case "$sub" in
+    add|stage|commit|branch|merge|rebase|cherry-pick|revert|mv|am|apply) return 0 ;;
+    reset)     ! has_opt "$args" '--hard|--merge' ;;
+    rm)        ! has_opt "$args" '-[a-zA-Z]*f[a-zA-Z]*|--force' ;;
+    switch)    ! has_opt "$args" '-[a-zA-Z]*f[a-zA-Z]*|--force|--discard-changes' ;;
+    restore)   has_opt "$args" '-S|--staged' && ! has_opt "$args" '-W|--worktree' ;;
+    stash)     ! echo "$args" | grep -Eq '^(drop|clear)([[:space:]]|$)' ;;
+    worktree)  ! { echo "$args" | grep -Eq '^remove([[:space:]]|$)' && has_opt "$args" '-[a-zA-Z]*f[a-zA-Z]*|--force'; } ;;
+    submodule) ! has_opt "$args" '-[a-zA-Z]*f[a-zA-Z]*|--force' ;;
+    checkout)
+      has_opt "$args" '-[a-zA-Z]*[fp][a-zA-Z]*|--force|--patch|--' && return 1
+      # A word that names no commit is a path, and checking out a path
+      # overwrites its uncommitted edits.
+      while IFS= read -r w; do
+        git -C "$gitdir" rev-parse --verify --quiet "$w^{commit}" >/dev/null || return 1
+      done < <(echo "$args" | tr ' \t' '\n\n' | awk '
+        take { take = 0; next }
+        /^(-b|-B|--orphan)$/ { take = 1; next }
+        /^-/ || /^$/ { next }
+        { print }')
+      return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 git_segment_ok(){
   local sub args
@@ -173,9 +203,9 @@ git_segment_ok(){
   echo "$args" | grep -Eq -- '(^|[[:space:]])--output(=|[[:space:]])' && return 1
   [[ -n "$seg_extra_git" ]] && echo "$sub" | grep -Eq "^(${seg_extra_git})$" && return 0
   echo "$sub" | grep -Eq "^(${seg_git})$" && return 0
+  [[ "$local_ok" == 1 ]] && git_local_ok "$1" && return 0
   case "$sub" in
-    worktree) echo "$args" | grep -Eq '^list([[:space:]]|$)' \
-                || { [[ "$wt_add_ok" == 1 ]] && echo "$args" | grep -Eq '^add[[:space:]]'; } ;;
+    worktree) echo "$args" | grep -Eq '^list([[:space:]]|$)' ;;
     # Any positional word is a branch to create, move or delete.
     branch)   ! echo "$args" | grep -Eq -- '(^|[[:space:]])([^-[:space:]]|--edit-description|--unset-upstream)' ;;
     tag)      [[ -z "$args" ]] || echo "$args" | grep -Eq '^(-l|--list|-n)' ;;
@@ -680,60 +710,24 @@ echo "$bare" | grep -Eq '(^|[[:space:]&|;(`])gh([[:space:]]|$)' && remote_gate "
 # ── merge / rebase ──
 #
 # `(merge|rebase)([[:space:]]|$)` rather than \b: \b matches before the hyphen
-# in merge-base and rebase-related plumbing, which are read-only.
+# in merge-base and rebase-related plumbing, which are read-only. A local merge
+# or rebase passes on to the local-write block below.
 if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+(merge|rebase)([[:space:]]|$)'; then
   remotes=$(git -C "$gitdir" remote 2>/dev/null | paste -sd'|' -)
   [[ -z "$remotes" ]] && remotes='origin|upstream'
 
   # Each merge/rebase segment is tested on its own arguments — reading to the
   # end of the line would mistake a URL in a later command for a remote ref.
-  #
-  # The same pass judges the auto tier: every segment must be --abort/--continue
-  # or name exactly one local branch, with no flag that reshapes the operation
-  # (-i, -X, -m …), and run in the repo the checks below inspect. A rebase
-  # --onto passes only in the shape onto_fork_point_ok proves.
-  #
-  # `rebase --onto <local-branch> <upstream> [<current-branch>]` replays
-  # <upstream>..HEAD and drops everything below <upstream>. When <upstream> is
-  # the fork point git reads from <local-branch>'s reflog, what is dropped is
-  # that branch's old, rewritten history and none of this branch's own commits.
-  onto_fork_point_ok(){ # $1 = the segment's argument words, one per line
-    local w onto="" take=0 up fp
-    local -a pos=()
-    while IFS= read -r w; do
-      if [[ "$take" == 1 ]]; then onto="$w"; take=0
-      elif [[ "$w" == --onto ]]; then take=1
-      elif [[ "$w" == --onto=* ]]; then onto="${w#--onto=}"
-      elif [[ "$w" == -q || "$w" == --quiet ]]; then :
-      elif [[ "$w" == -* ]]; then return 1
-      else pos+=("$w"); fi
-    done <<< "$1"
-    [[ "$take" == 0 && -n "$onto" && -n "$cur" ]] || return 1
-    [[ "${#pos[@]}" == 1 || ( "${#pos[@]}" == 2 && "${pos[1]}" == "$cur" ) ]] || return 1
-    git -C "$gitdir" show-ref --verify --quiet "refs/heads/$onto" || return 1
-    up=$(git -C "$gitdir" rev-parse --verify --quiet "${pos[0]}^{commit}") || return 1
-    fp=$(git -C "$gitdir" merge-base --fork-point "refs/heads/$onto" HEAD) || return 1
-    [[ "$up" == "$fp" ]]
-  }
-
   op=""; is_remote=0
-  auto_named=1; auto_work=0; auto_rebase=0; auto_segs=0
-  c_raw=$(echo "$cmd" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*/\1/p')
   while IFS= read -r seg; do
     s=$(git_sub_of "$seg")
     case "$s" in merge|rebase) ;; *) continue ;; esac
     [[ -z "$op" ]] && op="$s"
-    auto_segs=$((auto_segs + 1))
-    seg_c=$(echo "$seg" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*/\1/p')
-    [[ "$seg_c" == "$c_raw" ]] || auto_named=0
     args=$(echo "$seg" | sed -E "s/.*[[:space:]]${s}([[:space:]]|\$)//")
 
     # --abort/--continue/etc. steer an in-flight operation; they resolve local
-    # state and never reach a remote, so they sit in the local tier.
-    if echo "$args" | grep -Eq -- '--(abort|quit|continue|skip|edit-todo|show-current-patch)\b'; then
-      echo "$args" | grep -Eq -- '^[[:space:]]*--(abort|continue)[[:space:]]*$' || auto_named=0
-      continue
-    fi
+    # state and never reach a remote.
+    echo "$args" | grep -Eq -- '--(abort|quit|continue|skip|edit-todo|show-current-patch)\b' && continue
 
     echo "$args" | grep -Eq "(^|[[:space:]=])($remotes)/"                && { op="$s"; is_remote=1; break; }
     echo "$args" | grep -Eq '(^|[[:space:]=])(FETCH_HEAD|refs/remotes/)' && { op="$s"; is_remote=1; break; }
@@ -741,21 +735,6 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
     # Bare `git rebase` rebases onto @{upstream} — a remote-tracking ref.
     if [[ "$s" == rebase ]] && ! echo "$args" | tr ' ' '\n' | grep -qE '^[^-][^[:space:]]*'; then
       op="$s"; is_remote=1; break
-    fi
-
-    auto_work=1; [[ "$s" == rebase ]] && auto_rebase=1
-    words=$(git_args_of "$seg" | tr ' \t' '\n\n' | grep -v '^$' || true)
-    if [[ "$s" == rebase ]] && printf '%s\n' "$words" | grep -Eq -- '^--onto(=|$)'; then
-      onto_fork_point_ok "$words" || auto_named=0
-      continue
-    fi
-    flags=$(printf '%s\n' "$words" | grep -E '^-' || true)
-    targets_=$(printf '%s\n' "$words" | grep -vE '^-|^$' || true)
-    [[ -n "$flags" ]] && printf '%s\n' "$flags" | grep -vqxE -- '--(no-ff|ff|ff-only|no-edit|stat|no-stat|quiet)|-q' \
-      && auto_named=0
-    if [[ "$(printf '%s\n' "$targets_" | grep -c . || true)" != 1 ]] \
-       || ! git -C "$gitdir" show-ref --verify --quiet "refs/heads/$targets_"; then
-      auto_named=0
     fi
   done < <(echo "$cmd" | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}')
   [[ -z "$op" ]] && op=merge
@@ -771,56 +750,6 @@ If YOU run this yourself: git rewrites your local commits on top of the remote r
 
   [[ "$merge_off" == 1 ]] &&
     emit deny "Local git $op blocked — this repo is opted out (.claude-merge-off). Re-enable with: claude-gate merge on"
-
-  # ── auto tier (.claude-merge-auto) ──
-  #
-  # Read from the main checkout so Ship's linked worktrees inherit it. Committed
-  # work survives a local merge or rebase in the reflog; what does not is a dirty
-  # tree caught in a conflict, and a rebased branch someone already fetched. So:
-  # clean tree, and a rebased branch that has no upstream and is absent from
-  # origin. ls-remote runs last — it is the slow check. It fails closed: any exit
-  # other than 2 (no such branch) asks.
-  if [[ "$merge_auto" == 1 ]]; then
-    blocker=""
-    bare_segs=$(segments | while IFS= read -r seg; do git_sub_of "$seg"; done | grep -cxE 'merge|rebase' || true)
-    cd_segs=$(segments | while IFS= read -r seg; do word_of "$seg"; done | grep -cx 'cd' || true)
-    if [[ "$auto_named" != 1 ]]; then
-      blocker="auto needs one named local branch (refs/heads/<target>) and no -i/-X/-m, --onto <local-branch> <its fork point>, or --abort/--continue"
-    elif [[ "$auto_segs" == 0 || "$bare_segs" != "$auto_segs" ]]; then
-      blocker="could not match every merge/rebase segment on the line"
-    elif [[ "$cd_segs" -gt 1 || ( "$cd_segs" == 1 && -z "$cd_arg" ) ]]; then
-      blocker="only a single leading cd is resolved"
-    elif [[ "$auto_work" == 1 ]]; then
-      porcelain=$(git -C "$gitdir" status --porcelain 2>/dev/null || echo "status failed")
-      if [[ -n "$porcelain" ]]; then
-        blocker="the tree is not clean (untracked files count) — commit first"
-      elif [[ "$auto_rebase" == 1 ]]; then
-        if [[ -z "$cur" ]]; then
-          blocker="HEAD is detached"
-        elif git -C "$gitdir" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
-          blocker="'$cur' has an upstream — rebase only unpushed branches"
-        elif git -C "$gitdir" show-ref --verify --quiet "refs/remotes/origin/$cur"; then
-          blocker="origin/$cur exists locally — rebase only unpushed branches"
-        else
-          lr_rc=0
-          git -C "$gitdir" ls-remote --exit-code --heads origin "$cur" >/dev/null 2>&1 || lr_rc=$?
-          if [[ "$lr_rc" == 0 ]]; then
-            blocker="'$cur' is on origin — rebase only unpushed branches"
-          elif [[ "$lr_rc" != 2 ]]; then
-            blocker="could not confirm '$cur' is absent from origin (git ls-remote exited $lr_rc)"
-          fi
-        fi
-      fi
-    fi
-    if [[ -z "$blocker" ]]; then
-      seg_extra_git='merge|rebase'
-      can_allow && emit allow "Local git $op onto a local branch, clean tree (.claude-merge-auto)."
-      seg_extra_git=''
-      blocker="another segment on the line is outside the allow tier"
-    fi
-    emit ask "Local git $op — needs approval (merge auto: $blocker)."
-  fi
-  emit ask "Local git $op — needs approval."
 fi
 
 # ── creating a branch that already exists on the remote ──
@@ -918,42 +847,6 @@ Starting '$new_branch' duplicates their work. Ask them, or take an issue that is
   fi
 fi
 
-# ── new worktree on a new branch (.claude-merge-auto) ──
-#
-# `worktree add -b <new> <path> [HEAD|<local-branch>]` adds a branch and a
-# checkout and changes nothing that exists: -b refuses a taken name and the
-# path must be absent. -B, --force and the other flags can reset or reuse what
-# exists, so they ask. The origin and issue checks above have already denied a
-# name someone else holds.
-if [[ "$merge_auto" == 1 && "$merge_off" != 1 && -n "$new_branch" && -n "$repo_root" ]] \
-   && echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+worktree[[:space:]]+add\b'; then
-  n_wt=0; wt_seg=""
-  while IFS= read -r seg; do
-    [[ "$(git_sub_of "$seg")" == worktree ]] && { n_wt=$((n_wt + 1)); wt_seg="$seg"; }
-  done < <(segments)
-  if [[ "$n_wt" == 1 ]] && one_repo_seg "$wt_seg" \
-     && wt_pos=$(git_args_of "$wt_seg" | tr ' \t' '\n\n' | grep -v '^$' | awk '
-          NR == 1 { if ($0 != "add") bad = 1; next }
-          take    { take = 0; next }
-          /^-b$/  { take = 1; next }
-          /^(-q|--quiet)$/ { next }
-          /^-/    { bad = 1; next }
-                  { print; n++ }
-          END { exit (bad || take || n < 1 || n > 2) }'); then
-    wt_path=$(echo "$wt_pos" | sed -n 1p); wt_start=$(echo "$wt_pos" | sed -n 2p)
-    [[ "$wt_path" == /* ]] || wt_path="$gitdir/$wt_path"
-    if ! printf '%s\n' "$wt_pos" "$new_branch" | grep -vqE '^[A-Za-z0-9._/+-]+$' \
-       && [[ ! -e "$wt_path" && ! -L "$wt_path" ]] \
-       && { [[ -z "$wt_start" || "$wt_start" == HEAD ]] || git -C "$gitdir" show-ref --verify --quiet "refs/heads/$wt_start"; } \
-       && git check-ref-format --branch "$new_branch" >/dev/null 2>&1 \
-       && ! git -C "$gitdir" show-ref --verify --quiet "refs/heads/$new_branch"; then
-      wt_add_ok=1
-      can_allow && emit allow "New worktree on new branch '$new_branch' — changes no existing branch or checkout (.claude-merge-auto)."
-      wt_add_ok=0
-    fi
-  fi
-fi
-
 # ── branch switch with a dirty tree ──
 #
 # Uncommitted changes follow you across a switch and land on the branch you
@@ -988,35 +881,25 @@ fi
 # Every deny is above this point, so asking here cannot mask one.
 [[ "$staging" == "?" ]] && emit ask "git add/commit with a pathspec the gate cannot place in the repo — it may expand to the whole tree."
 
-# ── local add / commit ──
+# ── local git writes ──
 #
-# Staging and committing touch only this checkout's index and history: nothing
-# reaches a remote, and `git reset --soft HEAD~` undoes a commit. They run
-# without a prompt so a review loop can commit each fix and re-review
-# unattended. Commit on main/master was denied above. What is not a plain
-# local write still asks: --amend rewrites a sha, --no-verify skips the repo's
-# own hooks, a detached HEAD has no branch to hold the commit, an unreadable
-# pathspec may be `.`, and an opaque or redirecting line may hide
-# another command. Staging alone needs no branch: a
-# rebase stopped on a conflict has a detached HEAD, and resolving it is `git add`.
-if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+(add|commit)([[:space:]]|$)'; then
-  if { [[ -n "$cur" ]] || ! echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+commit([[:space:]]|$)'; } \
-     && [[ -z "$staging" ]] && ! echo "$bare" | grep -Eq -- '(^|[[:space:]])--amend\b'; then
-    seg_extra_git='add|commit'
-    can_allow && emit allow "Local git add/commit — writes only this checkout's index and history."
-    seg_extra_git=''
-  fi
-fi
+# Every deny, and every ask the gate means to put to the human, is above this
+# point. What is left that touches only this checkout runs: staging, commits,
+# branches, switches, stashes, worktrees, local merges and rebases. A segment
+# git_local_ok refuses, an opaque line or a redirect into a file falls through.
+local_ok=1
+can_allow && emit allow "Local git write — touches only this checkout."
+local_ok=0
 
 # ── git classification ──
 #
-# Read-only lines were allowed above; what is left is a local write or a read
-# in a shape the segment analysis could not clear.
+# Reads and plain local writes were allowed above; what is left discards work,
+# rewrites config, or is a shape the segment analysis could not clear.
 
 if [[ "$first" == "git" ]]; then
   sub=$(git_sub_of "$bare")
   case "$sub" in
-    add|commit|switch|checkout|restore|reset|cherry-pick|revert|rm|mv|am|apply|submodule|clean)
+    add|stage|commit|switch|checkout|restore|reset|merge|rebase|cherry-pick|revert|rm|mv|am|apply|submodule|clean)
       emit ask "Local git write ($sub) — needs approval." ;;
     worktree|branch|config|remote|stash)
       git_segment_ok "$(segments | head -1)" || emit ask "Local git write ($sub) — needs approval." ;;
