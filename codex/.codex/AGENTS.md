@@ -52,10 +52,11 @@
 | `remote` | on | `git push`, `gh` ask; `auto` allows `git push [-u] origin <current-branch>` and `gh pr create --draft` while pre-push's review gate is live, and turns `review` on | both denied |
 | `merge` | on | **local** merge/rebase allowed | both denied |
 | `review` | off | push denied until the branch diff passes a fresh-context review | no review required |
+| `ftl` | off | every prompt that is not a slash command is told to run through `/ftl` | prompts run as typed |
 
-`remote` and `merge` are on unless the repo root carries an opt-out marker — `.claude-remote-off` or `.claude-merge-off` — so turning one off writes a file and turning it back on removes it. `review` is the reverse: off unless the repo is listed in `~/.claude/hooks/review-gate-repos`. `remote auto` is `.claude-remote-auto`: a push asks when the review gate is not live, `origin/HEAD` is unset, the branch is the default, or origin's copy of the branch holds anyone else's commits; `.claude-remote-off` wins.
+`remote` and `merge` are on unless the repo root carries an opt-out marker — `.claude-remote-off` or `.claude-merge-off` — so turning one off writes a file and turning it back on removes it. `review` is the reverse: off unless the repo is listed in `~/.claude/hooks/review-gate-repos`. `ftl` is `.claude-ftl`, read by `ftl-every-prompt.sh`; it is a working method, not a permission, so `all off` and the offers skip it. `remote auto` is `.claude-remote-auto`: a push asks when the review gate is not live, `origin/HEAD` is unset, the branch is the default, or origin's copy of the branch holds anyone else's commits; `.claude-remote-off` wins.
 
-The markers are per checkout, so a worktree tightens separately from its parent; the review toggle and `.claude-remote-auto` key off the main checkout instead and are shared with its worktrees. `~/.config/git/ignore` covers the markers, so they never reach a repo's tracked tree or show up in `git status`.
+The markers are per checkout, so a worktree tightens separately from its parent; the review toggle, `.claude-remote-auto` and `.claude-ftl` key off the main checkout instead and are shared with its worktrees. `~/.config/git/ignore` covers the markers, so they never reach a repo's tracked tree or show up in `git status`.
 
 ### The enforcement layers
 

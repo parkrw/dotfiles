@@ -170,6 +170,11 @@
             "type": "command",
             "command": "~/.claude/hooks/scripts/turn-reminder.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/scripts/ftl-every-prompt.sh",
+            "timeout": 5
           }
         ]
       }
