@@ -14,6 +14,10 @@
       "Artifact",
       "EnterWorktree",
       "ExitWorktree",
+      "Monitor",
+      "Edit(~/.local/state/claude/fan/**)",
+      "Write(~/.local/state/claude/fan/**)",
+      "Bash(tmux new-window:*)",
       "Bash(gh list:*)",
       "Bash(gh issue view:*)",
       "Bash(gh pr view:*)",
@@ -277,6 +281,10 @@
       "**Org-specific CLIs**: None configured",
       "**routine under CloudKey-io/core prefix**: staging named paths and commit run without a prompt, except `--amend`, `--no-verify`, a detached-HEAD commit and a pathspec the gate cannot place in the repo (for example `$var`, `~`, a `..` climb, an absolute path outside it, `--pathspec-from-file`, exclude or attr magic), which ask, and bulk staging (`git add -A`/`-u` or a whole-tree pathspec like `.`, `./`, `:/`, `*`; `git commit -a` in any flag cluster or with such a pathspec) and a commit on main/master, which are denied; other local git mutations (branch, stash, local merge/rebase) ask before running; read-only git/gh commands run without a prompt; `git push` and mutating `gh` commands always ask; integrating from a remote (`git pull`, `git merge origin/…`, `gh pr merge`) is permanently denied"
     ]
+  },
+  "skillOverrides": {
+    "handoff": "off",
+    "slice": "off"
   },
   "voiceEnabled": true,
   "model": "opus"
