@@ -29,6 +29,11 @@
     "deny": [
       "mcp__clickup",
       "mcp__atlassian",
+      "ShareOnboardingGuide",
+      "ReportFindings",
+      "ListAgents",
+      "SendFeedback",
+      "ScheduleWakeup",
       "Bash(gh pr merge:*)",
       "Bash(git reset --hard:*)",
       "Bash(git add -A:*)",
