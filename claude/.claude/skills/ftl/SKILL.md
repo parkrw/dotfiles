@@ -1,6 +1,6 @@
 ---
 name: ftl
-description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, commit, then the push and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `claude-review` in a loop until it reports zero findings, then rebases when behind and prints the push and `gh pr create` commands. `/ftl ship --integrate` also runs `pull --ff-only` in the default checkout, the rebase or merge itself, resolves conflicts, then pushes and opens a draft PR. `/ftl <task> --ship` does all of it in one command - orient, build, then ship --integrate - stopping only for a decision the build cannot make alone. Local git writes run as the write gate allows; push and gh run only in Ship --integrate. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl ship --integrate, /ftl "fix the logout redirect #301" --ship, /ftl --help.
+description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - for a change, first creates and enters a worktree when on the default branch or a detached HEAD, then indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, commit, then the push and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `claude-review` in a loop until it reports zero findings, then rebases when behind and prints the push and `gh pr create` commands. `/ftl ship --integrate` also runs `pull --ff-only` in the default checkout, the rebase or merge itself, resolves conflicts, then pushes and opens a draft PR. `/ftl <task> --ship` does all of it in one command - orient, build, then ship --integrate - stopping only for a decision the build cannot make alone. Local git writes run as the write gate allows; push and gh run only in Ship --integrate. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl ship --integrate, /ftl "fix the logout redirect #301" --ship, /ftl --help.
 ---
 
 ## Help
@@ -19,9 +19,11 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
     steered task:  /ftl "<task>", build together,
                    then /ftl ship --integrate     -> draft PR; mark it ready
 
-  /ftl <task>     orient: index docs/ by heading, read the sections the
-                   task touches, list past review findings and edge
-                   cases, measure the lead's conventions, print state
+  /ftl <task>     orient: worktree for a change (created on
+                   main/detached, then entered), index docs/ by
+                   heading, read the sections the task touches, list
+                   past review findings and edge cases, measure the
+                   lead's conventions, print state
   /ftl            pre-handoff checklist on the staged diff (falls back to
                    the working tree), commit, then push and gh pr create
                    for the human
@@ -49,6 +51,12 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
 Run from the repo root. Every step prints the line that shows its result, so the next step can rely on what is on screen. `$ARGUMENTS` of exactly `ship` runs Ship, and exactly `ship --integrate` runs Ship with Integrate; empty runs Check; anything else ending in ` --ship` runs Task to PR with the rest as the task; anything else is the task for Orient.
 
 # Orient - `/ftl <task>`
+
+## 0. Worktree
+
+A task that changes files - a fix, a feature, a refactor, a doc edit - runs Ship step 1 before anything else, naming the worktree from the task, since there is no diff yet. The rest of Orient, and the build, run in `worktree`. When it carries uncommitted work over, print Ship step 5's restore and clean line for the human now: the worktree holds the work, and a later hand-off may not know it was carried.
+
+A question, an investigation or a review that edits nothing stays in the current checkout. One that turns into an edit runs this step before its first edit.
 
 ## 1. Rules
 
@@ -106,8 +114,6 @@ If the log prints anything the branch is behind. Say by how many commits, and na
 
 Run the chosen local commands. A force push is the human's: print it and wait.
 
-Never edit on the default branch. If you are on it, run `git switch -c <branch>` before the first edit.
-
 ## 5. The human's rules
 
 These win over the lead's habits.
@@ -123,10 +129,9 @@ These win over the lead's habits.
 
 For a task that needs no steer. One command from task to draft PR.
 
-1. Orient steps 1, 2, 2a, 3 and 5 for the task. Skip step 4: Ship fetches and integrates, so nothing is printed for the human and nothing waits.
-2. Ship step 1 now, before the first edit, so the build never lands on the default branch. Name the worktree from the task; there is no diff yet.
-3. Build the task in `worktree` against Orient step 2a's traps. When the task leaves a decision open - scope it does not settle, an amount under the Visual work rules (variants or a slider page), a choice between two behaviors - stop with one question or the variants. After the answer, carry on from here; no second command.
-4. Ship from step 2, with `--integrate`.
+1. Orient steps 0, 1, 2, 2a, 3 and 5 for the task. Skip step 4: Ship fetches and integrates, so nothing is printed for the human and nothing waits. Step 0's restore and clean line waits for Ship step 5, which prints it.
+2. Build the task in `worktree` against Orient step 2a's traps. When the task leaves a decision open - scope it does not settle, an amount under the Visual work rules (variants or a slider page), a choice between two behaviors - stop with one question or the variants. After the answer, carry on from here; no second command.
+3. Ship from step 2, with `--integrate`.
 
 # Check - `/ftl`
 
