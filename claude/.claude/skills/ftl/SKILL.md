@@ -31,8 +31,10 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
                    commit, then claude-review (opus, xhigh)
                    in a loop - run each runtime proof's test,
                    fix each finding it does not refute as a class,
-                   rerun the checks, commit, re-review - until zero
-                   findings; then rebase when behind and print
+                   rerun the checks except the suite, commit,
+                   re-review - until zero findings; the full suite
+                   runs before round 1 and after the last round;
+                   then rebase when behind and print
                    cd, push and gh pr create
   /ftl ship --integrate
                   ship, but integrate the default branch itself
@@ -198,7 +200,7 @@ Then one line per adjacent smell found, and nothing else.
 
 Fetch, check, commit, review, fix, repeat, until the reviewer reports no findings. Ship runs every local git write itself, in the worktree resolved in step 1; the write gate allows them without a prompt. Only the push and `gh pr create` are printed for the human at the end.
 
-The order is fixed: CI's full test suite passes, then `claude-review`, then the push, then the PR. Every review round, the first included, starts on a commit the full suite passed; the one test file a fix touched passing is not the suite. A push that skips the review meets it anyway: where the review gate is live, pre-push denies a branch diff without a passing review.
+The order is fixed: CI's full test suite passes, then `claude-review`, then the push, then the PR. The full suite runs twice: before round 1, and after the last round when a fix was committed since round 1. One round that passes runs it once, on the commit it reviewed. A push that skips the review meets it anyway: where the review gate is live, pre-push denies a branch diff without a passing review.
 
 With `--integrate`, Ship also integrates the default branch itself (step 3a), once, before the review, resolves conflicts, then pushes and opens a draft PR; the human marks it ready for review. The push and draft PR run without a prompt only in a repo set to `claude-gate remote auto`; otherwise the gate asks.
 
@@ -272,7 +274,7 @@ Then `git -C "$worktree" diff --name-only <default> -- CHANGELOG.md` prints noth
 
 ## 4. Review loop
 
-Before each round, Check step 2's commands, the full test suite among them, have passed on HEAD. Round 1 of at most 10:
+Before round 1, Check step 2's commands, the full test suite among them, have passed on HEAD. Round 1 of at most 10:
 
 ```
 claude-review -C "$worktree" --yes --engine claude --model opus --effort xhigh
@@ -292,9 +294,11 @@ Run it in the background and wait for it; a review takes minutes and a foregroun
   - Add the test that fails without the fix, if the repo has tests; for a confirmed finding, that is its proof test. A doc or prose finding needs none.
   - A finding that is wrong gets no code change. Keep it, as `path:line - defect - reason`, for the PR body's `Disputed findings` section: the human sees every finding the author dismissed.
 
-  Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged, the full suite and not only the fixed file: a fix is new code the checkers have not seen. Fix what fails and add those paths again, or name it as left out and why, as Check allows. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
+  Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged, except the full suite: a fix is new code the checkers have not seen. In its place run the test files the fix touched; the suite waits for the last round. Fix what fails and add those paths again, or name it as left out and why, as Check allows. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
 
 After round 10 with findings still open, or a round where every finding is wrong - nothing to commit, so the next round would judge the same diff - stop: print each open finding as `path:line - defect`, with the reason for each one judged wrong, then hand off anyway. The human decides.
+
+However the loop ends, when a fix was committed since round 1, run the full suite on HEAD before handing off. It passes: hand off. It fails: fix each failure as a finding, commit, and start round N+1, since the commit changed the diff the last round approved. Past round 10, print the failures with the open findings and hand off anyway.
 
 ## 5. Hand off
 
