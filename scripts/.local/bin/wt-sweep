@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# wt-sweep — remove a repo's worktrees and local branches whose PR has merged.
+#
+#   wt-sweep [-C <repo>]           list what would go, and why the rest stay
+#   wt-sweep [-C <repo>] --apply   remove them
+#
+# A branch goes only when GitHub shows a merged PR whose head is the branch's
+# exact tip, its worktree holds no tracked or untracked change, and no process
+# has its cwd inside the worktree. A squash merge leaves the branch unmerged as
+# far as git can tell, so the PR head sha is the proof and the delete is -D.
+# Ignored files (node_modules, dist, .auth) go with the worktree.
+#
+# Only the 1000 most recently merged PRs are read; an older branch is kept and
+# reported as having no merged PR.
+set -euo pipefail
+
+die() { echo "wt-sweep: $1" >&2; exit 1; }
+
+repo=. apply=
+while (($#)); do
+  case $1 in
+    -C) repo=${2:?-C needs a path}; shift 2 ;;
+    --apply) apply=1; shift ;;
+    -h|--help) sed -n '2,5p' "$0"; exit ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || die "not a git repo: $repo"
+main=${common%/.git}
+default=$(git -C "$main" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null) || die "origin/HEAD unset; run git remote set-head origin -a"
+default=${default#origin/}
+
+merged=$(cd "$main" && gh pr list --state merged --limit 1000 --json number,headRefName,headRefOid \
+  --jq '.[] | "\(.headRefName) \(.headRefOid) \(.number)"') || die "gh pr list failed"
+busy=$(lsof -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' || true)
+
+in_use() {
+  local dir
+  while IFS= read -r dir; do
+    [[ $dir == "$1" || $dir == "$1"/* ]] && return 0
+  done <<<"$busy"
+  return 1
+}
+
+gone=0 kept=0 failed=0
+while read -r branch tip wt; do
+  [[ $branch == "$default" || $wt == "$main" ]] && continue
+
+  pr=$(awk -v b="$branch" -v s="$tip" '$1 == b && $2 == s { print $3; exit }' <<<"$merged")
+  other=$(awk -v b="$branch" '$1 == b { print $3; exit }' <<<"$merged")
+  reason=
+  if [[ -z $pr && -n $other ]]; then
+    reason="tip ${tip:0:12} is past merged PR #$other's head"
+  elif [[ -z $pr ]]; then
+    reason="no merged PR"
+  elif [[ -n $wt && ! -d $wt ]]; then
+    reason="worktree $wt is missing; run git worktree prune"
+  elif [[ -n $wt && -n $(git -C "$wt" status --porcelain) ]]; then
+    reason="uncommitted changes in $wt"
+  elif [[ -n $wt ]] && in_use "$wt"; then
+    reason="a process is running in $wt"
+  fi
+
+  if [[ -n $reason ]]; then
+    printf 'keep    %-40s %s\n' "$branch" "$reason"
+    kept=$((kept + 1))
+    continue
+  fi
+
+  printf 'remove  %-40s #%s %s\n' "$branch" "$pr" "${wt:-(no worktree)}"
+  gone=$((gone + 1))
+  [[ -n $apply ]] || continue
+  if { [[ -z $wt ]] || git -C "$main" worktree remove "$wt"; } && git -C "$main" branch -q -D "$branch"; then
+    :
+  else
+    echo "        failed: $branch" >&2
+    failed=$((failed + 1))
+  fi
+done < <(git -C "$main" for-each-ref --format='%(refname:short) %(objectname) %(worktreepath)' refs/heads)
+
+if [[ -n $apply ]]; then
+  echo "removed $((gone - failed)), kept $kept, failed $failed"
+else
+  echo "$gone to remove, $kept kept; rerun with --apply to remove"
+fi
