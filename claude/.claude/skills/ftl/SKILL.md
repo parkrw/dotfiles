@@ -268,7 +268,7 @@ A conflict: resolve it. For each file in `git -C <worktree> diff --name-only --d
 
 Abort instead (`rebase --abort` or `merge --abort`) and stop, naming the conflicted files, when a conflicted file is binary, generated or a lockfile, or when the two sides change the same behavior in different directions - that choice is the lead's.
 
-After the last `--continue`: `git -C <worktree> diff <default> | grep -nE '^\+(<{7}|>{7})( |$)'` prints nothing (a rebase runs no pre-commit hook), then rerun Check step 2's commands and fix and commit what fails. Note each resolved file, one line on how, for the PR body's `Conflicts resolved` section.
+After the last `--continue`: `git -C <worktree> diff <default> | grep -nE '^\+(<{7}|>{7})( |$)'` prints nothing (a rebase runs no pre-commit hook), then rerun Check step 2's commands and fix and commit what fails.
 
 Then `git -C "$worktree" diff --name-only <default> -- CHANGELOG.md` prints nothing: the change's entry is its fragment.
 
@@ -304,7 +304,7 @@ However the loop ends, when a fix was committed since round 1, run the full suit
 
 Without `--integrate`, first rerun step 2's `fetch`, then `git -C "$worktree" rev-list --count HEAD..origin/HEAD`, since the review loop can outlast a merge to the default branch. Count above `0` - behind: run `git -C <default-checkout> pull --ff-only`, then `git -C <worktree> rebase <default>`, literal paths; a conflict is resolved, or aborted, as step 3a does. The human pastes the block below into a shell that sits in some other directory and has no `$worktree`, so every path is a literal absolute path and the block opens with `cd`. Print it, placeholders filled, and nothing else - no smell line, no summary.
 
-Before any block is printed or `--integrate` pushes, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<repo>-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree, and outside `.git`, which an `EnterWorktree` session may not write; `<branch-slug>` is `<branch>` with each `/` as `-`, so no two branches share one. The body ends with `Conflicts resolved` when step 3a resolved any, `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
+Before any block is printed or `--integrate` pushes, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<repo>-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree, and outside `.git`, which an `EnterWorktree` session may not write; `<branch-slug>` is `<branch>` with each `/` as `-`, so no two branches share one. The body ends with `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. It never mentions conflicts, their resolution, or the rebase or merge: integration is plumbing, not the change. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
 
 ```
 cd <worktree>

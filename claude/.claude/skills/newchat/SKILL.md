@@ -23,6 +23,7 @@ Rules:
 - Every bullet must earn its place: if a fresh session would find it within 30 seconds of reading the issue, cut it.
 - No restating the issue body, no filler, no open questions the user already answered — state the answer.
 - Write values inline (hex codes, px, paths); never "see above" or "as discussed".
+- No branch history: rebases, merges and resolved conflicts are already in the branch, and a session told about them repeats them in the PR body.
 
 ## `--spawn`
 
