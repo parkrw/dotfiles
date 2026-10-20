@@ -22,8 +22,9 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
   /ftl <task>     orient: worktree for a change (created on
                    main/detached, then entered), index docs/ by
                    heading, read the sections the task touches, list
-                   past review findings and edge cases, measure the
-                   lead's conventions, print state
+                   past review findings and edge cases, read the plan
+                   the task or a memory names, measure the lead's
+                   conventions, print state
   /ftl            pre-handoff checklist on the staged diff (falls back to
                    the working tree), commit, then push and gh pr create
                    for the human
@@ -88,6 +89,12 @@ What the reviewer will find, found first. Two lists, both printed:
 
 - Edge cases: the inputs and states the change meets - empty, one, many, equal values, the boundary, the error path, and for UI both color schemes and RTL. Each one gets a test, or a line saying why it cannot occur; in a repo with no tests, a line saying how the change handles it. The build repeats none of the past findings.
 
+## 2b. Plan
+
+A plan of record lives outside the repo, and the task or a loaded memory names its path. Read that file's section for this task and nothing else; never list or glob `~/.claude/plans/`, which holds every repo's plans. Print `plan: <path>`, or `plan: none` when nothing names one.
+
+The plan holds the task's status, and the hand-offs update it. A memory holds the pointer to the plan and the human's decisions, and changes only on a new decision; status never goes in a memory, since two copies drift.
+
 ## 3. The lead's conventions, measured
 
 Find the lead: `git shortlog -sn --no-merges | head -3`. Then, with `--author='<lead>' --no-merges`:
@@ -131,7 +138,7 @@ These win over the lead's habits.
 
 For a task that needs no steer. One command from task to draft PR.
 
-1. Orient steps 0, 1, 2, 2a, 3 and 5 for the task. Skip step 4: Ship fetches and integrates, so nothing is printed for the human and nothing waits. Step 0's restore and clean line waits for Ship step 5, which prints it.
+1. Orient steps 0, 1, 2, 2a, 2b, 3 and 5 for the task. Skip step 4: Ship fetches and integrates, so nothing is printed for the human and nothing waits. Step 0's restore and clean line waits for Ship step 5, which prints it.
 2. Build the task in `worktree` against Orient step 2a's traps. When the task leaves a decision open - scope it does not settle, an amount under the Visual work rules (variants or a slider page), a choice between two behaviors - stop with one question or the variants. After the answer, carry on from here; no second command.
 3. Ship from step 2, with `--integrate`.
 
@@ -193,6 +200,8 @@ Run the local half yourself: `git switch -c <branch>` when on the default branch
 git push -u origin <branch>
 gh pr create --title '<subject>' --body-file <body-file>
 ```
+
+When Orient step 2b printed a plan, update this task's status in it before printing: branch and commit sha.
 
 Then one line per adjacent smell found, and nothing else.
 
@@ -268,7 +277,7 @@ A conflict: resolve it. For each file in `git -C <worktree> diff --name-only --d
 
 Abort instead (`rebase --abort` or `merge --abort`) and stop, naming the conflicted files, when a conflicted file is binary, generated or a lockfile, or when the two sides change the same behavior in different directions - that choice is the lead's.
 
-After the last `--continue`: `git -C <worktree> diff <default> | grep -nE '^\+(<{7}|>{7})( |$)'` prints nothing (a rebase runs no pre-commit hook), then rerun Check step 2's commands and fix and commit what fails. Note each resolved file, one line on how, for the PR body's `Conflicts resolved` section.
+After the last `--continue`: `git -C <worktree> diff <default> | grep -nE '^\+(<{7}|>{7})( |$)'` prints nothing (a rebase runs no pre-commit hook), then rerun Check step 2's commands and fix and commit what fails.
 
 Then `git -C "$worktree" diff --name-only <default> -- CHANGELOG.md` prints nothing: the change's entry is its fragment.
 
@@ -304,7 +313,7 @@ However the loop ends, when a fix was committed since round 1, run the full suit
 
 Without `--integrate`, first rerun step 2's `fetch`, then `git -C "$worktree" rev-list --count HEAD..origin/HEAD`, since the review loop can outlast a merge to the default branch. Count above `0` - behind: run `git -C <default-checkout> pull --ff-only`, then `git -C <worktree> rebase <default>`, literal paths; a conflict is resolved, or aborted, as step 3a does. The human pastes the block below into a shell that sits in some other directory and has no `$worktree`, so every path is a literal absolute path and the block opens with `cd`. Print it, placeholders filled, and nothing else - no smell line, no summary.
 
-Before any block is printed or `--integrate` pushes, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<repo>-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree, and outside `.git`, which an `EnterWorktree` session may not write; `<branch-slug>` is `<branch>` with each `/` as `-`, so no two branches share one. The body ends with `Conflicts resolved` when step 3a resolved any, `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
+Before any block is printed or `--integrate` pushes, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<repo>-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree, and outside `.git`, which an `EnterWorktree` session may not write; `<branch-slug>` is `<branch>` with each `/` as `-`, so no two branches share one. The body ends with `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. It never mentions conflicts, their resolution, or the rebase or merge: integration is plumbing, not the change. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
 
 ```
 cd <worktree>
@@ -318,5 +327,7 @@ With `--integrate`, no fetch, no second rebase or merge and no re-review: push t
 - Print the PR URL and nothing else - plus step 3a's `integrated against local` line when its pull failed, and, when step 1 carried work over, the restore and clean line below for the human.
 
 Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), step 3a stopped, or the gate or pre-push refuses: print the block for the human, as plain Ship does.
+
+When Orient step 2b printed a plan, update this task's status in it as the last write before printing: branch, head sha, and the draft PR URL when `--integrate` opened one, or why it stopped.
 
 `<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `git merge <default>` in place of `git rebase <default>`. When step 1 carried uncommitted work over, the block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy; it discards work, so it stays the human's. The subject follows Check step 6; a PR that finishes an issue ends its body with `Closes #N`.
