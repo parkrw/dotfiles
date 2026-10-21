@@ -487,7 +487,9 @@ td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
         if (hgt > 0) f.svg.append(s("path", { class: "m-critical", d: barPath(x, failTop, bw, hgt, 4) }));
       }
       const hit = s("rect", { class: "hit", x: f.m.l + band * i, y: f.m.t, width: band, height: f.ih, tabindex: "0", "aria-label": `Week of ${day(w.week)}: ${w.reviews} reviews, ${w.pass} pass, ${w.fail} fail` });
-      hover(hit, () => [tipRow(nf.format(w.reviews), `reviews, week of ${day(w.week)}`), tipRow(nf.format(w.pass), "PASS", "var(--good)"), tipRow(nf.format(w.fail), "FAIL", "var(--critical)")]);
+      hover(hit, () => [tipRow(nf.format(w.reviews), `reviews, week of ${day(w.week)}`), tipRow(nf.format(w.pass), "PASS", "var(--good)"), tipRow(nf.format(w.fail), "FAIL", "var(--critical)"),
+        tipRow(nf.format(w.branches), "branches started"), tipRow(String(w.roundsMedian), "median rounds for them"), tipRow(w.branches ? pct(w.firstPass, w.branches) : "-", "passed round 1"),
+        tipRow(nf.format(w.oneMinor), "FAIL on one minor"), tipRow(nf.format(w.afterPass), "rounds after a PASS")]);
       f.svg.append(hit);
     });
     xLabels(f, weeks, (i) => f.m.l + band * i + band / 2);
@@ -613,13 +615,16 @@ td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
 
   function renderAbout(a) {
     const late = a.late || {};
+    const k = a.roundKinds || { first: {}, afterFail: {}, afterPass: {}, oneMinor: 0 };
+    const money = (x) => (x == null ? "n/a" : `$${nf.format(Math.round(x))}`);
     const p = (...kids) => h("p", {}, ...kids);
     const code = (t) => h("code", {}, t);
     document.getElementById("about").replaceChildren(
       p(`${nf.format(a.runs.transcript)} of ${nf.format(a.runs.n)} reviews were imported from reviewer transcripts, which carry no commit shas. Their findings can only be marked resolved; fixed, elsewhere and dropped need reviews the gate recorded with shas (${nf.format(a.runs.gate)} here).`),
-      p(`A finding's outcome is judged against the next review of the same branch. Late finds, raised by no earlier review of the branch: ${nf.format(late["missed-earlier"] || 0)} with nothing changed since (missed earlier), ${nf.format((late["after-file-change"] || 0) + (late["after-other-change"] || 0))} after a change, ${nf.format(late.unknown || 0)} unknown. Flaky verdicts: ${a.flaky.flipped} of ${a.flaky.rereviewed} unchanged diffs reviewed twice.`),
+      p(`A finding's outcome is judged against the next review of the same branch. Late finds, raised by no earlier review of the branch: ${nf.format(late["missed-earlier"] || 0)} with nothing changed since (missed earlier), ${nf.format(late["after-file-change"] || 0)} after their own file changed, ${nf.format(late["after-other-change"] || 0)} after only other files changed, ${nf.format(late.unknown || 0)} unknown. Flaky verdicts: ${a.flaky.flipped} of ${a.flaky.rereviewed} unchanged diffs reviewed twice.`),
+      p(`Rounds by what they follow: ${nf.format(k.first.n)} first rounds (${money(k.first.cost)}), ${nf.format(k.afterFail.n)} after a FAIL (${money(k.afterFail.cost)}, ${nf.format(k.afterFail.findings)} findings), ${nf.format(k.afterPass.n)} after a PASS, new commits on a branch that had already passed (${money(k.afterPass.cost)}, ${nf.format(k.afterPass.findings)} findings). ${nf.format(k.oneMinor)} of ${nf.format(a.runs.fail)} FAIL rounds listed one minor finding and nothing else.`),
       a.findings.n - a.findings.categorized
-        ? p(`${nf.format(a.findings.n - a.findings.categorized)} findings have no area or cause yet. `, code("claude-review-stats --categorize"), " classifies them with haiku and asks before it spends.")
+        ? p(`${nf.format(a.findings.n - a.findings.categorized)} findings have no area or cause yet${a.categorizedThrough ? `; the cause and area tables stop at ${day(a.categorizedThrough)}` : ""}. `, code("claude-review-stats --categorize"), " classifies them with haiku and asks before it spends.")
         : p("Every finding has an area and a cause."),
       p(`Built from `, code("claude-review-stats --json"), ` on ${dayYear(DATA.generated)}. Rerun `, code("/review-insights"), " to refresh."));
   }

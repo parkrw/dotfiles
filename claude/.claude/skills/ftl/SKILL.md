@@ -88,6 +88,8 @@ What the reviewer will find, found first. Two lists, both printed:
   ```
 
 - Edge cases: the inputs and states the change meets - empty, one, many, equal values, the boundary, the error path, and for UI both color schemes and RTL. Each one gets a test, or a line saying why it cannot occur; in a repo with no tests, a line saying how the change handles it. The build repeats none of the past findings.
+- Consumers: `git grep -n -w` each fixture, class, prop, route and option the change adds, renames or removes, across specs, CI sweeps and workflows as well as source. Each hit is a case on the list: the spec that still clicks the old control, the sweep that fails on a new console warning, the caller that passes the removed variant.
+- Platform values: a computed style, a DOM readback or a tool's output that the change or its test relies on is printed from the runner's own engine first - one test line or `node -e` - and the assertion copies what was printed. jsdom, Chrome and a CLI each disagree with memory.
 
 ## 2b. Plan
 
@@ -159,6 +161,7 @@ Run the commands from Orient step 3, from the repo root, each with its pass line
 
 - `git diff --cached | grep -nE '^\+.*\.(skip|only)\('` prints nothing.
 - A bug fix carries a test that failed before the fix. Name the test.
+- Where a touched workspace has a `test:coverage` script, the suite run above takes a JSON report - vitest: `--coverage.reporter=json --coverage.reportsDirectory=<scratch>/cov-<workspace>`; c8 or nyc: `--reporter=json` - and `diff-uncovered origin/<default> <scratch>/cov-*/coverage-final.json` prints only its count line. Each `path:line` it prints is an added line no test executed: it gets a test, or a hand-off line saying why it cannot execute.
 - If the rules file demands a spelling, `git diff --cached | grep -nE '^\+.*\b(licence|colour|behaviour|organis|initialis|centre|cancelled|catalogue|analyse|favour|honour)'` prints nothing for US spelling. A mechanical checker rarely covers spelling; this grep is the spot check.
 - If the rules file names a running stack you may restart, restart it and read its log. Paste anything that is not a clean boot.
 - If the repo has end-to-end tests (the directory the e2e command from Orient step 3 runs), grep them for every class, role name, label text, test id and option the diff renames, removes or restyles. Each hit is a spec to update on this branch, though it sits outside the diff.

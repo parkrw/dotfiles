@@ -49,6 +49,7 @@ Write `<dir>/review-insights-notes.json`:
 - Each names one concrete change: a hook, a gate test, a rule moved up or rewritten in a named CLAUDE.md or AGENTS.md, a step added to a named skill, a CI check. Read the file a change names before naming it, so the change fits what is there. "Be more careful" is not a change.
 - Start from the cause's remedy in the digest, then make it specific with its findings: which repo, which kind of file, which rule.
 - `why` cites only numbers the digest prints.
+- When the digest's `categorized through` date is older than the newest change the ledger reflects, the summary says so: the cause shares describe the period before that change, and `WEEKS` is the only evidence for what came after.
 - Plain prose: no hedging, no first person.
 
 ## 4. Final render

@@ -566,6 +566,13 @@ function report(runs, findings, cats, imported) {
   say(`  verdicts   PASS ${count(runs, (r) => r.verdict === "PASS")}  FAIL ${count(runs, (r) => r.verdict === "FAIL")}  none ${count(runs, (r) => r.verdict === "none")} (no verdict line: failed closed)`);
   if (costs.length) say(`  cost       ${money(costs.reduce((a, b) => a + b, 0))} over ${costs.length} priced runs, ${money(costs.reduce((a, b) => a + b, 0) / costs.length)}/run, ${(mins.reduce((a, b) => a + b, 0) / (mins.length || 1)).toFixed(1)} min/run`);
   say(`  branches   ${chains.length}; reviews per branch median ${quantile(rounds, 0.5)}, p90 ${quantile(rounds, 0.9)}, max ${Math.max(0, ...rounds)}`);
+  const kinds = { first: 0, afterFail: 0, afterPass: 0 };
+  for (const [, c] of chains) {
+    const live = c.filter((r) => r.verdict !== "none").sort((a, b) => a.ts.localeCompare(b.ts));
+    live.forEach((r, i) => kinds[i === 0 ? "first" : live[i - 1].verdict === "PASS" ? "afterPass" : "afterFail"]++);
+  }
+  const oneMinor = count(runs, (r) => r.verdict === "FAIL" && r.findings.length === 1 && r.findings[0].severity === "minor");
+  say(`  rounds     first ${kinds.first}  after a FAIL ${kinds.afterFail}  after a PASS ${kinds.afterPass} (new commits on a branch that had passed); FAIL rounds listing one minor only ${oneMinor}`);
   const rereviewed = groupBy(gate, (r) => r.diff).filter(([, rs]) => rs.length > 1);
   const flipped = rereviewed.filter(([, rs]) => new Set(rs.map((r) => r.verdict)).size > 1);
   if (gate.length) say(`  flaky      ${flipped.length} of ${rereviewed.length} unchanged diffs reviewed twice got different verdicts`);

@@ -1,0 +1,77 @@
+#!/usr/bin/env node
+// diff-uncovered <base> <coverage-final.json>... — the added and changed lines
+// of <base>...HEAD that no test executed, by the istanbul-format reports given
+// (vitest: --coverage.reporter=json; c8/nyc: --reporter=json).
+//
+// Prints one path:line per uncovered line, then a count. Exit 1 when any line
+// is uncovered, 0 when none. A changed source file absent from every report is
+// listed under "no report covers": it is outside the coverage include, or no
+// report was taken for its workspace. Tests, docs and styles are never listed.
+//
+// Statement granularity: a line counts as covered when a statement starting
+// on it ran. A line with no statement (a brace, a comment, an import) is not
+// judged either way.
+"use strict";
+const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const [base, ...reports] = process.argv.slice(2);
+if (!base || !reports.length) {
+  process.stderr.write("usage: diff-uncovered <base> <coverage-final.json>...\n");
+  process.exit(2);
+}
+const git = (...args) => execFileSync("git", args, { encoding: "utf8" });
+const root = git("rev-parse", "--show-toplevel").trim();
+
+// Added lines per file, from unified diff hunks: "+c,d" is d lines from c.
+const added = new Map();
+let file = null;
+for (const line of git("diff", "-U0", "--no-color", "--no-ext-diff", `${base}...HEAD`).split("\n")) {
+  if (line.startsWith("+++ ")) file = line.startsWith("+++ b/") ? path.join(root, line.slice(6)) : null;
+  else if (file && line.startsWith("@@")) {
+    const m = line.match(/\+(\d+)(?:,(\d+))?/);
+    const from = Number(m[1]);
+    const n = m[2] === undefined ? 1 : Number(m[2]);
+    if (!added.has(file)) added.set(file, new Set());
+    for (let i = 0; i < n; i++) added.get(file).add(from + i);
+  }
+}
+
+// Lines that started a statement, and those whose statement ran, per file.
+const seen = new Map();
+const ran = new Map();
+for (const report of reports) {
+  const data = JSON.parse(fs.readFileSync(report, "utf8"));
+  for (const entry of Object.values(data)) {
+    const p = path.resolve(entry.path);
+    if (!seen.has(p)) seen.set(p, new Set()), ran.set(p, new Set());
+    for (const [id, loc] of Object.entries(entry.statementMap ?? {})) {
+      seen.get(p).add(loc.start.line);
+      if (entry.s?.[id] > 0) ran.get(p).add(loc.start.line);
+    }
+  }
+}
+
+const SOURCE = /\.(m?[jt]sx?|cjs)$/;
+const isTest = (p) => /(^|\/)(tests?|__tests__|e2e|spec)\//.test(p) || /\.(test|spec)\./.test(p);
+const missing = [];
+let uncovered = 0;
+let judged = 0;
+for (const [p, lines] of [...added].sort()) {
+  if (!seen.has(p)) {
+    const rel = path.relative(root, p);
+    if (SOURCE.test(rel) && !isTest(rel)) missing.push(rel);
+    continue;
+  }
+  for (const l of [...lines].sort((a, b) => a - b)) {
+    if (!seen.get(p).has(l)) continue;
+    judged++;
+    if (ran.get(p).has(l)) continue;
+    uncovered++;
+    process.stdout.write(`${path.relative(root, p)}:${l}\n`);
+  }
+}
+if (missing.length) process.stdout.write(`no report covers: ${missing.join(", ")}\n`);
+process.stdout.write(`${uncovered} of ${judged} added statement lines uncovered\n`);
+process.exit(uncovered ? 1 : 0);

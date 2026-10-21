@@ -101,6 +101,26 @@ function aggregate(runs, findings, tax, runById) {
   const mins = runs.map((r) => r.run?.duration_ms).filter((d) => typeof d === "number").map((d) => d / 60000);
   const chains = groupBy(runs, (r) => `${r.worktree}\0${r.branch}`).map(([, rs]) => rs.sort((a, b) => a.ts.localeCompare(b.ts)));
   const rounds = chains.map(roundsOf).filter(Boolean);
+  // What a round follows: the first judges the task, a round after a FAIL
+  // judges the fix, a round after a PASS judges new commits on a branch that
+  // had already passed.
+  const kinds = { first: [], afterFail: [], afterPass: [] };
+  const kindOf = new Map();
+  for (const c of chains) {
+    const live = c.filter((r) => r.verdict !== "none");
+    live.forEach((r, i) => {
+      const k = i === 0 ? "first" : live[i - 1].verdict === "PASS" ? "afterPass" : "afterFail";
+      kinds[k].push(r);
+      kindOf.set(r, k);
+    });
+  }
+  const priced = (rs) => {
+    const cs = rs.map((r) => r.run?.total_cost_usd).filter((c) => typeof c === "number");
+    return cs.length ? round(sum(cs)) : null;
+  };
+  const oneMinor = (r) => r.verdict === "FAIL" && r.findings.length === 1 && r.findings[0].severity === "minor";
+  const kindStats = (rs) => ({ n: rs.length, fail: count(rs, (r) => r.verdict === "FAIL"), findings: sum(rs.map((r) => r.findings.length)), cost: priced(rs) });
+  const roundKinds = { first: kindStats(kinds.first), afterFail: kindStats(kinds.afterFail), afterPass: kindStats(kinds.afterPass), oneMinor: count(runs, oneMinor) };
   const categorized = findings.filter((f) => f.cause && tax.causes[f.cause]);
   const rereviewed = groupBy(runs.filter((r) => r.diff && r.verdict !== "none"), (r) => r.diff).filter(([, rs]) => rs.length > 1);
 
@@ -121,10 +141,21 @@ function aggregate(runs, findings, tax, runById) {
     .map(([k, fs]) => ({ key: k, meaning: tax.areas[k], n: fs.length, severity: bySeverity(fs) }))
     .sort((a, b) => b.n - a.n);
 
+  // Categorization runs on demand, so the cause and area tables stop at the
+  // newest categorized finding; the date makes a stale table visible.
+  const categorizedThrough = categorized.reduce((m, f) => (runById.get(f.run)?.ts > m ? runById.get(f.run).ts : m), "") || null;
+  const uncategorizedSince = categorizedThrough ? count(findings, (f) => !(f.cause && tax.causes[f.cause]) && runById.get(f.run)?.ts > categorizedThrough) : 0;
+
+  const firstLive = (c) => c.find((r) => r.verdict !== "none");
   const weeks = groupBy(runs, (r) => utcMondayOf(r.ts))
     .map(([w, rs]) => {
       const n = sum(rs.map((r) => r.findings.length));
-      return { week: w, reviews: rs.length, pass: count(rs, (r) => r.verdict === "PASS"), fail: count(rs, (r) => r.verdict === "FAIL"), findings: n, perReview: round(n / rs.length) };
+      const started = chains.filter((c) => firstLive(c) && utcMondayOf(firstLive(c).ts) === w);
+      return {
+        week: w, reviews: rs.length, pass: count(rs, (r) => r.verdict === "PASS"), fail: count(rs, (r) => r.verdict === "FAIL"), findings: n, perReview: round(n / rs.length),
+        branches: started.length, roundsMedian: quantile(started.map(roundsOf).filter(Boolean), 0.5), firstPass: count(started, (c) => firstLive(c).verdict === "PASS"),
+        oneMinor: count(rs, oneMinor), afterPass: count(rs, (r) => kindOf.get(r) === "afterPass"), cost: priced(rs),
+      };
     })
     .sort((a, b) => a.week.localeCompare(b.week));
 
@@ -177,6 +208,9 @@ function aggregate(runs, findings, tax, runById) {
     findings: { n: findings.length, severity: bySeverity(findings), outcome: byOutcome(findings), categorized: categorized.length, perReview: runs.length ? round(findings.length / runs.length) : 0 },
     late: Object.fromEntries(groupBy(findings.filter((f) => f.late), (f) => f.late).map(([k, fs]) => [k, fs.length])),
     flaky: { rereviewed: rereviewed.length, flipped: rereviewed.filter(([, rs]) => new Set(rs.map((r) => r.verdict)).size > 1).length },
+    roundKinds,
+    categorizedThrough,
+    uncategorizedSince,
     causes,
     areas,
     weeks,
@@ -201,12 +235,16 @@ function digest(scopes) {
   L.push(`findings ${a.findings.n} (${a.findings.perReview}/review): blocker ${a.findings.severity.blocker}, major ${a.findings.severity.major}, minor ${a.findings.severity.minor}; categorized ${a.findings.categorized}, uncategorized ${a.findings.n - a.findings.categorized}`);
   L.push(`outcomes ${OUTCOMES.map((o) => `${o} ${a.findings.outcome[o]}`).join(", ")}`);
   L.push(`flaky: ${a.flaky.flipped} of ${a.flaky.rereviewed} unchanged diffs reviewed twice changed verdict`);
+  const kind = (k) => `${k.n} (${usd(k.cost)}, ${k.findings} findings)`;
+  L.push(`rounds: first ${kind(a.roundKinds.first)}, after a FAIL ${kind(a.roundKinds.afterFail)}, after a PASS ${kind(a.roundKinds.afterPass)}; FAIL rounds listing one minor only ${a.roundKinds.oneMinor} of ${a.runs.fail}`);
+  L.push(`late finds: after-file-change ${a.late["after-file-change"] ?? 0}, after-other-change ${a.late["after-other-change"] ?? 0}, missed-earlier ${a.late["missed-earlier"] ?? 0}, unknown ${a.late.unknown ?? 0}`);
+  L.push(`categorized through ${a.categorizedThrough ? a.categorizedThrough.slice(0, 10) : "n/a"}; ${a.uncategorizedSince} findings since then have no cause, so CAUSES and AREAS stop there`);
   L.push("");
   L.push("REPOS (reviews, FAIL rate, findings/review, branches, median rounds, cost)");
   for (const r of a.repos) L.push(`  ${r.key}: ${r.reviews}, ${pct(r.fail / r.reviews)}, ${r.perReview}, ${r.branches}, ${r.roundsMedian}, ${usd(r.cost)}`);
   L.push("");
-  L.push("WEEKS (week, reviews, FAIL, findings/review)");
-  for (const w of a.weeks) L.push(`  ${w.week}: ${w.reviews}, ${w.fail}, ${w.perReview}`);
+  L.push("WEEKS (week, reviews, FAIL, findings/review, branches started, median rounds, first-round PASS, one-minor FAILs, rounds after a PASS, cost)");
+  for (const w of a.weeks) L.push(`  ${w.week}: ${w.reviews}, ${w.fail}, ${w.perReview}, ${w.branches}, ${w.roundsMedian}, ${w.branches ? pct(w.firstPass / w.branches) : "-"}, ${w.oneMinor}, ${w.afterPass}, ${usd(w.cost)}`);
   L.push("");
   L.push("CAUSES (why the author's change let it through; share of categorized findings)");
   for (const c of a.causes) {

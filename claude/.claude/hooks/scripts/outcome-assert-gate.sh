@@ -88,6 +88,7 @@ quote=$'[\'"`]'
 case "$lang" in
   go) pats+=('\.Skip(f|Now)\(|((^|[^[:alnum:]_])(t|b|f|tb)|\.T\(\))\.Skip\(') ;;
   js) pats+=(
+        '\.mock\.(calls|lastCall|results)|\.calls\.length|\.calls\[[0-9]'
         '(^|[^[:alnum:]_])(it|test|describe)(\.concurrent)?\.skip(If)?(\(|\.each)|(^|[^[:alnum:]_])x(it|describe|test)\('
         '(^|[^[:alnum:]_])(this|t|ctx|context)\.skip\('
         ',[[:space:]]*\{([^}]*[,[:space:]])?skip:[[:space:]]*(true|'"$quote"')'
