@@ -23,7 +23,8 @@ if (!base || !reports.length) {
   process.stderr.write("usage: diff-uncovered <base> <coverage-final.json>...\n");
   process.exit(2);
 }
-const git = (...args) => execFileSync("git", args, { encoding: "utf8" });
+// No buffer cap: a lockfile or generated-file rewrite puts the diff past the 1 MiB default.
+const git = (...args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: Infinity });
 const root = git("rev-parse", "--show-toplevel").trim();
 
 // The path in a "+++ " header. Git C-quotes one holding a control character,

@@ -37,7 +37,7 @@ A **late find** is a finding no earlier review of the branch raised. One that ap
 
 **Flaky** counts unchanged diffs that were reviewed twice and got different verdicts.
 
-**Rounds by what they follow**: a first round judges the task, a round after a FAIL judges a fix, and a round after a PASS judges new commits on a branch that had already passed. The digest also counts FAIL rounds that listed one minor and nothing else, the rounds a cleaner first commit would have saved, and prints the date categorization last ran: the cause and area tables stop there.
+**Rounds by what they follow**: a first round judges the task, a round after a FAIL judges a fix, and a round after a PASS judges new commits on a branch that had already passed. The digest also counts FAIL rounds that listed one minor and nothing else, the rounds a cleaner first commit would have saved, and prints the date of the newest review with a categorized finding: the cause and area tables stop there.
 
 ## Acting on it
 
