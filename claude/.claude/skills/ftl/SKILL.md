@@ -87,7 +87,7 @@ What the reviewer will find, found first. Two lists, both printed:
   claude-review-stats --json --repo <main-checkout> | jq -r '(.runs | map({(.id): .ts}) | add) as $ts | [.findings[] | select(.path | IN($ARGS.positional[]))] | group_by(.path)[] | sort_by($ts[.run]) | .[-6:][] | "\(.path):\(.line // "?") \(.severity) - \(.text)"' --args <path>...
   ```
 
-- Edge cases: the inputs and states the change meets - empty, one, many, equal values, the boundary, the error path, and for UI both color schemes and RTL. Each one gets a test, or a line saying why it cannot occur; in a repo with no tests, a line saying how the change handles it. The build repeats none of the past findings.
+- Edge cases: the inputs and states the change meets - empty, one, many, equal values, the boundary, the error path, records written before the change (imported, legacy, missing the new field), what the change leaves for its own next run (a hash, cache or marker the second invocation reads back), and for UI both color schemes and RTL. Each one gets a test, or a line saying why it cannot occur; in a repo with no tests, a line saying how the change handles it. The build repeats none of the past findings.
 - Consumers: `git grep -n -w` each fixture, class, prop, route and option the change adds, renames or removes, across specs, CI sweeps and workflows as well as source. Each hit is a case on the list: the spec that still clicks the old control, the sweep that fails on a new console warning, the caller that passes the removed variant.
 - Platform values: a computed style, a DOM readback or a tool's output that the change or its test relies on is printed from the runner's own engine first - one test line or `node -e` - and the assertion copies what was printed. jsdom, Chrome and a CLI each disagree with memory.
 
@@ -107,7 +107,7 @@ Find the lead: `git shortlog -sn --no-merges | head -3`. Then, with `--author='<
 | bodies | `git log --format='%s%n%b%n---' -20` | prose or bullets, trailers, what a squash merge leaves |
 | footprint | `git log --format= --shortstat -30` | files per commit; whether tests, docs and the changelog entry land together |
 | changelog | `ls changelog.d`; `cat changelog.d/README.md`; `sed -n '1,30p' CHANGELOG.md`; `grep -oE '^- (fix\()?[a-z]+' CHANGELOG.md \| sort \| uniq -c \| sort -rn` | fragment directory and its spec, or its absence; line shape, scopes in use |
-| done | the rules file; else `grep -hE '^\s+run:' .github/workflows/*.yml`; else `package.json` scripts or `Makefile` targets | the commands the checklist will run |
+| done | the rules file's commands, plus every command a pull-request job in `.github/workflows/*.yml` runs - read the files, since one `run: \|` block holds several - minus installs, deploys and publishes; with neither, `package.json` scripts or `Makefile` targets | the commands the checklist will run: a CI job the rules file leaves out still runs before the first review |
 | branches | `git branch -r --format='%(refname:short)' \| head -20` | the branch naming the lead pushes |
 
 If memory holds a profile of this lead, correct it where the measurement disagrees. If it holds none, write one.
@@ -162,6 +162,7 @@ Run the commands from Orient step 3, from the repo root, each with its pass line
 - `git diff --cached | grep -nE '^\+.*\.(skip|only)\('` prints nothing.
 - A bug fix carries a test that failed before the fix. Name the test.
 - Where a touched workspace has a `test:coverage` script, the suite run above takes a JSON report - vitest: `--coverage.reporter=json --coverage.reportsDirectory=<scratch>/cov-<workspace>`; c8 or nyc: `--reporter=json` - and `diff-uncovered origin/<default> <scratch>/cov-*/coverage-final.json` prints only its count line. Each `path:line` it prints is an added line no test executed: it gets a test, or a hand-off line saying why it cannot execute.
+- Where the repo commits generated output - a manifest, a hash file, a built sheet - rerun its generator after the last edit. `git status --short` then lists nothing new, or the file it rewrote joins this commit.
 - If the rules file demands a spelling, `git diff --cached | grep -nE '^\+.*\b(licence|colour|behaviour|organis|initialis|centre|cancelled|catalogue|analyse|favour|honour)'` prints nothing for US spelling. A mechanical checker rarely covers spelling; this grep is the spot check.
 - If the rules file names a running stack you may restart, restart it and read its log. Paste anything that is not a clean boot.
 - If the repo has end-to-end tests (the directory the e2e command from Orient step 3 runs), grep them for every class, role name, label text, test id and option the diff renames, removes or restyles. Each hit is a spec to update on this branch, though it sits outside the diff.

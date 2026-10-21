@@ -8,9 +8,11 @@
 // listed under "no report covers": it is outside the coverage include, or no
 // report was taken for its workspace. Tests, docs and styles are never listed.
 //
-// Statement granularity: a line counts as covered when a statement starting
-// on it ran. A line with no statement (a brace, a comment, an import) is not
-// judged either way.
+// Two granularities, judged separately. A statement line is covered when a
+// statement starting on it ran. A branch line, printed as "path:line branch",
+// is covered when every arm of each branch starting on it ran: a line whose
+// statement ran can still hold an `if` whose other arm no test took. A line
+// with neither (a brace, a comment, an import) is not judged either way.
 "use strict";
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -38,19 +40,38 @@ for (const line of git("diff", "-U0", "--no-color", "--no-ext-diff", `${base}...
   }
 }
 
-// Lines that started a statement, and those whose statement ran, per file.
+// Lines that started a statement, and those whose statement ran, per file;
+// lines that started a branch, and those where some arm never ran. A file in
+// several reports is covered by a run in any of them, so a branch line is
+// untaken only when no report took one of its arms.
 const seen = new Map();
 const ran = new Map();
+const branchSeen = new Map();
+const armRuns = new Map();
 for (const report of reports) {
   const data = JSON.parse(fs.readFileSync(report, "utf8"));
   for (const entry of Object.values(data)) {
     const p = path.resolve(entry.path);
-    if (!seen.has(p)) seen.set(p, new Set()), ran.set(p, new Set());
+    if (!seen.has(p)) seen.set(p, new Set()), ran.set(p, new Set()), branchSeen.set(p, new Set()), armRuns.set(p, new Map());
     for (const [id, loc] of Object.entries(entry.statementMap ?? {})) {
       seen.get(p).add(loc.start.line);
       if (entry.s?.[id] > 0) ran.get(p).add(loc.start.line);
     }
+    for (const [id, br] of Object.entries(entry.branchMap ?? {})) {
+      const line = br.loc?.start.line ?? br.line;
+      branchSeen.get(p).add(line);
+      const counts = entry.b?.[id] ?? [];
+      // Keyed by span, not id: ids are per report, and nested branches share a start.
+      const key = br.loc ? `${line}:${br.loc.start.column}-${br.loc.end.line}:${br.loc.end.column}/${counts.length}` : `${line}:#${id}`;
+      const prev = armRuns.get(p).get(key) ?? counts.map(() => 0);
+      armRuns.get(p).set(key, prev.map((n, i) => n + (counts[i] ?? 0)));
+    }
   }
+}
+const untaken = new Map();
+for (const [p, arms] of armRuns) {
+  untaken.set(p, new Set());
+  for (const [key, counts] of arms) if (counts.some((n) => n === 0)) untaken.get(p).add(Number(key.split(":")[0]));
 }
 
 const SOURCE = /\.(m?[jt]sx?|cjs)$/;
@@ -58,6 +79,8 @@ const isTest = (p) => /(^|\/)(tests?|__tests__|e2e|spec)\//.test(p) || /\.(test|
 const missing = [];
 let uncovered = 0;
 let judged = 0;
+let branchUncovered = 0;
+let branchJudged = 0;
 for (const [p, lines] of [...added].sort()) {
   if (!seen.has(p)) {
     const rel = path.relative(root, p);
@@ -65,13 +88,16 @@ for (const [p, lines] of [...added].sort()) {
     continue;
   }
   for (const l of [...lines].sort((a, b) => a - b)) {
-    if (!seen.get(p).has(l)) continue;
-    judged++;
-    if (ran.get(p).has(l)) continue;
-    uncovered++;
-    process.stdout.write(`${path.relative(root, p)}:${l}\n`);
+    if (seen.get(p).has(l)) {
+      judged++;
+      if (!ran.get(p).has(l)) uncovered++, process.stdout.write(`${path.relative(root, p)}:${l}\n`);
+    }
+    if (branchSeen.get(p).has(l)) {
+      branchJudged++;
+      if (untaken.get(p).has(l)) branchUncovered++, process.stdout.write(`${path.relative(root, p)}:${l} branch\n`);
+    }
   }
 }
 if (missing.length) process.stdout.write(`no report covers: ${missing.join(", ")}\n`);
-process.stdout.write(`${uncovered} of ${judged} added statement lines uncovered\n`);
-process.exit(uncovered ? 1 : 0);
+process.stdout.write(`${uncovered} of ${judged} added statement lines and ${branchUncovered} of ${branchJudged} added branch lines uncovered\n`);
+process.exit(uncovered || branchUncovered ? 1 : 0);

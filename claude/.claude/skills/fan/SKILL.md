@@ -109,7 +109,7 @@ Read-only. Record the result as the `## Voice` block. Re-measure when the block 
 | labels | `gh label list` | the set; a label the lead does not put on similar issues is not used |
 | PRs | `gh pr list --author <lead> --state merged --limit 20 --json title,body,headRefName,mergeCommit` | title shape; body shape; how the issue is linked (`closes #N`, `fixes #N`, `#N` in the title, none); branch naming; squash or merge |
 | commits | `git log --author=<lead> --no-merges --format='%s%n%b%n---' -30` | subject case, length, prefix; body prose or bullets; issue reference form |
-| done | rules file, else `grep -hE '^\s+run:' .github/workflows/*.yml`, else `Makefile` / `package.json` scripts | the install, test, and lint commands for Refs |
+| done | the rules file's commands, plus every command a pull-request job in `.github/workflows/*.yml` runs - read the files, since one `run: \|` block holds several - minus deploys and publishes; with neither, `Makefile` / `package.json` scripts | the install, test, and lint commands for Refs |
 
 Everything the skill writes publicly is checked against this block before the command is shown. Words that never appear in public text: the names of this skill, its files, its sections, and its roles - `fan`, `batch`, `worker`, `supervisor`, `brief`, `owns`, `sub-task`, `verify`, `done when`, `tracker`. No `Co-authored-by`, no `Claude-Session`, no generated-by line. Workers inherit all of this through the seed.
 
