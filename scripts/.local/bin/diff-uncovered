@@ -26,12 +26,39 @@ if (!base || !reports.length) {
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" });
 const root = git("rev-parse", "--show-toplevel").trim();
 
+// The path in a "+++ " header. Git C-quotes one holding a control character,
+// `"` or `\` (and any non-ASCII byte under the default core.quotePath), and
+// appends a tab to an unquoted one holding a space.
+function headerPath(rest) {
+  if (!rest.startsWith('"')) return rest.replace(/\t$/, "");
+  const esc = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11 };
+  const bytes = [];
+  for (let i = 1; i < rest.length && rest[i] !== '"'; i++) {
+    if (rest[i] !== "\\") {
+      const cp = rest.codePointAt(i);
+      bytes.push(...Buffer.from(String.fromCodePoint(cp)));
+      if (cp > 0xffff) i++;
+    } else if (/[0-7]/.test(rest[i + 1])) {
+      bytes.push(parseInt(rest.slice(i + 1, i + 4), 8));
+      i += 3;
+    } else {
+      const c = rest[++i];
+      bytes.push(esc[c] ?? c.charCodeAt(0));
+    }
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
 // Added lines per file, from unified diff hunks: "+c,d" is d lines from c.
+// The prefixes are pinned so a user's diff config cannot move the "b/".
 const added = new Map();
 let file = null;
-for (const line of git("diff", "-U0", "--no-color", "--no-ext-diff", `${base}...HEAD`).split("\n")) {
-  if (line.startsWith("+++ ")) file = line.startsWith("+++ b/") ? path.join(root, line.slice(6)) : null;
-  else if (file && line.startsWith("@@")) {
+const diff = git("-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "diff", "-U0", "--no-color", "--no-ext-diff", `${base}...HEAD`);
+for (const line of diff.split("\n")) {
+  if (line.startsWith("+++ ")) {
+    const p = headerPath(line.slice(4));
+    file = p.startsWith("b/") ? path.join(root, p.slice(2)) : null;
+  } else if (file && line.startsWith("@@")) {
     const m = line.match(/\+(\d+)(?:,(\d+))?/);
     const from = Number(m[1]);
     const n = m[2] === undefined ? 1 : Number(m[2]);
