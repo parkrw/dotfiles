@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // diff-uncovered <base> <coverage-final.json>... — the added and changed lines
-// of <base>...HEAD that no test executed, by the istanbul-format reports given
-// (vitest: --coverage.reporter=json; c8/nyc: --reporter=json).
+// since the merge base of <base> and HEAD, committed, staged or not, that no
+// test executed, by the istanbul-format reports given (vitest:
+// --coverage.reporter=json; c8/nyc: --reporter=json). Untracked files are not
+// judged until they are added.
 //
 // Prints one path:line per uncovered line, then a count. Exit 1 when any line
 // is uncovered, 0 when none. A changed source file absent from every report is
@@ -51,15 +53,23 @@ function headerPath(rest) {
 }
 
 // Added lines per file, from unified diff hunks: "+c,d" is d lines from c.
-// The prefixes are pinned so a user's diff config cannot move the "b/".
+// The flags override every diff config that would move the "b/" prefix, root
+// the paths elsewhere or rewrite the text. A "+++ " line is a header only
+// between "diff --git" and the first hunk: inside one it is an added "++ " line.
 const added = new Map();
 let file = null;
-const diff = git("-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "diff", "-U0", "--no-color", "--no-ext-diff", `${base}...HEAD`);
+let inHeader = false;
+const diff = git("diff", "--merge-base", "--default-prefix", "--no-relative", "--no-textconv", "--no-ext-diff", "--no-color", "-U0", base, "--");
 for (const line of diff.split("\n")) {
-  if (line.startsWith("+++ ")) {
+  if (line.startsWith("diff --git ")) {
+    inHeader = true;
+    file = null;
+  } else if (inHeader && line.startsWith("+++ ")) {
     const p = headerPath(line.slice(4));
     file = p.startsWith("b/") ? path.join(root, p.slice(2)) : null;
-  } else if (file && line.startsWith("@@")) {
+  } else if (line.startsWith("@@")) {
+    inHeader = false;
+    if (!file) continue;
     const m = line.match(/\+(\d+)(?:,(\d+))?/);
     const from = Number(m[1]);
     const n = m[2] === undefined ? 1 : Number(m[2]);
