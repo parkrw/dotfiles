@@ -53,11 +53,11 @@ function headerPath(rest) {
 }
 
 // Added lines per file, numbered from each hunk's "+c": a "+" line is added at
-// the current number, a " " line is context that diff.interHunkContext can put
-// between changes even under -U0. The flags override every diff config that
-// would move the "b/" prefix, root the paths elsewhere or rewrite the text. A
-// "+++ " line is a header only between "diff --git" and the first hunk: inside
-// one it is an added "++ " line.
+// the current number, a " " line (or "" under diff.suppressBlankEmpty) is
+// context that diff.interHunkContext can put between changes even under -U0.
+// The flags override every diff config that would move the "b/" prefix, root
+// the paths elsewhere or rewrite the text. A "+++ " line is a header only
+// between "diff --git" and the first hunk: inside one it is an added "++ " line.
 const added = new Map();
 let file = null;
 let inHeader = false;
@@ -76,7 +76,7 @@ for (const line of diff.split("\n")) {
   } else if (file && !inHeader && line.startsWith("+")) {
     if (!added.has(file)) added.set(file, new Set());
     added.get(file).add(next++);
-  } else if (line.startsWith(" ")) {
+  } else if (line === "" || line.startsWith(" ")) {
     next++;
   }
 }
@@ -115,7 +115,7 @@ for (const [p, arms] of armRuns) {
   for (const [key, counts] of arms) if (counts.some((n) => n === 0)) untaken.get(p).add(Number(key.split(":")[0]));
 }
 
-const SOURCE = /\.(m?[jt]sx?|cjs)$/;
+const SOURCE = /\.[cm]?[jt]sx?$/;
 const isTest = (p) => /(^|\/)(tests?|__tests__|e2e|spec)\//.test(p) || /\.(test|spec)\./.test(p);
 const missing = [];
 let uncovered = 0;
