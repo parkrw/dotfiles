@@ -1,6 +1,6 @@
 ---
 name: spawn
-description: Open a new interactive Claude Code session in a new tmux window (like prefix+c) of the current tmux session, running this session's model and effort (never max). Seeds it with a handoff pickup (task file's Handoff section, or HANDOFF.md) and a 20%/30% context-budget rule; optional argument appends the task; --fresh skips the handoff pickup, e.g. /spawn, /spawn "continue task 07c2", /spawn --fresh "task".
+description: Open a new interactive Claude Code session in a new tmux window (like prefix+c) of the current tmux session, running this session's model and effort (never max). Seeds it with a handoff pickup (task file's Handoff section, or HANDOFF.md) and a 25%/30% context-budget rule; optional argument appends the task; --fresh skips the handoff pickup; --pane splits this window instead, e.g. /spawn, /spawn "continue task 07c2", /spawn --fresh "task".
 ---
 
 ## Help
@@ -13,13 +13,14 @@ verbatim and **stop — do not execute the skill**.
 
   Open a new interactive Claude Code session in a new tmux window (like
   prefix+c) of the current tmux session, running this session's model and
-  effort (never max). Seeds it with a handoff pickup (if present) and a 20%/30%
+  effort (never max). Seeds it with a handoff pickup (if present) and a 25%/30%
   context-budget rule; optional argument appends the task.
 
   /spawn                         new session, picks up the existing handoff
   /spawn "continue task 07c2"    new session seeded with a task
   /spawn --fresh "task"          seeded with the task only, no handoff pickup
   /spawn --cwd <dir> "task"      open the window in <dir> instead of $PWD
+  /spawn --pane "task"           open a pane in this window instead of a new window
   /spawn --help                  show this help
 
   See also:
@@ -41,7 +42,7 @@ Open a fresh interactive `claude` in a **new window of the current tmux session*
 
 ## 2. Build the seed prompt
 
-Strip the leading flags from `$ARGUMENTS`, in any order, and remember them: `--fresh`, and `--cwd <dir>` (an absolute path, quoted if it holds spaces). Every item below reads the stripped `$ARGUMENTS`.
+Strip the leading flags from `$ARGUMENTS`, in any order, and remember them: `--fresh`, `--pane`, and `--cwd <dir>` (an absolute path, quoted if it holds spaces). Every item below reads the stripped `$ARGUMENTS`.
 
 The new session always starts with an initial prompt composed of, in order:
 
@@ -51,9 +52,9 @@ The new session always starts with an initial prompt composed of, in order:
    - else omit this line.
 2. **Context budget** — always include, verbatim:
 
-   > Context budget: when context use reaches 20% of the window, run
+   > Context budget: when context use reaches 25% of the window, run
    > /newchat --spawn --replace "continue: <the current task>" so a fresh
-   > session takes over and this one ends. NEVER exceed 30% total: treat 20%
+   > session takes over and this one ends. NEVER exceed 30% total: treat 25%
    > as the signal to gauge remaining work and wind down — finish or
    > checkpoint the current sub-task and leave a concrete next step in the
    > newchat prompt. Never leave a task or sub-task hanging with no plan there.
@@ -87,8 +88,15 @@ tmux delete-buffer -b spawnseed
 sleep 1 && tmux send-keys -t "$pane" Enter
 ```
 
-- Like `prefix + c`, this switches focus to the new window — that is expected;
-  do not add `-d`.
+Under `--pane`, split this session's window instead; the target is the same window:
+
+```bash
+read -r pane target <<<"$(tmux split-window -P -F '#{pane_id} #{session_name}:#{window_index}' \
+  -t "$TMUX_PANE" -c "$dir" "claude --model '<model-id>' --effort <effort>")"
+```
+
+- Like `prefix + c`, this switches focus to the new window or pane — that is
+  expected; do not add `-d`.
 - The seed must be **one line**: a multi-line paste submits at the first newline
   and strands the rest in an empty prompt. Join step 2's parts with spaces
   before writing the file.
@@ -102,7 +110,9 @@ Verify the printed target is in the **same session** and still alive (a failed
 tmux list-windows -t "$session" -F '#{session_name}:#{window_index} #{window_name}'
 ```
 
+- Under `--pane`, check the pane instead:
+  `tmux list-panes -t "$target" -F '#{pane_id}' | grep -qx "$pane"`.
 - The target from step 2 must appear in this list. If it does not, report the
   failure — re-run the launch command in the current pane's shell context to
   surface the error, don't silently retry.
-- Report to the user: window target (e.g. `dotfiles:3`), window name, `$dir`, and the model launched.
+- Report to the user: window target (e.g. `dotfiles:3`), window name, pane id under `--pane`, `$dir`, and the model launched.

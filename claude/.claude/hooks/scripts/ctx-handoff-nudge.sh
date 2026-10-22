@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ctx-handoff-nudge.sh — Stop hook. When context USED reaches
-# CTX_NUDGE_USED% (default 20), hand the work to a fresh session, once per
+# CTX_NUDGE_USED% (default 25), hand the work to a fresh session, once per
 # session (marker file).
 #
 # Inside tmux the hook blocks the stop, which makes Claude continue with the
 # reason as its instruction: run /newchat --spawn --replace, which opens the
-# successor in a new tmux window and then closes this session's pane. Outside
-# tmux there is no window to open, so it only tells the user.
+# successor in a new pane of this tmux window and then closes this session's
+# pane. Outside tmux there is no pane to open, so it only tells the user.
 #
 # Stop is a turn boundary, but a turn can still end mid-rebase or mid-merge
 # (a conflict waiting on the user). Handing off there strands the operation,
@@ -21,7 +21,7 @@ check_disabled
 require_jq
 read_input
 
-THRESHOLD="${CTX_NUDGE_USED:-20}"
+THRESHOLD="${CTX_NUDGE_USED:-25}"
 STATE_DIR="${CTX_STATE_DIR:-$HOOKS_DIR/state}"
 
 session_id=$(echo "$INPUT" | jq -r '.session_id // empty')

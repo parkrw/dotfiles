@@ -5,7 +5,7 @@ Claude writes a change. A second Claude, in a fresh context, reviews it. Every f
 ## Jump right in
 
 - [ftl-ship.md](ftl-ship.md): install, then ship a task to a reviewed draft PR.
-- [context-handoff.md](context-handoff.md): hand off to a fresh session at 20% context. Needs tmux.
+- [context-handoff.md](context-handoff.md): hand off to a fresh session at 25% context. Needs tmux.
 - [review-insights.md](review-insights.md): read the review record and decide what to change.
 
 ## A work in progress
@@ -24,7 +24,7 @@ Take it in this order. Each step works without the ones after it.
 | Start | `/ftl "<task>"`, then `/ftl` | orients on the repo's rules and the lead's conventions, then runs a pre-handoff checklist. Read-only |
 | Core | `/ftl ship --integrate` | the full loop: worktree, commit, rebase, review until zero findings, draft PR |
 | Advanced | `claude-review-stats`, `/review-insights` | where findings come from and what to change |
-| Advanced | tmux, `/spawn`, `/newchat`, the 20% handoff | long tasks across fresh sessions |
+| Advanced | tmux, `/spawn`, `/newchat`, the 25% handoff | long tasks across fresh sessions |
 | Advanced | `/fan` | several issues at once, one worktree and tmux pane each |
 
 ## The reviewer: headless `claude -p`
@@ -100,8 +100,8 @@ Without tmux, everything else still works. `/newchat` prints the handoff prompt 
 Every turn re-sends the whole conversation, so a long session costs more per turn. Details from an hour ago also crowd out the step in front of it. When the window fills, Claude Code compacts on its own schedule, and that summary can drop things.
 
 The handoff makes that moment deliberate:
-- At 20%, at a turn boundary, Claude finishes the current step.
+- At 25%, at a turn boundary, Claude finishes the current step.
 - It writes a prompt holding only what a fresh session couldn't learn from the repo, the issues or the docs.
 - A new session picks the work up.
 
-Each session stays focused, and you can read exactly what was carried over. 20% is a budget, not a law; tune it with `CTX_NUDGE_USED`.
+Each session stays focused, and you can read exactly what was carried over. 25% is a budget, not a law; tune it with `CTX_NUDGE_USED`.
