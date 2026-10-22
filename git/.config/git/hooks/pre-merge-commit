@@ -4,15 +4,9 @@
 # it also catches a merge buried in a Makefile, an npm script, or `git pull`,
 # which command-text inspection cannot see.
 #
-# Tiers, matching bash-write-gate.sh:
-#   a merged head is a remote ref -> deny, always. No marker changes it.
-#   otherwise                     -> allowed, unless the repo root carries a
-#                                    .claude-merge-off marker.
-#
-# MERGE_HEAD does NOT exist yet when this hook runs — git writes it only on the
-# stop-and-commit-manually path. The merged heads arrive as GITHEAD_<sha>=<name>
-# environment variables instead, and GIT_REFLOG_ACTION carries the invoking
-# command, which is how a `git pull` is told from a plain `git merge`.
+# A merge writes only local history, whatever it merges — a local branch, a
+# remote-tracking ref, or what `git pull` fetched — so it is allowed unless the
+# repo root carries a .claude-merge-off marker.
 #
 # Known blind spot: a fast-forward merge writes no merge commit, so this hook
 # never fires for one. That is the intended gap — a fast-forward only moves the
@@ -23,31 +17,10 @@
 
 . "$(dirname "$0")/lib-claude-gate.sh"
 
-deny() {
-    echo "pre-merge-commit: blocked — $1" >&2
+if [ -n "$CLAUDECODE" ] && cg_opted_out .claude-merge-off; then
+    echo "pre-merge-commit: blocked — this repo is opted out of local merge (.claude-merge-off); re-enable with 'claude-gate merge on'" >&2
     echo "pre-merge-commit: run 'git merge --abort' to back out. If you want this, run it yourself in a plain terminal." >&2
     exit 1
-}
-
-if [ -n "$CLAUDECODE" ]; then
-    # A pull is fetch + merge: what it merges came from a remote by definition,
-    # whatever that resolves to locally.
-    case "$GIT_REFLOG_ACTION" in
-        pull*) deny "'git $GIT_REFLOG_ACTION' merges a REMOTE branch into your history; the next push carries those commits" ;;
-    esac
-
-    # The loop runs in a subshell (pipeline), so it reports rather than denies.
-    env | sed -n 's/^GITHEAD_\([0-9a-f][0-9a-f]*\)=\(.*\)$/\1 \2/p' |
-        while read -r sha name; do
-            if cg_is_remote_ref "$name" ||
-                { ! cg_is_local_branch "$name" && [ -n "$(cg_remote_ref_name "$sha")" ]; }; then
-                echo "REMOTE ${name}"
-            fi
-        done | grep -q '^REMOTE ' &&
-        deny "a merge source is a REMOTE branch; merging it writes its commits into your local history and the next push carries them"
-
-    cg_opted_out .claude-merge-off &&
-        deny "this repo is opted out of local merge (.claude-merge-off); re-enable with 'claude-gate merge on'"
 fi
 
 # core.hooksPath replaces .git/hooks entirely — chain to the repo's own hook.

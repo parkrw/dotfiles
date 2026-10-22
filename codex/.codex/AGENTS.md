@@ -33,13 +33,13 @@
 
 ## Source control
 
-- **Never integrate from a remote.** No `git merge origin/…`, no `git rebase origin/…`, no `git pull` or `git pull --rebase`, no `gh pr merge`. These are denied permanently and no toggle enables them. If one is genuinely needed, stop and tell me the exact command and what it will do to my tree — I will run it.
+- **Integrating from a remote is local.** `git merge origin/…`, `git rebase origin/…`, `git pull`, `git pull --rebase` and `git tag` write only my local history, so they run without a prompt unless the repo opts out of merge (`.claude-merge-off`). Force-push and tag push stay denied, so nothing rewritten locally reaches the remote. `gh pr merge` is denied permanently.
 - **Local git writes need no approval.** Run them yourself; never ask me first or hand me the command. The hooks allow, ask or deny, and their verdict is the only gate. Allowed without a prompt: `add`, `commit` (`--amend` too), `branch`, `switch`, `checkout`, `stash`, `worktree`, `cherry-pick`, `revert`, `reset`, `rm`, `mv`, and a local `merge`/`rebase`. The hook asks for what discards uncommitted work (`restore`, a path `checkout`, a forced `switch`/`rm`/`worktree remove`, `stash drop|clear`), `config` and `remote` writes, `--no-verify`, and a pathspec it cannot place in the repo (for example `$var`, `~`, a `..` climb, an absolute path outside it, `--pathspec-from-file`, exclude or attr magic). Denied: committing on `main`/`master`, bulk staging, `reset --hard`, `clean -f`.
 - Stage named paths only: `git add <path>…` from `git status --short`. Never `git add -A`, `git add .` or `git commit -a`.
 - Commit before a merge or rebase.
 - Rebase only an unpushed branch. A pushed branch takes `git merge <default>` so review comments keep their shas.
 - Read-only git and gh commands (log, diff, status, show, blame, pr view, issue list, etc.) run without a prompt.
-- `git push` of a feature branch and `gh pr create` run without a prompt. A push to `main`/`master` or the default branch, a force-push, a tag push, a remote branch deletion, and `gh pr merge` are denied. Other mutating `gh` commands ask. `git pull --ff-only` is allowed outright: it advances a branch pointer or fails, so it can neither write a merge commit nor rewrite a sha.
+- `git push` of a feature branch and `gh pr create` run without a prompt. A push to `main`/`master` or the default branch, a force-push, a tag push, a remote branch deletion, and `gh pr merge` are denied. Other mutating `gh` commands ask. `git pull --ff-only` is allowed even under `.claude-merge-off`: it advances a branch pointer or fails, so it can neither write a merge commit nor rewrite a sha.
 - Never work around a gate. `--no-verify`, a repo-local `core.hooksPath`, and hand-writing or deleting a marker file are all off limits; ask me instead.
 - Never edit `CHANGELOG.md` directly, in any repo; a change adds a `changelog.d/<slug>.md` fragment. A repo without fragment tooling gets it set up the way CloudKey core does (`/ftl` Check section 5).
 

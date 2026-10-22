@@ -4,7 +4,7 @@
 # Permission tiers:
 #   reads + read-only git/gh        -> allow (no prompt)
 #   create NEW file                 -> allow (no prompt)
-#   git pull --ff-only              -> allow (no prompt)
+#   git pull --ff-only, git tag     -> allow (no prompt)
 #   local git writes (add, commit,
 #     branch, switch, stash, merge,
 #     rebase, worktree, reset …), a
@@ -20,7 +20,7 @@
 #   new branch whose name is taken
 #     on origin, or whose issue is
 #     someone else's                -> deny (always)
-#   merge/rebase                    -> allow (default), deny (.claude-merge-off)
+#   merge/rebase, other pulls       -> allow (default), deny (.claude-merge-off)
 #   overwrite/modify EXISTING file  -> ask
 #   push of a feature branch, gh
 #     pr create                     -> allow (default), deny (.claude-remote-off)
@@ -29,8 +29,7 @@
 #     default branch, gh pr merge   -> deny, always. No marker changes it.
 #   force-push, push of tags,
 #     --all/--mirror, a remote
-#     branch deletion; tag
-#     creation; pull but --ff-only  -> deny (always)
+#     branch deletion               -> deny (always)
 #   reset --hard, clean -f, rm -rf  -> deny (always)
 #
 # Two per-repo opt-OUT markers, both files in the repo root. They tighten a
@@ -163,7 +162,7 @@ git_local_ok(){ # $1 = segment
   local sub args w
   sub=$(git_sub_of "$1"); args=$(git_args_of "$1")
   case "$sub" in
-    add|stage|commit|branch|merge|rebase|cherry-pick|revert|mv|am|apply) return 0 ;;
+    add|stage|commit|branch|merge|rebase|cherry-pick|revert|mv|am|apply|tag) return 0 ;;
     reset)     ! has_opt "$args" '--hard|--merge' ;;
     rm)        ! has_opt "$args" '-[a-zA-Z]*f[a-zA-Z]*|--force' ;;
     switch)    ! has_opt "$args" '-[a-zA-Z]*f[a-zA-Z]*|--force|--discard-changes' ;;
@@ -571,21 +570,16 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
   esac
 fi
 
-# `git pull` is fetch + integrate. The integrate half is a merge or rebase
-# against a remote ref, so only --ff-only survives: it can advance a branch
-# pointer or fail, never write a merge commit and never rewrite a sha. That
-# makes it a local write on top of an already-allowed fetch, so it is allowed.
+# `git pull` is fetch + integrate. The integrate half is a local merge or
+# rebase, so it follows the merge/rebase opt-out; --ff-only writes no merge
+# commit and rewrites no sha, so it survives even that.
 if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+pull\b'; then
-  echo "$cmd" | grep -Eq -- '[[:space:]](--rebase|-r)([[:space:]]|=|$)' \
-    && emit deny "git pull --rebase is a remote rebase — denied permanently.
-If YOU run this yourself: git fetches, then replays your local commits on top of the remote branch with new shas, so ${cur:-your branch} diverges from its pushed copy and the next push needs --force. Use 'git fetch' and inspect first if you only want to see what changed."
-  echo "$cmd" | grep -Eq -- '[[:space:]]--ff-only([[:space:]]|$)' \
-    || emit deny "plain git pull merges a remote ref into ${cur:-your branch} — denied permanently.
-If YOU run this yourself: git fetches, then merges the remote branch into yours, writing a merge commit whenever the two have diverged. Use 'git pull --ff-only', which is allowed, to refuse anything that is not a clean fast-forward."
+  [[ "$merge_off" == 1 ]] && ! echo "$cmd" | grep -Eq -- '[[:space:]]--ff-only([[:space:]]|$)' \
+    && emit deny "git pull merges or rebases — this repo is opted out (.claude-merge-off). Use 'git pull --ff-only', or re-enable with: claude-gate merge on"
   seg_extra_git='pull'
-  can_allow && emit allow "git pull --ff-only writes only locally — it fast-forwards or fails."
+  can_allow && emit allow "git pull writes only local history."
   seg_extra_git=''
-  remote_gate "Remote write (pull --ff-only, compound command)"
+  remote_gate "Remote write (pull, compound command)"
 fi
 
 echo "$cmd" | grep -Eq '\bgh\b[^|;&]*\bpr[[:space:]]+merge\b' && emit deny "gh pr merge is denied permanently — no marker file enables it.
@@ -600,9 +594,6 @@ if echo "$cmd" | grep -Eq '\bgh\b[^|;&]*\bapi\b' \
    && ! echo "$cmd" | grep -Eq -- '(^|[[:space:]])(-X|--method)([[:space:]]+|=)GET([[:space:]]|$)'; then
   emit deny "gh api write to a ref, merge, branch or contents endpoint moves a remote branch — denied permanently. Run it yourself."
 fi
-echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+tag\b' \
-  && ! echo "$cmd" | grep -Eq '\btag\b([[:space:]]+(-l|--list|-n)|[[:space:]]*($|[|;&]))' \
-  && emit deny "creating tags is the prod deploy trigger — human-only."
 echo "$cmd" | grep -Eq '\bgit\b.*\breset\b.*--hard'          && emit deny "git reset --hard discards work — run it yourself."
 echo "$cmd" | grep -Eq '\bgit\b.*\bclean\b.*-[a-zA-Z]*f'     && emit deny "git clean -f deletes untracked files — run it yourself."
 echo "$cmd" | grep -Eq '\brm\b[^|;&]*-[a-zA-Z]*(rf|fr)'      && emit deny "rm -rf is not allowed."
