@@ -2,12 +2,9 @@
 # claude-gate — show and flip the per-repo Claude permission toggles.
 #
 #   claude-gate                 status for this repo
-#   claude-gate remote on|off|auto
-#                               git push / gh:       ask <-> deny   (default on);
-#                               auto allows a push of the current branch and a
-#                               draft PR, and turns review on, since pre-push's
-#                               review gate is what makes that push safe
-#   claude-gate merge  on|off   LOCAL merge/rebase:  allow <-> deny (default on)
+#   claude-gate remote on|off   feature-branch push, gh pr create: allow <-> deny;
+#                               other gh writes: ask <-> deny       (default on)
+#   claude-gate merge  on|off   merge/rebase:        allow <-> deny (default on)
 #   claude-gate review on|off   require a fresh-context review before push
 #                                                                    (default off)
 #   claude-gate ftl    on|off   run every prompt through /ftl       (default off)
@@ -15,18 +12,16 @@
 #
 # remote and merge are on unless the repo root carries an opt-out marker, so
 # "off" writes a file and "on" removes it. review is the reverse: it is off
-# unless the repo is listed in review-gate-repos. remote auto is an opt-in
-# marker, .claude-remote-auto, in the main checkout; a checkout's -off marker
-# still wins over it. ftl is an opt-in marker, .claude-ftl, in the main
-# checkout, read by ftl-every-prompt.sh. It is a working method, not a
+# unless the repo is listed in review-gate-repos. ftl is an opt-in marker,
+# .claude-ftl, in the main checkout, read by ftl-every-prompt.sh. It is a working method, not a
 # permission, so it stays out of "all off" and the offers.
 #
 # Flipping one toggle offers the others, because the failure mode is tightening
 # a repo months ago and forgetting the rest are still set.
 #
-# No toggle exists for remote merge/rebase or `gh pr merge`. Those are denied
-# permanently, by bash-write-gate.sh and by the pre-rebase / pre-merge-commit
-# git hooks independently.
+# No toggle enables a push to main/master or the default branch, or
+# `gh pr merge`. bash-write-gate.sh and the pre-push git hook deny those
+# permanently.
 set -euo pipefail
 
 REPOS_FILE="$HOME/.claude/hooks/review-gate-repos"
@@ -35,7 +30,7 @@ die() { echo "claude-gate: $1" >&2; exit 1; }
 
 root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repo"
 
-# review-gate, remote auto and ftl key off the main checkout, not the worktree, so a
+# review-gate and ftl key off the main checkout, not the worktree, so a
 # linked worktree shares its parent's setting while keeping its own -off markers.
 common=$(git rev-parse --git-common-dir)
 [[ "$common" != /* ]] && common=$(cd "$common" && pwd)
@@ -49,9 +44,7 @@ review_root=$(cd "$review_root" && pwd -P)
 state() {
   case $1 in
     remote)
-      if   [[ -f "$root/.claude-remote-off" ]]; then echo off
-      elif [[ -f "$review_root/.claude-remote-auto" ]]; then echo auto
-      else echo on; fi ;;
+      [[ -f "$root/.claude-remote-off" ]] && echo off || echo on ;;
     merge)  [[ -f "$root/.claude-merge-off" ]] && echo off || echo on ;;
     review) [[ -f "$REPOS_FILE" ]] && grep -Fxq "$review_root" "$REPOS_FILE" && echo on || echo off ;;
     ftl)    [[ -f "$review_root/.claude-ftl" ]] && echo on || echo off ;;
@@ -60,8 +53,8 @@ state() {
 
 describe() {
   case $1 in
-    remote) echo "git push / gh:        on = ask,   off = deny,  auto = allow own-branch push and draft PR" ;;
-    merge)  echo "LOCAL merge / rebase: on = allow, off = deny" ;;
+    remote) echo "push / gh:            on = allow feature-branch push and PR create, ask other gh; off = deny" ;;
+    merge)  echo "merge / rebase:       on = allow, off = deny" ;;
     review) echo "on = push blocked until the branch diff passes review" ;;
     ftl)    echo "on = every prompt runs through /ftl" ;;
   esac
@@ -69,11 +62,8 @@ describe() {
 
 apply() { # toggle on|off
   case "$1:$2" in
-    remote:on)  rm -f "$root/.claude-remote-off" "$review_root/.claude-remote-auto" ;;
-    remote:off) : > "$root/.claude-remote-off"; rm -f "$review_root/.claude-remote-auto" ;;
-    remote:auto)
-      : > "$review_root/.claude-remote-auto"; rm -f "$review_root/.claude-remote-off"
-      apply review on ;;
+    remote:on)  rm -f "$root/.claude-remote-off" ;;
+    remote:off) : > "$root/.claude-remote-off" ;;
     merge:on)   rm -f "$root/.claude-merge-off" ;;
     merge:off)  : > "$root/.claude-merge-off" ;;
     review:on)
@@ -87,20 +77,20 @@ apply() { # toggle on|off
     ftl:off)    rm -f "$review_root/.claude-ftl" ;;
   esac
   printf '  %-7s %s\n' "$1" "$(state "$1")"
-  [[ ( "$2" == auto || "$1:$2" == ftl:on ) && "$review_root" != "$root" ]] &&
+  [[ "$1:$2" == ftl:on && "$review_root" != "$root" ]] &&
     echo "  marker written at the main checkout: $review_root"
   return 0
 }
 
 status() {
   echo "repo: $root"
-  [[ "$review_root" != "$root" ]] && echo "main checkout: $review_root (review-gate, remote auto and ftl are shared with it)"
+  [[ "$review_root" != "$root" ]] && echo "main checkout: $review_root (review-gate and ftl are shared with it)"
   for t in remote merge review ftl; do
     printf '  %-7s %-4s  %s\n' "$t" "$(state "$t")" "$(describe "$t")"
   done
   # Retired markers do nothing, and silently reading as "still configured" is
   # exactly the confusion to avoid.
-  for legacy in "$root/.claude-remote-ok" "$root/.claude-merge-ok" "$review_root/.claude-merge-auto"; do
+  for legacy in "$root/.claude-remote-ok" "$root/.claude-merge-ok" "$review_root/.claude-merge-auto" "$review_root/.claude-remote-auto"; do
     [[ -f "$legacy" ]] &&
       echo "  note: $legacy is a retired marker and has no effect — delete it"
   done
@@ -112,8 +102,6 @@ offer_others() { # toggle state
   [[ -t 0 ]] || return 0
   for t in remote merge review; do
     [[ "$t" == "$1" ]] && continue
-    # remote auto just turned review on, and depends on it.
-    [[ "$1:$2:$t" == remote:auto:review ]] && continue
     cur=$(state "$t")
     want=$([[ "$cur" == on ]] && echo off || echo on)
     read -r -p "  also turn $t $want? ($(describe "$t")) [y/N] " ans || return 0
@@ -126,11 +114,7 @@ case "${1:-}" in
   all)
     [[ "${2:-}" == off ]] || die "only 'all off' is supported"
     for t in remote merge review; do apply "$t" off; done ;;
-  remote)
-    case "${2:-}" in on|off|auto) ;; *) die "usage: claude-gate remote on|off|auto" ;; esac
-    apply "$1" "$2"
-    offer_others "$1" "$2" ;;
-  merge|review)
+  remote|merge|review)
     case "${2:-}" in on|off) ;; *) die "usage: claude-gate $1 on|off" ;; esac
     apply "$1" "$2"
     offer_others "$1" "$2" ;;

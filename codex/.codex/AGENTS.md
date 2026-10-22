@@ -39,24 +39,24 @@
 - Commit before a merge or rebase.
 - Rebase only an unpushed branch. A pushed branch takes `git merge <default>` so review comments keep their shas.
 - Read-only git and gh commands (log, diff, status, show, blame, pr view, issue list, etc.) run without a prompt.
-- `git push` and mutating `gh` commands ask, except under `remote auto` (below): a push of the current branch to origin and `gh pr create --draft`. `gh pr merge` stays denied. `git pull --ff-only` is allowed outright: it advances a branch pointer or fails, so it can neither write a merge commit nor rewrite a sha.
+- `git push` of a feature branch and `gh pr create` run without a prompt. A push to `main`/`master` or the default branch, a force-push, a tag push, a remote branch deletion, and `gh pr merge` are denied. Other mutating `gh` commands ask. `git pull --ff-only` is allowed outright: it advances a branch pointer or fails, so it can neither write a merge commit nor rewrite a sha.
 - Never work around a gate. `--no-verify`, a repo-local `core.hooksPath`, and hand-writing or deleting a marker file are all off limits; ask me instead.
 - Never edit `CHANGELOG.md` directly, in any repo; a change adds a `changelog.d/<slug>.md` fragment. A repo without fragment tooling gets it set up the way CloudKey core does (`/ftl` Check section 5).
 
 ### Per-repo toggles
 
-`claude-gate` shows a repo's toggles; `claude-gate <toggle> on|off` (`remote` also takes `auto`) flips one and then offers the others, so a stale setting surfaces instead of lingering unnoticed.
+`claude-gate` shows a repo's toggles; `claude-gate <toggle> on|off` flips one and then offers the others, so a stale setting surfaces instead of lingering unnoticed.
 
 | Toggle | Default | On | Off |
 | --- | --- | --- | --- |
-| `remote` | on | `git push`, `gh` ask; `auto` allows `git push [-u] origin <current-branch>` and `gh pr create --draft` while pre-push's review gate is live, and turns `review` on | both denied |
+| `remote` | on | feature-branch `git push` and `gh pr create` allowed; other `gh` writes ask | all denied |
 | `merge` | on | **local** merge/rebase allowed | both denied |
 | `review` | off | push denied until the branch diff passes a fresh-context review | no review required |
 | `ftl` | off | every prompt that is not a slash command is told to run through `/ftl` | prompts run as typed |
 
-`remote` and `merge` are on unless the repo root carries an opt-out marker — `.claude-remote-off` or `.claude-merge-off` — so turning one off writes a file and turning it back on removes it. `review` is the reverse: off unless the repo is listed in `~/.claude/hooks/review-gate-repos`. `ftl` is `.claude-ftl`, read by `ftl-every-prompt.sh`; it is a working method, not a permission, so `all off` and the offers skip it. `remote auto` is `.claude-remote-auto`: a push asks when the review gate is not live, `origin/HEAD` is unset, the branch is the default, or origin's copy of the branch holds anyone else's commits; `.claude-remote-off` wins.
+`remote` and `merge` are on unless the repo root carries an opt-out marker — `.claude-remote-off` or `.claude-merge-off` — so turning one off writes a file and turning it back on removes it. `review` is the reverse: off unless the repo is listed in `~/.claude/hooks/review-gate-repos`. `ftl` is `.claude-ftl`, read by `ftl-every-prompt.sh`; it is a working method, not a permission, so `all off` and the offers skip it.
 
-The markers are per checkout, so a worktree tightens separately from its parent; the review toggle, `.claude-remote-auto` and `.claude-ftl` key off the main checkout instead and are shared with its worktrees. `~/.config/git/ignore` covers the markers, so they never reach a repo's tracked tree or show up in `git status`.
+The markers are per checkout, so a worktree tightens separately from its parent; the review toggle and `.claude-ftl` key off the main checkout instead and are shared with its worktrees. `~/.config/git/ignore` covers the markers, so they never reach a repo's tracked tree or show up in `git status`.
 
 ### The enforcement layers
 

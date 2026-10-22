@@ -6,9 +6,7 @@ Personal macOS dotfiles. There is no build and no application code — these are
 
 ## Git
 
-This repo grants push and PR access, but **approval-gated**: always show the exact command and wait for my confirmation before running it.
-
-- You may `git push` a feature branch and open a PR with `gh pr create` — only after I confirm the exact command.
+- Push feature branches and open PRs with `gh pr create` without asking.
 - Never push to `main`, never merge, never tag. PRs are opened, never merged.
 
 ## Architecture: Stow package layout
