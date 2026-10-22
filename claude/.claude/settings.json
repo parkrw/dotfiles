@@ -25,7 +25,8 @@
       "Bash(tmux send-keys:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(ssh core.ckdev.io:*)"
+      "Bash(ssh core.ckdev.io:*)",
+      "Bash(ssh hbops.mgmt.infra.ckdev.io:*)"
     ],
     "deny": [
       "mcp__clickup",
