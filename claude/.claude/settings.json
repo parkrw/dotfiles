@@ -24,7 +24,8 @@
       "Bash(tmux paste-buffer:*)",
       "Bash(tmux send-keys:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(ssh core.ckdev.io:*)"
     ],
     "deny": [
       "mcp__clickup",
