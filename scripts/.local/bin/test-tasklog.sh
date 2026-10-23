@@ -191,7 +191,25 @@ run "brief in a repo with no flakes (brief)"  "$T/web" 0 "$BIN/cklog" brief web-
 has "brief says the repo has no flakes"       $'## Known flakes\n\nNone recorded.'
 
 run "an unknown command fails"                "$T/core" 1 "$BIN/cklog" frob
-run "an unknown plan subcommand fails"        "$T/core" 1 "$BIN/cklog" plan frob
+# A failed write inside state or flake match leaves nothing half-written
+export TASKLOG_DIR="$T/db-tx"
+(cd "$T/core" && "$BIN/cklog" plan add tx && "$BIN/cklog" state tx T1 building && "$BIN/cklog" flake add one && "$BIN/cklog" flake add two) >/dev/null
+sql "$TASKLOG_DIR/ck.db" "CREATE TRIGGER no_state BEFORE INSERT ON events WHEN NEW.kind = 'state' AND NEW.text LIKE 'ready%' BEGIN SELECT RAISE(ABORT, 'injected'); END" >/dev/null
+run "state fails when its event cannot be written" "$T/core" 1 "$BIN/cklog" state tx T1 ready
+got=$(sql "$TASKLOG_DIR/ck.db" "SELECT state FROM prs WHERE code = 'T1'")
+[[ $got == building ]] && ok "the row keeps its state when its event fails" || ko "the row keeps its state when its event fails" "$got"
+sql "$TASKLOG_DIR/ck.db" "CREATE TRIGGER no_two BEFORE UPDATE ON flakes WHEN NEW.test_id = 'two' BEGIN SELECT RAISE(ABORT, 'injected'); END" >/dev/null
+run "flake match fails when a sighting cannot be written" "$T/core" 1 sh -c "printf '%s\n' 'x one' 'x two' | '$BIN/cklog' flake match"
+got=$(sql "$TASKLOG_DIR/ck.db" "SELECT sum(seen) FROM flakes")
+[[ $got == 0 ]] && ok "a failed match records no sighting" || ko "a failed match records no sighting" "$got"
+export TASKLOG_DIR="$T/db"
+
+# With TASKLOG_DIR unset or empty, the DB lands in ~/.local/state/claude/tasks
+mkdir -p "$T/home"
+(cd "$T/core" && HOME="$T/home" TASKLOG_DIR= "$BIN/cklog" plan list >/dev/null)
+[[ -f "$T/home/.local/state/claude/tasks/ck.db" ]] && ok "an empty TASKLOG_DIR uses the default dir" || ko "an empty TASKLOG_DIR uses the default dir" "$(find "$T/home" -name '*.db')"
+
+run "an unknown plan subcommand fails"       "$T/core" 1 "$BIN/cklog" plan frob
 grep -q 'plan add <slug> | plan list' "$T/err" && ok "plan frob prints plan usage" || ko "plan frob prints plan usage" "$(cat "$T/err")"
 run "an unknown flake subcommand fails"       "$T/core" 1 "$BIN/cklog" flake frob
 grep -q 'flake add <test_id> \[note\] | list | rm <test_id> | match' "$T/err" && ok "flake frob prints flake usage" || ko "flake frob prints flake usage" "$(cat "$T/err")"
