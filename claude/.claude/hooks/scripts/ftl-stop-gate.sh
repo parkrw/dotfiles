@@ -2,7 +2,8 @@
 # ftl-stop-gate.sh — Stop. A turn of /ftl ship, ship --integrate or
 # <task> --ship may end only where the skill lets it: handed off, or at one of
 # its stop-and-wait points — one question, commands printed for the human,
-# variants to pick from, open findings listed, or a review still running.
+# variants to pick from, open findings listed, or a review or pr-wait still
+# running.
 # Any other stop means a step was skipped.
 #
 # Logs every judged stop to $HOOKS_DIR/logs/ftl-stop-gate.jsonl and tells the
@@ -14,8 +15,8 @@
 #
 # A run is the prompt that started it (ftl-mode.sh records its prompt_id),
 # plus the next prompt after each wait the skill resumes from: a question,
-# variants, an unblock command, a running review (whose completion arrives as
-# a new prompt). The hand-off and the waits that end the run — a rebase or
+# variants, an unblock command, a running review or pr-wait (whose completion
+# arrives as a new prompt). The hand-off and the waits that end the run — a rebase or
 # merge sequence for the human, open findings — clear the mode, and any other
 # later prompt does too, so the session's later turns are not judged as ship
 # turns. A prompt that changes the subject right after a resumable wait is
@@ -90,6 +91,8 @@ elif grep -qE '^[-*[:space:]]*`?[^[:space:]`]+:([0-9]+|\?)`? - ' <<<"$msg"; then
 elif { [[ -n "$wt" ]] && grep -qF -- "review-branch.sh $wt " <<<"$reviews"; } ||
      grep -qE 'claude-review|review-branch' <<<"$background"; then
   escape="review running" resumes=true
+elif grep -qE '(^|[^[:alnum:]_-])pr-wait([^[:alnum:]_-]|$)' <<<"$background"; then
+  escape="ci running" resumes=true
 fi
 
 # The PR body's directory is the session scratchpad, which Stop input does not

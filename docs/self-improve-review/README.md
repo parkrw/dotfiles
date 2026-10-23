@@ -4,7 +4,7 @@ Claude writes a change. A second Claude, in a fresh context, reviews it. Every f
 
 ## Jump right in
 
-- [ftl-ship.md](ftl-ship.md): install, then ship a task to a reviewed draft PR.
+- [ftl-ship.md](ftl-ship.md): install, then ship a task to a reviewed PR whose CI is green.
 - [context-handoff.md](context-handoff.md): hand off to a fresh session at 25% context. Needs tmux.
 - [review-insights.md](review-insights.md): read the review record and decide what to change.
 
@@ -22,7 +22,7 @@ Take it in this order. Each step works without the ones after it.
 | --- | --- | --- |
 | Start | git hooks + `bash-write-gate.sh` + `claude-gate` | a safety net: no writes on main, no bulk staging, no force-push, no push without a review |
 | Start | `/ftl "<task>"`, then `/ftl` | orients on the repo's rules and the lead's conventions, then runs a pre-handoff checklist. Read-only |
-| Core | `/ftl ship --integrate` | the full loop: worktree, commit, rebase, review until zero findings, draft PR |
+| Core | `/ftl ship --integrate` | the full loop: worktree, commit, rebase, review until zero findings, PR, CI fixed until green |
 | Advanced | `claude-review-stats`, `/review-insights` | where findings come from and what to change |
 | Advanced | tmux, `/spawn`, `/newchat`, the 25% handoff | long tasks across fresh sessions |
 | Advanced | `/fan` | several issues at once, one worktree and tmux pane each |

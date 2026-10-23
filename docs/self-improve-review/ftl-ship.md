@@ -1,6 +1,6 @@
 # ftl ship --integrate
 
-Task to draft PR in one command: worktree, commit, rebase, a review loop until zero findings, push. Git hooks and Claude hooks gate each step.
+Task to a PR ready to squash-merge in one command: worktree, commit, rebase, a review loop until zero findings, push, PR, then CI fixed until green. Git hooks and Claude hooks gate each step.
 
 ## Install
 
@@ -24,7 +24,7 @@ Both:
 curl -fsSL https://claude.ai/install.sh | bash
 src=$(mktemp -d) && git clone --depth 1 https://github.com/pwilliams-ck/dotfiles "$src"
 mkdir -p ~/.local/bin ~/.config/git/hooks ~/.claude/hooks/scripts ~/.claude/hooks/state ~/.claude/skills
-cp "$src"/scripts/.local/bin/claude-{gate,review,review-stats} ~/.local/bin/
+cp "$src"/scripts/.local/bin/{claude-gate,claude-review,claude-review-stats,pr-wait} ~/.local/bin/
 cp "$src"/git/.config/git/hooks/* ~/.config/git/hooks/
 cp "$src"/claude/.claude/hooks/scripts/* ~/.claude/hooks/scripts/
 cp -R "$src"/claude/.claude/skills/{ftl,newchat,spawn,fan,review-insights} ~/.claude/skills/
@@ -72,7 +72,7 @@ Then, in each repo: `claude-gate remote auto`.
 | Toggle | on | off | auto |
 | --- | --- | --- | --- |
 | `merge` | ask | deny | local rebase/merge from a clean tree, and `worktree add -b` |
-| `remote` | ask | deny | push of your own branch and `gh pr create --draft`; turns `review` on |
+| `remote` | ask | deny | push of your own branch and `gh pr create`; turns `review` on |
 | `review` | push denied until the branch diff passes review | no review | — |
 
 Always denied: `gh pr merge`, `git pull` (except `--ff-only`), and merging or rebasing from a remote.
@@ -80,16 +80,17 @@ Always denied: `gh pr merge`, `git pull` (except `--ff-only`), and merging or re
 ## Loop
 
 1. Run `/ftl "<task>" --ship`. For a task you want to steer, run `/ftl "<task>"`, build it together, then `/ftl ship --integrate`.
-2. Ship works in a worktree. It fetches, checks, commits, pulls with `--ff-only` and rebases. It then loops `claude-review` (opus, xhigh) until there are zero findings, pushes, and opens a draft PR.
-3. Mark the PR ready.
-4. Every week or so, run `/review-insights`. See [review-insights.md](review-insights.md).
+2. Ship works in a worktree. It fetches, checks, commits, pulls with `--ff-only` and rebases. It then loops `claude-review` (opus, xhigh) until there are zero findings, pushes, and opens a PR ready for review.
+3. It waits on `pr-wait` until every check passes and GitHub would allow the squash merge. A failed check, a conflict or a stale branch gets fixed, reviewed and pushed, up to 5 rounds.
+4. Review the PR and click squash and merge.
+5. Every week or so, run `/review-insights`. See [review-insights.md](review-insights.md).
 
 ## What blocks what
 
 - `bash-write-gate.sh`: writes on main, bulk staging, `--no-verify`, and integrating from a remote.
 - `pre-push`: pushes to main, force-pushes, and any push without a review approval for the diff's sha256.
 - `outcome-assert-gate.sh`: mocks, call-shape asserts, and `.skip` in tests.
-- `ftl-stop-gate.sh`: a ship turn that ends without its hand-off (the branch's files committed, subject-only commits, a passing review, the PR body file, a PR URL or the push block), unless it ends where the skill says to wait: a question, commands printed for you, variants, open findings or a running review. It logs to `~/.claude/hooks/logs/ftl-stop-gate.jsonl` and blocks only after `touch ~/.claude/hooks/.ftl-stop-gate-enforce`. `ftl-mode.sh` tells it which `/ftl` mode the session is in.
+- `ftl-stop-gate.sh`: a ship turn that ends without its hand-off (the branch's files committed, subject-only commits, a passing review, the PR body file, a PR URL or the push block), unless it ends where the skill says to wait: a question, commands printed for you, variants, open findings, or a running review or `pr-wait`. It logs to `~/.claude/hooks/logs/ftl-stop-gate.jsonl` and blocks only after `touch ~/.claude/hooks/.ftl-stop-gate-enforce`. `ftl-mode.sh` tells it which `/ftl` mode the session is in.
 
 ## Extras
 

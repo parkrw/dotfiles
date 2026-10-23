@@ -45,6 +45,7 @@ Custom shell tools deployed to `~/.local/bin`:
 
 - `reqd` — **moved to its own repo** at `~/Developments/work/ck/programmin/reqd`; what's here is an untracked, gitignored symlink keeping it on PATH.
 - `cht.sh` — **vendored third-party** cheat.sh shell client (has its own `update`/`version` self-management). Don't hand-edit; treat as upstream.
+- `pr-wait` — polls a PR until its checks settle and GitHub's merge state says it can squash-merge; the exit code names the verdict (ready, failed, behind/conflict, blocked, closed, timeout). `/ftl ship --integrate` waits on it after opening the PR.
 - `claude-review-stats` — zero-dependency Node. Reports on `~/.claude/review-ledger/`, where `review-branch.sh` records every review: verdicts, cost, what became of each finding in the branch's next review, and the finding categories (area and cause) assigned by `--categorize` with haiku. Each run also imports the reviewer's own headless transcripts from `~/.claude/projects` before Claude Code's `cleanupPeriodDays` deletes them. `--json` carries the area/cause taxonomy with the runs and findings; the `review-insights` skill renders it as a page.
 
 The `claude` file (untracked) is **not** part of these dotfiles. It's a symlink the Claude Code installer wrote to `~/.local/bin/claude` (pointing at `~/.local/share/claude/versions/<ver>`); because `~/.local/bin` is a folded Stow symlink to this directory, that write landed inside the repo. It's machine- and version-specific — don't commit it (gitignore it, or unfold the dir so `~/.local/bin` holds per-file symlinks).

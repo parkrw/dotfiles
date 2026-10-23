@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# pr-wait — wait until a PR's checks finish and GitHub would let it squash-merge.
+#
+#   pr-wait [<pr>] [--timeout <minutes>]   (default: the current branch's PR, 60 minutes)
+#
+# Polls every 30s. The checks count as finished only when none is pending on
+# two polls in a row at the same head sha, since a workflow chained off another
+# registers its checks only once the first ends; no check at all counts only
+# after 3 minutes at that head, since a fresh push reports none until its
+# workflows queue. Then GitHub's merge state decides, because only it knows the
+# ruleset: required checks, up-to-date branches, required approvals.
+#
+# Exit codes, each after a final "pr-wait: <verdict> <url>" line:
+#   0 ready     no check failed, squash merge is enabled, nothing blocks the
+#               merge but a human approval
+#   1 failed    a check failed or was cancelled; each is listed with its link
+#   2 behind    the default branch moved, or conflicts with the PR
+#   3 blocked   no check failed, yet GitHub refuses the merge, or squash merge
+#               is disabled for the repo
+#   4 closed    merged or closed while waiting
+#   5 timeout   checks still pending; each is listed
+set -euo pipefail
+
+die() { echo "pr-wait: $1" >&2; exit 64; }
+
+pr= timeout=60
+while (($#)); do
+  case $1 in
+    --timeout) timeout=${2:?--timeout needs minutes}; shift 2 ;;
+    -h|--help) sed -n '2,3p' "$0"; exit ;;
+    -*) die "unknown argument: $1" ;;
+    *) [[ -z $pr ]] || die "one PR at a time"; pr=$1; shift ;;
+  esac
+done
+[[ $timeout =~ ^[0-9]+$ ]] || die "--timeout takes whole minutes"
+
+url=$(gh pr view ${pr:+"$pr"} --json url -q .url) || die "no pull request${pr:+ for $pr}"
+repo=$(sed -E 's#^https://[^/]+/([^/]+/[^/]+)/pull/.*#\1#' <<<"$url")
+deadline=$(( $(date +%s) + timeout * 60 ))
+
+errors=$(mktemp)
+trap 'rm -f "$errors"' EXIT
+
+finish() { echo "pr-wait: $2 $url"; exit "$1"; }
+list() { jq -r --arg b "$1" '.[] | select(.bucket | IN($b | split(",")[])) | "  \(.bucket) \(.name) \(.link)"' <<<"$checks"; }
+
+head= head_since=0 previous= shown=
+while :; do
+  now=$(date +%s)
+  view=$(gh pr view "$url" --json state,headRefOid,mergeable,mergeStateStatus,reviewDecision 2>/dev/null) || view=
+  checks=$(gh pr checks "$url" --json name,bucket,link 2>"$errors") || true
+  if [[ -z $checks ]] && grep -q 'no checks reported' "$errors"; then checks='[]'; fi
+
+  if [[ -n $view && -n $checks ]]; then
+    state=$(jq -r .state <<<"$view")
+    [[ $state == OPEN ]] || finish 4 "$(tr '[:upper:]' '[:lower:]' <<<"$state")"
+    sha=$(jq -r .headRefOid <<<"$view")
+    [[ $sha == "$head" ]] || { head=$sha head_since=$now previous=; }
+
+    counts=$(jq -r 'group_by(.bucket) | map("\(length) \(.[0].bucket)") | join(", ") | if . == "" then "no checks" else . end' <<<"$checks")
+    [[ $counts == "$shown" ]] || { echo "pr-wait: ${head:0:12} $counts"; shown=$counts; }
+
+    signature="$sha $(jq -c 'map([.name, .bucket]) | sort' <<<"$checks")"
+    pending=$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$checks")
+    total=$(jq length <<<"$checks")
+    settled=false
+    if (( pending == 0 )) && [[ $signature == "$previous" ]] && (( total > 0 || now - head_since >= 180 )); then
+      settled=true
+    fi
+    previous=$signature
+
+    if [[ $settled == true ]]; then
+      if jq -e 'any(.bucket == "fail" or .bucket == "cancel")' <<<"$checks" >/dev/null; then
+        list fail,cancel
+        finish 1 failed
+      fi
+      mergeable=$(jq -r .mergeable <<<"$view")
+      status=$(jq -r .mergeStateStatus <<<"$view")
+      review=$(jq -r '.reviewDecision // ""' <<<"$view")
+      # UNKNOWN while GitHub computes mergeability; UNSTABLE lags a check that
+      # just turned green. Both settle on a later poll.
+      case $mergeable/$status in
+        CONFLICTING/*|*/DIRTY) finish 2 conflict ;;
+        */BEHIND) finish 2 behind ;;
+        UNKNOWN/*|*/UNKNOWN|*/UNSTABLE) ;;
+        */CLEAN|*/HAS_HOOKS|*/BLOCKED)
+          if [[ $status == BLOCKED && $review != REVIEW_REQUIRED ]]; then
+            finish 3 "blocked (mergeStateStatus BLOCKED, reviewDecision ${review:-none})"
+          fi
+          [[ $(gh repo view "$repo" --json squashMergeAllowed -q .squashMergeAllowed) == true ]] ||
+            finish 3 "blocked (squash merge is disabled for $repo)"
+          [[ $status == BLOCKED ]] && finish 0 "ready, awaiting approval"
+          finish 0 ready ;;
+        *) finish 3 "blocked (mergeStateStatus $status)" ;;
+      esac
+    fi
+  fi
+
+  if (( now >= deadline )); then
+    [[ -n $checks ]] && list pending
+    finish 5 "timeout after ${timeout}m"
+  fi
+  sleep 30
+done
