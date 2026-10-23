@@ -15,6 +15,7 @@ mkrepo() { # $1=dir $2=origin url
 }
 mkrepo "$T/core" https://github.com/CloudKey-io/core.git
 mkrepo "$T/core-ssh" git@github.com:cloudkey-io/core
+mkrepo "$T/web" https://github.com/CloudKey-io/web
 mkrepo "$T/van" https://github.com/parkrw/vanillin.git
 mkrepo "$T/other" https://github.com/parkrw/gorag.git
 git init -q -b main "$T/noorigin"
@@ -92,7 +93,9 @@ got=$(sql "$TASKLOG_DIR/ck.db" "SELECT text FROM events WHERE kind = 'note'")
 out=$(cd "$T/core" && printf 'keep "hide" off\n' | "$BIN/cklog" decide platform-overview - --by human --quote "don't hide it" 2>&1) && ok "decide reads stdin" || ko "decide reads stdin" "$out"
 run "event takes no text"                     "$T/core" 0 "$BIN/cklog" event platform-overview P6 started
 run "a text-less event logs its kind alone"   "$T/core" 0 "$BIN/cklog" log platform-overview P6
-[[ "$out" == *"  P6  started" ]] && ok "a text-less event logs its kind alone (line)" || ko "a text-less event logs its kind alone (line)" "$out"
+[[ "$out" == *"  P6  started" && $(wc -l <<<"$out") -eq 1 ]] && ok "log of one code holds only that code" || ko "log of one code holds only that code" "$out"
+run "log --since a past date keeps rows"      "$T/core" 0 "$BIN/cklog" log platform-overview P6 --since 2000-01-01
+[[ "$out" == *"  P6  started" ]] && ok "log --since keeps rows on or after it" || ko "log --since keeps rows on or after it" "$out"
 CLAUDE_CODE_SESSION_ID=sess-1 run "event records the session" "$T/core" 0 "$BIN/cklog" event platform-overview P5 review "round 1: 2 findings"
 got=$(sql "$TASKLOG_DIR/ck.db" "SELECT session FROM events WHERE kind = 'review'")
 [[ "$got" == sess-1 ]] && ok "the session id is stored" || ko "the session id is stored" "$got"
@@ -133,6 +136,13 @@ has "an unmatched flake stays unseen"         "panel-table padding     0"
 [[ "$out" != *"first note"* ]] && ok "a re-added flake drops its old note" || ko "a re-added flake drops its old note" "$out"
 run "flakes belong to their repo"             "$T/van"  0 "$BIN/vanlog" flake list
 [[ -z "$out" ]] && ok "flakes belong to their repo (empty)" || ko "flakes belong to their repo (empty)" "$out"
+run "another CloudKey repo lists no core flakes" "$T/web" 0 "$BIN/cklog" flake list
+[[ -z "$out" ]] && ok "another CloudKey repo lists no core flakes (empty)" || ko "another CloudKey repo lists no core flakes (empty)" "$out"
+run "another CloudKey repo matches no core flakes" "$T/web" 0 sh -c "printf '%s\n' 'chart-math > pointGrid spreads points' | '$BIN/cklog' flake match"
+[[ "$out" == "NEW chart-math > pointGrid spreads points" ]] && ok "a core flake does not cover another repo's red" || ko "a core flake does not cover another repo's red" "$out"
+run "another CloudKey repo has none of core's plans" "$T/web" 0 "$BIN/cklog" plan list
+[[ -z "$out" ]] && ok "plans belong to their repo" || ko "plans belong to their repo" "$out"
+run "show in another CloudKey repo"           "$T/web"  1 "$BIN/cklog" show platform-overview
 run "flake rm"                                "$T/core" 0 "$BIN/cklog" flake rm "panel-table padding"
 run "flake add of a padded id"                "$T/core" 0 "$BIN/cklog" flake add " padded id "
 run "flake rm takes the id flake add took"    "$T/core" 0 "$BIN/cklog" flake rm " padded id "
@@ -146,9 +156,12 @@ has "brief carries the decision and quote"    $'keep "hide" off (human)\n  > don
 has "brief carries recent events"             "review: round 1: 2 findings"
 has "brief carries the flakes"                '- `chart-math > pointGrid` — load-sensitive'
 for i in $(seq -w 1 12); do (cd "$T/core" && "$BIN/cklog" event platform-overview P7 tick "e$i"); done
+(cd "$T/core" && "$BIN/cklog" event platform-overview P8 tick "other code")
 run "brief of a long log"                     "$T/core" 0 "$BIN/cklog" brief platform-overview P7
 ticks=$(grep -o 'tick: e[0-9]*' <<<"$out" | tr '\n' ' ')
 [[ "$ticks" == "tick: e03 tick: e04 tick: e05 tick: e06 tick: e07 tick: e08 tick: e09 tick: e10 tick: e11 tick: e12 " ]] && ok "brief keeps the last 10 events, oldest first" || ko "brief keeps the last 10 events, oldest first" "$ticks"
+events=$(sed -n '/^## Last 10 events/,/^## Known flakes/p' <<<"$out" | grep -c '^- ')
+[[ $events == 10 ]] && ok "brief holds only its own code's events" || ko "brief holds only its own code's events" "$events lines"
 run "brief of a code with no row"             "$T/core" 0 "$BIN/cklog" brief platform-overview P9
 has "brief says the row is missing"           "No row yet."
 
