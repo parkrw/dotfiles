@@ -74,7 +74,7 @@ function originMatches(origin, pattern) {
 
 function resolveName(invoked, origin) {
   const fromArgv = invoked.replace(/log$/, "");
-  if (NAMES[fromArgv]) {
+  if (Object.hasOwn(NAMES, fromArgv)) {
     if (!origin || !NAMES[fromArgv].origins.some((p) => originMatches(origin, p)))
       throw new Refused(`not a ${fromArgv} repo (origin: ${origin ?? "none"})`);
     return fromArgv;
@@ -370,7 +370,7 @@ function main() {
   const invoked = path.basename(process.argv[1]);
   const [command, ...argv] = process.argv.slice(2);
   try {
-    if (!COMMANDS[command]) throw new Usage(`commands: ${Object.keys(COMMANDS).join(", ")}`);
+    if (!Object.hasOwn(COMMANDS, command ?? "")) throw new Usage(`commands: ${Object.keys(COMMANDS).join(", ")}`);
     const cwd = process.cwd();
     const origin = originOf(cwd);
     const name = resolveName(invoked, origin);

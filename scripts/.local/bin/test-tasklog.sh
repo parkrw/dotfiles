@@ -43,6 +43,8 @@ run "cklog refuses in vanillin"              "$T/van"      2 "$BIN/cklog" plan l
 run "cklog refuses in a personal repo"       "$T/other"    2 "$BIN/cklog" plan list
 run "tasklog refuses a repo no name owns"    "$T/other"    2 "$BIN/tasklog" plan list
 run "tasklog refuses a repo with no origin"  "$T/noorigin" 2 "$BIN/tasklog" plan list
+run "tasklog picks ck from a core origin"    "$T/core"     0 "$BIN/tasklog" plan list
+[[ -f "$TASKLOG_DIR/ck.db" && ! -f "$TASKLOG_DIR/van.db" ]] && ok "tasklog in core opens ck.db" || ko "tasklog in core opens ck.db" "$(ls "$TASKLOG_DIR")"
 run "cklog runs in core"                     "$T/core"     0 "$BIN/cklog" plan list
 run "vanlog runs in vanillin"                "$T/van"      0 "$BIN/vanlog" plan list
 [[ -f "$TASKLOG_DIR/ck.db" && -f "$TASKLOG_DIR/van.db" ]] && ok "the names keep separate DBs" || ko "the names keep separate DBs" "$(ls "$TASKLOG_DIR")"
@@ -56,7 +58,8 @@ run "plan add"                                "$T/core" 0 "$BIN/cklog" plan add 
 run "a second plan with the same slug fails"  "$T/core" 1 "$BIN/cklog" plan add platform-overview
 run "state on an unknown plan fails"          "$T/core" 1 "$BIN/cklog" state nope P1 building
 run "state rejects an unknown state"          "$T/core" 1 "$BIN/cklog" state platform-overview P1 done
-run "state sets a row"                        "$T/core" 0 "$BIN/cklog" state platform-overview P5 building --branch overview-p5 --head abc123def456789 --subject "web: glance row"
+run "state rejects a non-numeric --pr"        "$T/core" 1 "$BIN/cklog" state platform-overview P5 ready --pr abc
+run "state sets a row"                       "$T/core" 0 "$BIN/cklog" state platform-overview P5 building --branch overview-p5 --head abc123def456789 --subject "web: glance row"
 run "state changes only what it names"        "$T/core" 0 "$BIN/cklog" state platform-overview P5 ready --pr 412
 run "show reads the row back"                 "$T/core" 0 "$BIN/cklog" show --json platform-overview
 row=$(jq -c '.[0] | [.code, .state, .pr, .branch, .head, .subject]' <<<"$out")
@@ -109,12 +112,14 @@ export TASKLOG_DIR="$T/db"
 
 # Flakes
 run "flake add"                               "$T/core" 0 "$BIN/cklog" flake add "chart-math > pointGrid" "load-sensitive"
-run "flake add a second"                      "$T/core" 0 "$BIN/cklog" flake add "panel-table padding"
+run "flake add a second"                      "$T/core" 0 "$BIN/cklog" flake add "panel-table padding" "first note"
+run "flake add of a known id replaces its note" "$T/core" 0 "$BIN/cklog" flake add "panel-table padding"
 run "flake match" "$T/core" 0 sh -c "printf '%s\n' 'packages/ui/test/chart-math.test.js > chart-math > pointGrid spreads points' 'apps/web/test/glance-row.test.jsx > renders' '' | '$BIN/cklog' flake match"
 [[ "$out" == $'KNOWN packages/ui/test/chart-math.test.js > chart-math > pointGrid spreads points\nNEW apps/web/test/glance-row.test.jsx > renders' ]] && ok "flake match sorts KNOWN and NEW" || ko "flake match sorts KNOWN and NEW" "$out"
 run "flake list"                              "$T/core" 0 "$BIN/cklog" flake list
 has "a matched flake counts its sighting"     "chart-math > pointGrid  1"
 has "an unmatched flake stays unseen"         "panel-table padding     0"
+[[ "$out" != *"first note"* ]] && ok "a re-added flake drops its old note" || ko "a re-added flake drops its old note" "$out"
 run "flakes belong to their repo"             "$T/van"  0 "$BIN/vanlog" flake list
 [[ -z "$out" ]] && ok "flakes belong to their repo (empty)" || ko "flakes belong to their repo (empty)" "$out"
 run "flake rm"                                "$T/core" 0 "$BIN/cklog" flake rm "panel-table padding"
@@ -131,6 +136,8 @@ run "brief of a code with no row"             "$T/core" 0 "$BIN/cklog" brief pla
 has "brief says the row is missing"           "No row yet."
 
 run "an unknown command fails"                "$T/core" 1 "$BIN/cklog" frob
+run "an inherited Object method is not a command" "$T/core" 1 "$BIN/cklog" toString
+[[ "$out" != "[object Object]" ]] && ok "toString prints no garbage" || ko "toString prints no garbage" "$out"
 run "an unknown option fails"                 "$T/core" 1 "$BIN/cklog" show --frob
 
 echo "---"
