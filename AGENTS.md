@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Personal macOS dotfiles. There is no build and no application code — these are configuration files deployed into `$HOME` via GNU Stow. No tests in this repo.
+Personal macOS dotfiles. There is no build and no application code — these are configuration files deployed into `$HOME` via GNU Stow. The scripts and hooks that have tests keep them beside themselves as `test-*.sh` pipe tests, each run with `bash <file>`; there is no CI.
 
 ## Git
 

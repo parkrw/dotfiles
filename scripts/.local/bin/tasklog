@@ -309,7 +309,7 @@ const COMMANDS = {
     }
     if (sub === "rm") {
       const { positionals: [id] } = args(rest, {}, 1, 1);
-      const { changes } = db.prepare("DELETE FROM flakes WHERE repo = ? AND test_id = ?").run(ctx.repo, id);
+      const { changes } = db.prepare("DELETE FROM flakes WHERE repo = ? AND test_id = ?").run(ctx.repo, id.trim());
       if (!changes) throw new Usage(`no flake ${id}`);
       return "";
     }
