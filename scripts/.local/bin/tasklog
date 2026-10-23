@@ -37,7 +37,7 @@ const NAMES = {
   van: { db: "van.db", origins: ["github.com/parkrw/vanillin"] },
 };
 const STATES = ["planned", "building", "review", "draft", "ready", "merged", "dropped", "blocked"];
-const CLOSED = ["merged", "dropped"];
+const CLOSED_SQL = ["merged", "dropped"].map((s) => `'${s}'`).join(",");
 const BRIEF_EVENTS = 10;
 
 class Refused extends Error {}
@@ -206,7 +206,7 @@ const COMMANDS = {
       args(rest, {}, 0, 0);
       const rows = db.prepare(
         `SELECT slug, title, path,
-           (SELECT count(*) FROM prs WHERE prs.plan = plans.id AND state NOT IN ('merged','dropped')) AS open
+           (SELECT count(*) FROM prs WHERE prs.plan = plans.id AND state NOT IN (${CLOSED_SQL})) AS open
          FROM plans WHERE repo = ? ORDER BY slug`).all(ctx.repo);
       return table(rows, ["slug", "open", "title", "path"]);
     }
@@ -267,7 +267,7 @@ const COMMANDS = {
     const where = ["plans.repo = ?"];
     const params = [ctx.repo];
     if (slug) { where.push("plans.id = ?"); params.push(planRow(db, ctx.repo, slug).id); }
-    if (!values.all) where.push(`prs.state NOT IN (${CLOSED.map((s) => `'${s}'`).join(",")})`);
+    if (!values.all) where.push(`prs.state NOT IN (${CLOSED_SQL})`);
     const rows = db.prepare(
       `SELECT plans.slug AS plan, prs.code, prs.state, prs.pr, prs.branch, prs.head, prs.subject,
               prs.worktree, prs.updated

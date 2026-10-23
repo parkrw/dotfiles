@@ -16,6 +16,8 @@ mkrepo() { # $1=dir $2=origin url
 mkrepo "$T/core" https://github.com/CloudKey-io/core.git
 mkrepo "$T/core-ssh" git@github.com:cloudkey-io/core
 mkrepo "$T/web" https://github.com/CloudKey-io/web
+mkrepo "$T/core-sshurl" ssh://git@github.com/CloudKey-io/core.git
+mkrepo "$T/core-token" https://x-access-token:t0k@github.com/CloudKey-io/core/
 mkrepo "$T/van" https://github.com/parkrw/vanillin.git
 mkrepo "$T/other" https://github.com/parkrw/gorag.git
 git init -q -b main "$T/noorigin"
@@ -64,23 +66,29 @@ run "plan add rejects a blank slug"           "$T/core" 1 "$BIN/cklog" plan add 
 run "event rejects a blank code"              "$T/core" 1 "$BIN/cklog" event platform-overview " " note
 run "state rejects an unknown state"          "$T/core" 1 "$BIN/cklog" state platform-overview P1 done
 run "state rejects a non-numeric --pr"        "$T/core" 1 "$BIN/cklog" state platform-overview P5 ready --pr abc
-run "state sets a row"                       "$T/core" 0 "$BIN/cklog" state platform-overview P5 building --branch overview-p5 --head abc123def456789 --subject "web: glance row"
+run "state sets a row"                       "$T/core" 0 "$BIN/cklog" state platform-overview P5 building --branch overview-p5 --head abc123def456789 --subject "web: glance row" --worktree /wt/core-p5
 run "state changes only what it names"        "$T/core" 0 "$BIN/cklog" state platform-overview P5 ready --pr 412
 run "show reads the row back"                 "$T/core" 0 "$BIN/cklog" show --json platform-overview
 row=$(jq -c '.[0] | [.code, .state, .pr, .branch, .head, .subject]' <<<"$out")
 [[ $row == '["P5","ready",412,"overview-p5","abc123def456789","web: glance row"]' ]] && ok "the row keeps earlier fields" || ko "the row keeps earlier fields" "$row"
 run "a worktree of core sees the same plan"   "$T/core-ssh" 0 "$BIN/cklog" show platform-overview
 has "a worktree of core sees the same plan (row)" "overview-p5"
+run "an ssh:// clone of core sees the same plan" "$T/core-sshurl" 0 "$BIN/cklog" show platform-overview
+has "an ssh:// clone of core sees the same plan (row)" "overview-p5"
+run "a token https clone of core sees the same plan" "$T/core-token" 0 "$BIN/cklog" show platform-overview
+has "a token https clone of core sees the same plan (row)" "overview-p5"
 run "state writes state events"               "$T/core" 0 "$BIN/cklog" log platform-overview P5
-has "the first state event names its fields"  "state  building branch=overview-p5 head=abc123def456789 subject=web: glance row"
+has "the first state event names its fields"  "state  building branch=overview-p5 worktree=/wt/core-p5 head=abc123def456789 subject=web: glance row"
 has "the second state event names the PR"     "state  ready pr=412"
 run "state merged"                            "$T/core" 0 "$BIN/cklog" state platform-overview P4 merged
-run "show hides merged rows"                  "$T/core" 0 "$BIN/cklog" show
-[[ "$out" != *P4* && "$out" == *P5* ]] && ok "show hides merged rows (rows)" || ko "show hides merged rows (rows)" "$out"
-run "show --all lists merged rows"            "$T/core" 0 "$BIN/cklog" show --all
-has "show --all lists merged rows (row)"      "P4"
+run "state dropped"                           "$T/core" 0 "$BIN/cklog" state platform-overview P3 dropped
+run "state blocked"                           "$T/core" 0 "$BIN/cklog" state platform-overview P2 blocked
+run "show hides merged and dropped rows"      "$T/core" 0 "$BIN/cklog" show
+[[ "$out" != *P4* && "$out" != *P3* && "$out" == *P5* && "$out" == *P2* ]] && ok "show hides merged and dropped rows (rows)" || ko "show hides merged and dropped rows (rows)" "$out"
+run "show --all lists closed rows"            "$T/core" 0 "$BIN/cklog" show --all
+[[ "$out" == *P4* && "$out" == *P3* ]] && ok "show --all lists closed rows (rows)" || ko "show --all lists closed rows (rows)" "$out"
 run "plan list counts open rows"              "$T/core" 0 "$BIN/cklog" plan list
-has "plan list counts open rows (count)"      "platform-overview  1"
+has "plan list counts open rows (count)"      "platform-overview  2     Platform overview"
 run "log --since rejects a non-date"          "$T/core" 1 "$BIN/cklog" log platform-overview --since soon
 run "log --since a future date is empty"      "$T/core" 0 "$BIN/cklog" log platform-overview --since 2999-01-01
 [[ -z "$out" ]] && ok "log --since filters" || ko "log --since filters" "$out"
@@ -131,7 +139,7 @@ run "flake add rejects a blank id"            "$T/core" 1 "$BIN/cklog" flake add
 run "flake match after an empty add"          "$T/core" 0 sh -c "printf '%s\n' 'apps/web/test/new.test.jsx > breaks' | '$BIN/cklog' flake match"
 [[ "$out" == "NEW apps/web/test/new.test.jsx > breaks" ]] && ok "an empty flake id covers no test" || ko "an empty flake id covers no test" "$out"
 run "flake list"                              "$T/core" 0 "$BIN/cklog" flake list
-has "a matched flake counts its sighting"     "chart-math > pointGrid  1"
+has "a matched flake counts its sighting"     "chart-math > pointGrid  1     $(date -u +%Y-%m-%d)"
 has "an unmatched flake stays unseen"         "panel-table padding     0"
 [[ "$out" != *"first note"* ]] && ok "a re-added flake drops its old note" || ko "a re-added flake drops its old note" "$out"
 run "flakes belong to their repo"             "$T/van"  0 "$BIN/vanlog" flake list
@@ -150,7 +158,9 @@ run "flake rm of an unknown id fails"        "$T/core" 1 "$BIN/cklog" flake rm "
 
 # Brief
 run "brief renders" "$T/core" 0 "$BIN/cklog" brief platform-overview P5
+has "brief heads with the plan title"         "# platform-overview P5 — Platform overview"
 has "brief names the plan file"               "Plan: $(cd "$T/core" && pwd -P)/PLAN.md"
+has "brief carries the worktree"              "- worktree: /wt/core-p5"
 has "brief carries the PR row"                "- pr: 412"
 has "brief carries the decision and quote"    $'keep "hide" off (human)\n  > don\'t hide it'
 has "brief carries recent events"             "review: round 1: 2 findings"
