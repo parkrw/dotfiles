@@ -45,6 +45,8 @@ run "tasklog refuses a repo no name owns"    "$T/other"    2 "$BIN/tasklog" plan
 run "tasklog refuses a repo with no origin"  "$T/noorigin" 2 "$BIN/tasklog" plan list
 run "tasklog picks ck from a core origin"    "$T/core"     0 "$BIN/tasklog" plan list
 [[ -f "$TASKLOG_DIR/ck.db" && ! -f "$TASKLOG_DIR/van.db" ]] && ok "tasklog in core opens ck.db" || ko "tasklog in core opens ck.db" "$(ls "$TASKLOG_DIR")"
+ln -s "$BIN/tasklog" "$T/constructorlog"
+run "an inherited Object key is not a name"  "$T/core"     0 "$T/constructorlog" plan list
 run "cklog runs in core"                     "$T/core"     0 "$BIN/cklog" plan list
 run "vanlog runs in vanillin"                "$T/van"      0 "$BIN/vanlog" plan list
 [[ -f "$TASKLOG_DIR/ck.db" && -f "$TASKLOG_DIR/van.db" ]] && ok "the names keep separate DBs" || ko "the names keep separate DBs" "$(ls "$TASKLOG_DIR")"
@@ -57,6 +59,8 @@ got=$(sql "$TASKLOG_DIR/ck.db" "SELECT (SELECT user_version FROM pragma_user_ver
 run "plan add"                                "$T/core" 0 "$BIN/cklog" plan add platform-overview --path PLAN.md --title "Platform overview"
 run "a second plan with the same slug fails"  "$T/core" 1 "$BIN/cklog" plan add platform-overview
 run "state on an unknown plan fails"          "$T/core" 1 "$BIN/cklog" state nope P1 building
+run "plan add rejects a blank slug"           "$T/core" 1 "$BIN/cklog" plan add ""
+run "event rejects a blank code"              "$T/core" 1 "$BIN/cklog" event platform-overview " " note
 run "state rejects an unknown state"          "$T/core" 1 "$BIN/cklog" state platform-overview P1 done
 run "state rejects a non-numeric --pr"        "$T/core" 1 "$BIN/cklog" state platform-overview P5 ready --pr abc
 run "state sets a row"                       "$T/core" 0 "$BIN/cklog" state platform-overview P5 building --branch overview-p5 --head abc123def456789 --subject "web: glance row"
@@ -116,6 +120,10 @@ run "flake add a second"                      "$T/core" 0 "$BIN/cklog" flake add
 run "flake add of a known id replaces its note" "$T/core" 0 "$BIN/cklog" flake add "panel-table padding"
 run "flake match" "$T/core" 0 sh -c "printf '%s\n' 'packages/ui/test/chart-math.test.js > chart-math > pointGrid spreads points' 'apps/web/test/glance-row.test.jsx > renders' '' | '$BIN/cklog' flake match"
 [[ "$out" == $'KNOWN packages/ui/test/chart-math.test.js > chart-math > pointGrid spreads points\nNEW apps/web/test/glance-row.test.jsx > renders' ]] && ok "flake match sorts KNOWN and NEW" || ko "flake match sorts KNOWN and NEW" "$out"
+run "flake add rejects an empty id"           "$T/core" 1 "$BIN/cklog" flake add ""
+run "flake add rejects a blank id"            "$T/core" 1 "$BIN/cklog" flake add " "
+run "flake match after an empty add"          "$T/core" 0 sh -c "printf '%s\n' 'apps/web/test/new.test.jsx > breaks' | '$BIN/cklog' flake match"
+[[ "$out" == "NEW apps/web/test/new.test.jsx > breaks" ]] && ok "an empty flake id covers no test" || ko "an empty flake id covers no test" "$out"
 run "flake list"                              "$T/core" 0 "$BIN/cklog" flake list
 has "a matched flake counts its sighting"     "chart-math > pointGrid  1"
 has "an unmatched flake stays unseen"         "panel-table padding     0"
@@ -132,6 +140,10 @@ has "brief carries the PR row"                "- pr: 412"
 has "brief carries the decision and quote"    $'keep "hide" off (human)\n  > don\'t hide it'
 has "brief carries recent events"             "review: round 1: 2 findings"
 has "brief carries the flakes"                '- `chart-math > pointGrid` — load-sensitive'
+for i in $(seq -w 1 12); do (cd "$T/core" && "$BIN/cklog" event platform-overview P7 tick "e$i"); done
+run "brief of a long log"                     "$T/core" 0 "$BIN/cklog" brief platform-overview P7
+ticks=$(grep -o 'tick: e[0-9]*' <<<"$out" | tr '\n' ' ')
+[[ "$ticks" == "tick: e03 tick: e04 tick: e05 tick: e06 tick: e07 tick: e08 tick: e09 tick: e10 tick: e11 tick: e12 " ]] && ok "brief keeps the last 10 events, oldest first" || ko "brief keeps the last 10 events, oldest first" "$ticks"
 run "brief of a code with no row"             "$T/core" 0 "$BIN/cklog" brief platform-overview P9
 has "brief says the row is missing"           "No row yet."
 

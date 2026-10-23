@@ -172,6 +172,9 @@ function args(argv, options = {}, min = 0, max = Infinity) {
   }
   const n = parsed.positionals.length;
   if (n < min || n > max) throw new Usage(`expected ${min === max ? min : `${min}-${max}`} arguments, got ${n}`);
+  // A blank flake id is a substring of every test id, and a blank slug or
+  // code is a row nothing can name; an unset shell variable produces either.
+  if (parsed.positionals.some((p) => !p.trim())) throw new Usage("arguments must not be blank");
   return parsed;
 }
 
@@ -296,7 +299,7 @@ const COMMANDS = {
     if (sub === "add") {
       const { positionals: [id, note] } = args(rest, {}, 1, 2);
       db.prepare("INSERT INTO flakes (repo, test_id, note, added) VALUES (?, ?, ?, ?) ON CONFLICT DO UPDATE SET note = excluded.note")
-        .run(ctx.repo, id, note ?? null, now());
+        .run(ctx.repo, id.trim(), note ?? null, now());
       return "";
     }
     if (sub === "list") {
@@ -323,8 +326,8 @@ const COMMANDS = {
       try {
         for (const id of ids) {
           const hit = flakes.find((f) => id.includes(f));
-          if (hit) seen.run(ts, ctx.repo, hit);
-          out += `${hit ? "KNOWN" : "NEW"} ${id}\n`;
+          if (hit !== undefined) seen.run(ts, ctx.repo, hit);
+          out += `${hit !== undefined ? "KNOWN" : "NEW"} ${id}\n`;
         }
         db.exec("COMMIT");
       } catch (e) {
