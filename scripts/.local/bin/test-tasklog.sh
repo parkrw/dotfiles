@@ -71,6 +71,9 @@ run "state changes only what it names"        "$T/core" 0 "$BIN/cklog" state pla
 run "show reads the row back"                 "$T/core" 0 "$BIN/cklog" show --json platform-overview
 row=$(jq -c '.[0] | [.code, .state, .pr, .branch, .head, .subject]' <<<"$out")
 [[ $row == '["P5","ready",412,"overview-p5","abc123def456789","web: glance row"]' ]] && ok "the row keeps earlier fields" || ko "the row keeps earlier fields" "$row"
+run "show prints a table"                     "$T/core" 0 "$BIN/cklog" show platform-overview
+grep -qE '^plan +code +state +pr +branch +head +updated +subject$' <<<"$out" && ok "the table heads every column" || ko "the table heads every column" "$out"
+grep -qE '^platform-overview +P5 +ready +412 +overview-p5 +abc123def456 +[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2} +web: glance row$' <<<"$out" && ok "the table cuts head to 12 and updated to the minute" || ko "the table cuts head to 12 and updated to the minute" "$out"
 run "a worktree of core sees the same plan"   "$T/core-ssh" 0 "$BIN/cklog" show platform-overview
 has "a worktree of core sees the same plan (row)" "overview-p5"
 run "an ssh:// clone of core sees the same plan" "$T/core-sshurl" 0 "$BIN/cklog" show platform-overview
@@ -174,8 +177,26 @@ events=$(sed -n '/^## Last 10 events/,/^## Known flakes/p' <<<"$out" | grep -c '
 [[ $events == 10 ]] && ok "brief holds only its own code's events" || ko "brief holds only its own code's events" "$events lines"
 run "brief of a code with no row"             "$T/core" 0 "$BIN/cklog" brief platform-overview P9
 has "brief says the row is missing"           "No row yet."
+has "brief says a code has no events"         $'## Last 10 events\n\nNone recorded.'
+run "plan add with no path or title"          "$T/core" 0 "$BIN/cklog" plan add bare
+run "brief of a bare plan"                    "$T/core" 0 "$BIN/cklog" brief bare B1
+[[ "$out" == $'# bare B1\n\nPlan: none recorded\n'* ]] && ok "brief heads a bare plan without title or path" || ko "brief heads a bare plan without title or path" "$out"
+has "brief says the plan has no decisions"    $'## Decisions\n\nNone recorded.'
+out=$(cd "$T/core" && printf 'ship it\n' | "$BIN/cklog" decide bare - --quote $'line one\nline two' 2>&1) && ok "decide with a multi-line quote" || ko "decide with a multi-line quote" "$out"
+run "brief of a multi-line quote"             "$T/core" 0 "$BIN/cklog" brief bare B1
+has "a decision with no --by names no one"    $'- '"$(date -u +%Y-%m-%d)"$' ship it\n'
+has "every quote line stays in the blockquote" $'  > line one\n  > line two'
+run "brief in a repo with no flakes"          "$T/web" 0 "$BIN/cklog" plan add web-plan
+run "brief in a repo with no flakes (brief)"  "$T/web" 0 "$BIN/cklog" brief web-plan W1
+has "brief says the repo has no flakes"       $'## Known flakes\n\nNone recorded.'
 
 run "an unknown command fails"                "$T/core" 1 "$BIN/cklog" frob
+run "an unknown plan subcommand fails"        "$T/core" 1 "$BIN/cklog" plan frob
+grep -q 'plan add <slug> | plan list' "$T/err" && ok "plan frob prints plan usage" || ko "plan frob prints plan usage" "$(cat "$T/err")"
+run "an unknown flake subcommand fails"       "$T/core" 1 "$BIN/cklog" flake frob
+grep -q 'flake add <test_id> \[note\] | list | rm <test_id> | match' "$T/err" && ok "flake frob prints flake usage" || ko "flake frob prints flake usage" "$(cat "$T/err")"
+run "too many arguments fail, not truncate"   "$T/core" 1 "$BIN/cklog" event platform-overview P5 note hello world
+run "too few arguments fail"                  "$T/core" 1 "$BIN/cklog" state platform-overview P5
 run "an inherited Object method is not a command" "$T/core" 1 "$BIN/cklog" toString
 [[ "$out" != "[object Object]" ]] && ok "toString prints no garbage" || ko "toString prints no garbage" "$out"
 run "an unknown option fails"                 "$T/core" 1 "$BIN/cklog" show --frob
