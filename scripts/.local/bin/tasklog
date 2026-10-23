@@ -1,0 +1,388 @@
+#!/usr/bin/env node
+// tasklog — the task and event log of one work context, in sqlite, so that
+// concurrent sessions append rows instead of rewriting a shared PLAN.md.
+//
+//   cklog  <command>   CloudKey work, in ck.db
+//   vanlog <command>   vanillin work, in van.db
+//   tasklog <command>  the name whose origins match the cwd's repo
+//
+//   plan add <slug> [--path PLAN.md] [--title T]
+//   plan list
+//   state <plan> <code> <state> [--pr N --head sha --branch B --worktree W --subject S]
+//   event <plan> <code> <kind> [text|-]
+//   decide <plan> <text|-> [--by who --quote Q]
+//   show [plan] [--all] [--json]
+//   log <plan> [code] [--since date]
+//   flake add <test_id> [note] | list | rm <test_id> | match
+//   brief <plan> <code>
+//
+// A text argument of "-" is read from stdin, so text never passes through the
+// shell, where quotes break it and the write gate reads it as a command.
+//
+// The names are separate DBs, and each refuses (exit 2) in a repo whose origin
+// it does not own: vanlog never runs inside CloudKey repos, and cklog never in
+// personal ones. Plans and flakes belong to the cwd's repo, so every worktree
+// of a repo shares them.
+"use strict";
+
+const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { parseArgs } = require("node:util");
+const { DatabaseSync } = require("node:sqlite");
+
+const NAMES = {
+  ck: { db: "ck.db", origins: ["github.com/CloudKey-io/*"] },
+  van: { db: "van.db", origins: ["github.com/parkrw/vanillin"] },
+};
+const STATES = ["planned", "building", "review", "draft", "ready", "merged", "dropped", "blocked"];
+const CLOSED = ["merged", "dropped"];
+const BRIEF_EVENTS = 10;
+
+class Refused extends Error {}
+class Usage extends Error {}
+
+function originOf(cwd) {
+  try {
+    const url = execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return normalizeOrigin(url);
+  } catch {
+    return null;
+  }
+}
+
+// https://github.com/O/R.git, git@github.com:O/R and ssh://git@github.com/O/R
+// all become github.com/O/R.
+function normalizeOrigin(url) {
+  return url
+    .replace(/^[a-z+]+:\/\//i, "")
+    .replace(/^[^@/]+@/, "")
+    .replace(/^([^/:]+):(?!\d)/, "$1/")
+    .replace(/\.git\/?$/, "")
+    .replace(/\/+$/, "");
+}
+
+// GitHub owner and repo names are case-insensitive.
+function originMatches(origin, pattern) {
+  const re = pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]+");
+  return new RegExp(`^${re}$`, "i").test(origin);
+}
+
+function resolveName(invoked, origin) {
+  const fromArgv = invoked.replace(/log$/, "");
+  if (NAMES[fromArgv]) {
+    if (!origin || !NAMES[fromArgv].origins.some((p) => originMatches(origin, p)))
+      throw new Refused(`not a ${fromArgv} repo (origin: ${origin ?? "none"})`);
+    return fromArgv;
+  }
+  const name = origin && Object.keys(NAMES).find((n) => NAMES[n].origins.some((p) => originMatches(origin, p)));
+  if (!name) throw new Refused(`no log owns this repo (origin: ${origin ?? "none"})`);
+  return name;
+}
+
+const MIGRATIONS = [
+  `CREATE TABLE plans (
+     id INTEGER PRIMARY KEY,
+     repo TEXT NOT NULL,
+     slug TEXT NOT NULL,
+     path TEXT,
+     title TEXT,
+     created TEXT NOT NULL,
+     UNIQUE (repo, slug));
+   CREATE TABLE prs (
+     plan INTEGER NOT NULL REFERENCES plans(id),
+     code TEXT NOT NULL,
+     branch TEXT, worktree TEXT, pr INTEGER,
+     state TEXT NOT NULL CHECK (state IN (${STATES.map((s) => `'${s}'`).join(",")})),
+     head TEXT, subject TEXT,
+     updated TEXT NOT NULL,
+     PRIMARY KEY (plan, code));
+   CREATE TABLE events (
+     id INTEGER PRIMARY KEY,
+     ts TEXT NOT NULL,
+     plan INTEGER NOT NULL REFERENCES plans(id),
+     code TEXT NOT NULL,
+     kind TEXT NOT NULL,
+     text TEXT,
+     session TEXT);
+   CREATE INDEX events_plan ON events (plan, code, ts);
+   CREATE TABLE decisions (
+     id INTEGER PRIMARY KEY,
+     plan INTEGER NOT NULL REFERENCES plans(id),
+     ts TEXT NOT NULL,
+     text TEXT NOT NULL,
+     said_by TEXT,
+     quote TEXT);
+   CREATE TABLE flakes (
+     repo TEXT NOT NULL,
+     test_id TEXT NOT NULL,
+     note TEXT,
+     added TEXT NOT NULL,
+     last_seen TEXT,
+     seen INTEGER NOT NULL DEFAULT 0,
+     PRIMARY KEY (repo, test_id));
+   CREATE TABLE suite_runs (
+     id INTEGER PRIMARY KEY,
+     repo TEXT NOT NULL,
+     worktree TEXT, branch TEXT, head TEXT, cmd TEXT,
+     started TEXT NOT NULL, ended TEXT,
+     exit INTEGER, wait_ms INTEGER, log TEXT,
+     new_reds INTEGER, known_reds INTEGER);`,
+];
+
+function open(file) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const db = new DatabaseSync(file);
+  // busy_timeout first: the WAL switch and the migration below take write
+  // locks, and a first run from several sessions at once meets them.
+  db.exec("PRAGMA busy_timeout=5000");
+  db.exec("PRAGMA journal_mode=WAL");
+  db.exec("PRAGMA foreign_keys=ON");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // Read inside the write lock, so two first runs never both migrate.
+    const { user_version: version } = db.prepare("PRAGMA user_version").get();
+    for (let v = version; v < MIGRATIONS.length; v++) db.exec(MIGRATIONS[v]);
+    if (version < MIGRATIONS.length) db.exec(`PRAGMA user_version=${MIGRATIONS.length}`);
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+  return db;
+}
+
+const now = () => new Date().toISOString();
+
+function textArg(value, what) {
+  if (value === undefined) throw new Usage(`${what} required (or - to read stdin)`);
+  return value === "-" ? fs.readFileSync(0, "utf8").replace(/\n$/, "") : value;
+}
+
+function args(argv, options = {}, min = 0, max = Infinity) {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
+  } catch (e) {
+    throw new Usage(e.message);
+  }
+  const n = parsed.positionals.length;
+  if (n < min || n > max) throw new Usage(`expected ${min === max ? min : `${min}-${max}`} arguments, got ${n}`);
+  return parsed;
+}
+
+function planRow(db, repo, slug) {
+  const row = db.prepare("SELECT * FROM plans WHERE repo = ? AND slug = ?").get(repo, slug);
+  if (!row) throw new Usage(`no plan ${slug} in ${repo}; add it with: plan add ${slug}`);
+  return row;
+}
+
+function table(rows, cols) {
+  if (!rows.length) return "";
+  const cells = rows.map((r) => cols.map((c) => String(r[c] ?? "")));
+  const width = cols.map((c, i) => Math.max(c.length, ...cells.map((r) => r[i].length)));
+  const line = (r) => r.map((s, i) => s.padEnd(width[i])).join("  ").trimEnd();
+  return [line(cols), ...cells.map(line)].join("\n") + "\n";
+}
+
+const COMMANDS = {
+  plan(db, ctx, argv) {
+    const [sub, ...rest] = argv;
+    if (sub === "add") {
+      const { positionals: [slug], values } = args(rest, { path: { type: "string" }, title: { type: "string" } }, 1, 1);
+      const file = values.path && path.resolve(ctx.cwd, values.path);
+      db.prepare("INSERT INTO plans (repo, slug, path, title, created) VALUES (?, ?, ?, ?, ?)")
+        .run(ctx.repo, slug, file ?? null, values.title ?? null, now());
+      return `plan ${slug} added\n`;
+    }
+    if (sub === "list") {
+      args(rest, {}, 0, 0);
+      const rows = db.prepare(
+        `SELECT slug, title, path,
+           (SELECT count(*) FROM prs WHERE prs.plan = plans.id AND state NOT IN ('merged','dropped')) AS open
+         FROM plans WHERE repo = ? ORDER BY slug`).all(ctx.repo);
+      return table(rows, ["slug", "open", "title", "path"]);
+    }
+    throw new Usage("plan add <slug> | plan list");
+  },
+
+  state(db, ctx, argv) {
+    const opts = { pr: { type: "string" }, head: { type: "string" }, branch: { type: "string" },
+      worktree: { type: "string" }, subject: { type: "string" } };
+    const { positionals: [slug, code, state], values } = args(argv, opts, 3, 3);
+    if (!STATES.includes(state)) throw new Usage(`state must be one of ${STATES.join("|")}`);
+    if (values.pr !== undefined && !/^\d+$/.test(values.pr)) throw new Usage("--pr takes a PR number");
+    const plan = planRow(db, ctx.repo, slug);
+    const ts = now();
+    const fields = { branch: values.branch, worktree: values.worktree, pr: values.pr && Number(values.pr),
+      head: values.head, subject: values.subject };
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      // An option left out keeps the row's earlier value.
+      db.prepare(
+        `INSERT INTO prs (plan, code, branch, worktree, pr, state, head, subject, updated)
+         VALUES ($plan, $code, $branch, $worktree, $pr, $state, $head, $subject, $ts)
+         ON CONFLICT (plan, code) DO UPDATE SET
+           branch = coalesce($branch, branch), worktree = coalesce($worktree, worktree),
+           pr = coalesce($pr, pr), state = $state, head = coalesce($head, head),
+           subject = coalesce($subject, subject), updated = $ts`)
+        .run({ plan: plan.id, code, state, ts, ...Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, v ?? null])) });
+      const detail = Object.entries(fields).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`);
+      db.prepare("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, 'state', ?, ?)")
+        .run(ts, plan.id, code, [state, ...detail].join(" "), ctx.session);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+    return `${slug} ${code}: ${state}\n`;
+  },
+
+  event(db, ctx, argv) {
+    const { positionals: [slug, code, kind, text] } = args(argv, {}, 3, 4);
+    const plan = planRow(db, ctx.repo, slug);
+    const body = text === undefined ? null : textArg(text, "text");
+    db.prepare("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(now(), plan.id, code, kind, body, ctx.session);
+    return "";
+  },
+
+  decide(db, ctx, argv) {
+    const { positionals: [slug, text], values } = args(argv, { by: { type: "string" }, quote: { type: "string" } }, 2, 2);
+    const plan = planRow(db, ctx.repo, slug);
+    db.prepare("INSERT INTO decisions (plan, ts, text, said_by, quote) VALUES (?, ?, ?, ?, ?)")
+      .run(plan.id, now(), textArg(text, "text"), values.by ?? null, values.quote ?? null);
+    return "";
+  },
+
+  show(db, ctx, argv) {
+    const { positionals: [slug], values } = args(argv, { all: { type: "boolean" }, json: { type: "boolean" } }, 0, 1);
+    const where = ["plans.repo = ?"];
+    const params = [ctx.repo];
+    if (slug) { where.push("plans.id = ?"); params.push(planRow(db, ctx.repo, slug).id); }
+    if (!values.all) where.push(`prs.state NOT IN (${CLOSED.map((s) => `'${s}'`).join(",")})`);
+    const rows = db.prepare(
+      `SELECT plans.slug AS plan, prs.code, prs.state, prs.pr, prs.branch, prs.head, prs.subject,
+              prs.worktree, prs.updated
+       FROM prs JOIN plans ON plans.id = prs.plan
+       WHERE ${where.join(" AND ")} ORDER BY plans.slug, prs.code`).all(...params);
+    if (values.json) return JSON.stringify(rows, null, 2) + "\n";
+    return table(rows.map((r) => ({ ...r, head: r.head?.slice(0, 12), updated: r.updated.slice(0, 16) })),
+      ["plan", "code", "state", "pr", "branch", "head", "updated", "subject"]);
+  },
+
+  log(db, ctx, argv) {
+    const { positionals: [slug, code], values } = args(argv, { since: { type: "string" } }, 1, 2);
+    const plan = planRow(db, ctx.repo, slug);
+    let since = null;
+    if (values.since !== undefined) {
+      const t = new Date(values.since);
+      if (isNaN(t)) throw new Usage(`--since: not a date: ${values.since}`);
+      since = t.toISOString();
+    }
+    const rows = db.prepare(
+      `SELECT ts, code, kind, text FROM events
+       WHERE plan = ? AND ($code IS NULL OR code = $code) AND ($since IS NULL OR ts >= $since)
+       ORDER BY ts, id`).all({ code: code ?? null, since }, plan.id);
+    return rows.map((r) => `${r.ts.slice(0, 16)}  ${r.code}  ${r.kind}${r.text ? `  ${r.text}` : ""}\n`).join("");
+  },
+
+  flake(db, ctx, argv) {
+    const [sub, ...rest] = argv;
+    if (sub === "add") {
+      const { positionals: [id, note] } = args(rest, {}, 1, 2);
+      db.prepare("INSERT INTO flakes (repo, test_id, note, added) VALUES (?, ?, ?, ?) ON CONFLICT DO UPDATE SET note = excluded.note")
+        .run(ctx.repo, id, note ?? null, now());
+      return "";
+    }
+    if (sub === "list") {
+      args(rest, {}, 0, 0);
+      const rows = db.prepare("SELECT test_id, note, seen, last_seen FROM flakes WHERE repo = ? ORDER BY test_id").all(ctx.repo);
+      return table(rows.map((r) => ({ ...r, last_seen: r.last_seen?.slice(0, 10) })), ["test_id", "seen", "last_seen", "note"]);
+    }
+    if (sub === "rm") {
+      const { positionals: [id] } = args(rest, {}, 1, 1);
+      const { changes } = db.prepare("DELETE FROM flakes WHERE repo = ? AND test_id = ?").run(ctx.repo, id);
+      if (!changes) throw new Usage(`no flake ${id}`);
+      return "";
+    }
+    if (sub === "match") {
+      args(rest, {}, 0, 0);
+      // A flake's test_id matches every red id that contains it, so one entry
+      // covers a test whose id carries a line number or a parameter.
+      const flakes = db.prepare("SELECT test_id FROM flakes WHERE repo = ?").all(ctx.repo).map((r) => r.test_id);
+      const seen = db.prepare("UPDATE flakes SET seen = seen + 1, last_seen = ? WHERE repo = ? AND test_id = ?");
+      const ts = now();
+      const ids = fs.readFileSync(0, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
+      let out = "";
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const id of ids) {
+          const hit = flakes.find((f) => id.includes(f));
+          if (hit) seen.run(ts, ctx.repo, hit);
+          out += `${hit ? "KNOWN" : "NEW"} ${id}\n`;
+        }
+        db.exec("COMMIT");
+      } catch (e) {
+        db.exec("ROLLBACK");
+        throw e;
+      }
+      return out;
+    }
+    throw new Usage("flake add <test_id> [note] | list | rm <test_id> | match");
+  },
+
+  brief(db, ctx, argv) {
+    const { positionals: [slug, code] } = args(argv, {}, 2, 2);
+    const plan = planRow(db, ctx.repo, slug);
+    const pr = db.prepare("SELECT * FROM prs WHERE plan = ? AND code = ?").get(plan.id, code);
+    const decisions = db.prepare("SELECT ts, text, said_by, quote FROM decisions WHERE plan = ? ORDER BY ts, id").all(plan.id);
+    const events = db.prepare("SELECT ts, kind, text FROM events WHERE plan = ? AND code = ? ORDER BY ts DESC, id DESC LIMIT ?")
+      .all(plan.id, code, BRIEF_EVENTS).reverse();
+    const flakes = db.prepare("SELECT test_id, note FROM flakes WHERE repo = ? ORDER BY test_id").all(ctx.repo);
+    const out = [`# ${plan.slug} ${code}${plan.title ? ` — ${plan.title}` : ""}`, ""];
+    out.push(`Plan: ${plan.path ?? "none recorded"}`, "", "## PR", "");
+    if (pr) {
+      for (const k of ["state", "pr", "branch", "worktree", "head", "subject", "updated"])
+        if (pr[k] != null) out.push(`- ${k}: ${pr[k]}`);
+    } else out.push("No row yet.");
+    out.push("", "## Decisions", "");
+    if (!decisions.length) out.push("None recorded.");
+    for (const d of decisions) {
+      out.push(`- ${d.ts.slice(0, 10)} ${d.text}${d.said_by ? ` (${d.said_by})` : ""}`);
+      if (d.quote) out.push(`  > ${d.quote.replace(/\n/g, "\n  > ")}`);
+    }
+    out.push("", `## Last ${BRIEF_EVENTS} events`, "");
+    if (!events.length) out.push("None recorded.");
+    for (const e of events) out.push(`- ${e.ts.slice(0, 16)} ${e.kind}${e.text ? `: ${e.text}` : ""}`);
+    out.push("", "## Known flakes", "");
+    if (!flakes.length) out.push("None recorded.");
+    for (const f of flakes) out.push(`- \`${f.test_id}\`${f.note ? ` — ${f.note}` : ""}`);
+    return out.join("\n") + "\n";
+  },
+};
+
+function main() {
+  const invoked = path.basename(process.argv[1]);
+  const [command, ...argv] = process.argv.slice(2);
+  try {
+    if (!COMMANDS[command]) throw new Usage(`commands: ${Object.keys(COMMANDS).join(", ")}`);
+    const cwd = process.cwd();
+    const origin = originOf(cwd);
+    const name = resolveName(invoked, origin);
+    const dir = process.env.TASKLOG_DIR || path.join(os.homedir(), ".local/state/claude/tasks");
+    const db = open(path.join(dir, NAMES[name].db));
+    const ctx = { cwd, repo: origin.toLowerCase(), session: process.env.CLAUDE_CODE_SESSION_ID || null };
+    process.stdout.write(COMMANDS[command](db, ctx, argv));
+    db.close();
+  } catch (e) {
+    process.stderr.write(`${invoked}: ${e.message}\n`);
+    process.exitCode = e instanceof Refused ? 2 : 1;
+  }
+}
+
+main();
