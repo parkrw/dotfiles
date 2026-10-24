@@ -15,6 +15,9 @@
 #   log <plan> [code] [--since date]
 #   flake add <test_id> [note] | list | rm <test_id> | match
 #   brief <plan> <code>
+#   suite-run --started T --exit N [--ended --worktree --branch --head --cmd --wait-ms --log --new --known]
+#
+# suite-run is how `suite` records a run; people read suite_runs with sqlite3.
 #
 # A text argument of "-" is read from stdin, so text never passes through the
 # shell, where quotes break it and the write gate reads it as a command.
@@ -431,9 +434,29 @@ def cmd_brief(db, ctx, argv):
     return "\n".join(out) + "\n"
 
 
+def cmd_suite_run(db, ctx, argv):
+    ints = ("exit", "wait-ms", "new", "known")
+    a = vars(args(argv, options=("worktree", "branch", "head", "cmd", "started", "ended", "log") + ints))
+    for k in ("started", "exit"):
+        if a[k] is None:
+            raise Usage(f"--{k} required")
+    for k in ints:
+        k = k.replace("-", "_")
+        if a[k] is not None and not re.fullmatch(r"\d+", a[k]):
+            raise Usage(f"--{k.replace('_', '-')} takes a whole number")
+        a[k] = None if a[k] is None else int(a[k])
+    db.execute(
+        """INSERT INTO suite_runs (repo, worktree, branch, head, cmd, started, ended, exit, wait_ms, log,
+                                   new_reds, known_reds)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ctx["repo"], a["worktree"] or None, a["branch"] or None, a["head"] or None, a["cmd"], a["started"],
+         a["ended"], a["exit"], a["wait_ms"], a["log"], a["new"], a["known"]))
+    return ""
+
+
 COMMANDS = {
     "plan": cmd_plan, "state": cmd_state, "event": cmd_event, "decide": cmd_decide, "show": cmd_show,
-    "log": cmd_log, "flake": cmd_flake, "brief": cmd_brief,
+    "log": cmd_log, "flake": cmd_flake, "brief": cmd_brief, "suite-run": cmd_suite_run,
 }
 READS = {("show",), ("log",), ("brief",), ("plan", "list"), ("flake", "list")}
 

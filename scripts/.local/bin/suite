@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+# suite — run a full test suite while holding one of N machine-wide slots, so
+# parallel sessions take turns instead of loading the machine until every
+# suite goes red.
+#
+#   suite npm test
+#
+# The slots are SUITE_SLOTS, else ~/.config/suite/slots, else 1. The output is
+# teed to ~/.local/state/claude/suite/<ts>-<repo>-<pid>.log, failing test ids are
+# sorted by `tasklog flake match` into KNOWN RED and NEW RED, and the run is
+# recorded in tasklog's suite_runs. The exit code is the command's own.
+import datetime
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+# A slot dir with no holder file yet is a run between its mkdir and its
+# write; only one older than this is a crash that never wrote one.
+HOLDER_GRACE_S = 10
+REPORT_EVERY_S = 60
+TASKLOG = os.path.join(os.path.dirname(os.path.realpath(__file__)), "tasklog")
+
+
+class Interrupted(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def on_signal(code):
+    def handler(signum, frame):
+        raise Interrupted(code)
+    return handler
+
+
+def git(*argv):
+    p = subprocess.run(["git", *argv], capture_output=True, text=True)
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def utc_now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def say(msg):
+    print(msg, file=sys.stderr, flush=True)
+
+
+def slot_count():
+    raw = os.environ.get("SUITE_SLOTS")
+    if raw is None:
+        try:
+            with open(os.path.expanduser("~/.config/suite/slots")) as f:
+                raw = f.read().strip()
+        except OSError:
+            raw = "1"
+    if not re.fullmatch(r"[1-9][0-9]*", raw):
+        say(f"suite: slots must be a positive integer, got '{raw}'")
+        sys.exit(64)
+    return int(raw)
+
+
+def age(path):
+    try:
+        return time.time() - os.stat(path).st_mtime
+    except OSError:
+        return 0
+
+
+def read_holder(slot):
+    try:
+        with open(os.path.join(slot, "holder")) as f:
+            return dict(line.rstrip("\n").split("=", 1) for line in f if "=" in line)
+    except OSError:
+        return {}
+
+
+def alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, ValueError):
+        return True
+    return True
+
+
+def remove_slot(slot):
+    try:
+        os.remove(os.path.join(slot, "holder"))
+    except OSError:
+        pass
+    try:
+        os.rmdir(slot)
+    except OSError:
+        pass
+
+
+# A slot whose holder is dead is freed. The takeover runs under its own
+# mkdir guard, so two waiters cannot both judge it stale and the second free
+# the slot the first just took.
+def free_if_stale(slot):
+    guard = slot + ".takeover"
+    try:
+        os.mkdir(guard)
+    except FileExistsError:
+        if age(guard) > HOLDER_GRACE_S:
+            try:
+                os.rmdir(guard)
+            except OSError:
+                pass
+        return
+    try:
+        pid = read_holder(slot).get("pid", "")
+        if pid and not alive(pid):
+            say(f"suite: taking over {slot} from dead pid {pid}")
+            remove_slot(slot)
+        elif not pid and os.path.isdir(slot) and age(slot) > HOLDER_GRACE_S:
+            say(f"suite: taking over {slot}, which has no holder")
+            remove_slot(slot)
+    finally:
+        os.rmdir(guard)
+
+
+def try_acquire(locks, slots, holder):
+    for i in range(slots):
+        slot = os.path.join(locks, f"slot-{i}")
+        try:
+            os.mkdir(slot)
+        except FileExistsError:
+            free_if_stale(slot)
+            continue
+        with open(os.path.join(slot, "holder"), "w") as f:
+            f.write("".join(f"{k}={v}\n" for k, v in holder.items()))
+        return slot
+    return None
+
+
+def holders(locks, slots):
+    for i in range(slots):
+        h = read_holder(os.path.join(locks, f"slot-{i}"))
+        if h:
+            yield (f"  pid {h.get('pid', '')}  {h.get('repo', '')} {h.get('branch', '')}  {h.get('cmd', '')}"
+                   f"  since {h.get('started', '')}")
+
+
+# Failing test ids: vitest prints " FAIL  <file> > <suite> > <test>", and
+# vanillin's tests/run.mjs "FAIL  <file>: <test> — <error>". Both use two
+# spaces, which core's own one-space "FAIL client, api — …" summary does not.
+def reds(log):
+    with open(log, "rb") as f:
+        text = re.sub(r"\x1b\[[0-9;]*m", "", f.read().decode("utf-8", "replace"))
+    ids = []
+    for m in re.finditer(r"(?m)^[ \t]*FAIL  (.+)$", text):
+        test_id = re.sub(r" — .*$", "", m.group(1)).rstrip()
+        if test_id not in ids:
+            ids.append(test_id)
+    return ids
+
+
+def sort_reds(ids):
+    p = subprocess.run([TASKLOG, "flake", "match"], input="\n".join(ids) + "\n", capture_output=True, text=True)
+    if p.returncode != 0:
+        return [("NEW", i) for i in ids]
+    return [tuple(line.split(" ", 1)) for line in p.stdout.splitlines()]
+
+
+def main(argv):
+    if not argv:
+        say("usage: suite <command>...")
+        return 64
+    locks = os.environ.get("SUITE_DIR") or os.path.expanduser("~/.local/state/claude/locks/suite")
+    logs = os.environ.get("SUITE_LOG_DIR") or os.path.expanduser("~/.local/state/claude/suite")
+    slots = slot_count()
+
+    worktree = git("rev-parse", "--show-toplevel") or os.getcwd()
+    branch = git("branch", "--show-current")
+    head = git("rev-parse", "HEAD")
+    common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
+    repo = os.path.basename(re.sub(r"/\.git$", "", common) if common else worktree)
+    cmd = " ".join(argv)
+
+    os.makedirs(locks, exist_ok=True)
+    os.makedirs(logs, exist_ok=True)
+    signal.signal(signal.SIGINT, on_signal(130))
+    signal.signal(signal.SIGTERM, on_signal(143))
+
+    slot = child = None
+    try:
+        wait_start = time.monotonic()
+        last_report = None
+        holder = {"pid": os.getpid(), "repo": repo, "worktree": worktree, "branch": branch, "cmd": cmd,
+                  "started": utc_now()}
+        while True:
+            slot = try_acquire(locks, slots, holder)
+            if slot:
+                break
+            t = time.monotonic()
+            if last_report is None or t - last_report >= REPORT_EVERY_S:
+                say(f"suite: waiting {int(t - wait_start)}s for a slot ({slots}), held by:")
+                for line in holders(locks, slots):
+                    say(line)
+                last_report = t
+            time.sleep(1)
+        wait_ms = int((time.monotonic() - wait_start) * 1000)
+
+        started = utc_now()
+        log = os.path.join(logs, f"{datetime.datetime.now():%Y%m%dT%H%M%S}-{repo}-{os.getpid()}.log")
+        with open(log, "wb") as out:
+            try:
+                child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            except OSError as e:
+                say(f"suite: {argv[0]}: {e.strerror}")
+                return 127
+            for chunk in iter(lambda: child.stdout.read1(65536), b""):
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+                out.write(chunk)
+            code = child.wait()
+        ended = utc_now()
+    except Interrupted as e:
+        if child and child.poll() is None:
+            child.terminate()
+        return e.code
+    finally:
+        if slot:
+            remove_slot(slot)
+    if code < 0:
+        code = 128 - code
+
+    # Everything after the run is reporting: none of it may replace the
+    # command's own exit code.
+    new = known = 0
+    try:
+        ids = reds(log)
+        for verdict, test_id in sort_reds(ids) if ids else []:
+            print(f"{verdict} RED {test_id}")
+            if verdict == "KNOWN":
+                known += 1
+            else:
+                new += 1
+        subprocess.run([TASKLOG, "suite-run", "--worktree", worktree, "--branch", branch, "--head", head,
+                        "--cmd", cmd, "--started", started, "--ended", ended, "--exit", str(code),
+                        "--wait-ms", str(wait_ms), "--log", log, "--new", str(new), "--known", str(known)],
+                       capture_output=True)
+    except Exception as e:
+        say(f"suite: reporting failed: {e}")
+    print(f"suite: exit {code}, {new} new, {known} known, waited {wait_ms // 1000}s", flush=True)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

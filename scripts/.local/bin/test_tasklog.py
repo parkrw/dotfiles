@@ -332,6 +332,23 @@ class Transactions(Case):
         self.assertEqual(self.sql("SELECT sum(seen) FROM flakes"), 0)
 
 
+class SuiteRun(Case):
+    def test_suite_run_records_a_run_for_the_cwd_repo(self):
+        self.ok("suite-run", "--started", "2026-10-23T10:00:00Z", "--ended", "2026-10-23T10:05:00Z", "--exit", "1",
+                "--wait-ms", "4000", "--cmd", "npm test", "--branch", "", "--log", "/l/x.log", "--new", "2",
+                "--known", "1", "--worktree", "/wt/core", "--head", "abc123")
+        row = self.db().execute("SELECT repo, worktree, branch, head, cmd, started, ended, exit, wait_ms, log, "
+                                "new_reds, known_reds FROM suite_runs").fetchall()
+        self.assertEqual(row, [("github.com/cloudkey-io/core", "/wt/core", None, "abc123", "npm test",
+                                "2026-10-23T10:00:00Z", "2026-10-23T10:05:00Z", 1, 4000, "/l/x.log", 2, 1)])
+
+    def test_suite_run_needs_started_and_exit_and_whole_numbers(self):
+        self.fails(1, "suite-run", "--exit", "0")
+        self.fails(1, "suite-run", "--started", "2026-10-23T10:00:00Z")
+        self.assertIn("--new takes a whole number",
+                      self.fails(1, "suite-run", "--started", "2026-10-23T10:00:00Z", "--exit", "0", "--new", "x"))
+
+
 class Usage(Case):
     def test_bad_commands_fail_with_usage(self):
         self.fails(1, "frob")
