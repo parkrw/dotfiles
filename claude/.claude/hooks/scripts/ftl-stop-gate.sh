@@ -117,6 +117,29 @@ body_written() {
   return 1
 }
 
+# A plan task is the tasklog row ftl's Orient 2b recorded for this branch and
+# worktree, in any of the DBs; a branch no row names is not a plan task and
+# owes no state. Matched by worktree path rather than by repo, which would mean
+# repeating tasklog's origin-to-DB mapping here. Prints "<tasks> <states>",
+# <states> counting this session's hand-off states for those tasks.
+tasklog_counts() {
+  command -v sqlite3 >/dev/null || return 0
+  local db q_branch q_wt tasks=0 states=0 counts
+  q_branch="'${branch//\'/\'\'}'" q_wt="'${wt//\'/\'\'}'"
+  for db in "${TASKLOG_DIR:-$HOME/.local/state/claude/tasks}"/*.db; do
+    [[ -f "$db" ]] || continue
+    counts=$(sqlite3 -readonly -separator ' ' "$db" "
+      SELECT (SELECT count(*) FROM prs WHERE branch = $q_branch AND worktree = $q_wt),
+             (SELECT count(*) FROM events e JOIN prs p ON p.plan = e.plan AND p.code = e.code
+               WHERE p.branch = $q_branch AND p.worktree = $q_wt AND e.kind = 'state'
+                 AND e.session = '$session'
+                 AND substr(e.text, 1, instr(e.text || ' ', ' ') - 1)
+                     IN ('ready', 'review', 'blocked', 'merged', 'dropped'))" 2>/dev/null) || continue
+    tasks=$((tasks + ${counts% *})) states=$((states + ${counts#* }))
+  done
+  echo "$tasks $states"
+}
+
 failed=()
 if [[ -n "$escape" ]]; then
   verdict=escape
@@ -145,6 +168,9 @@ else
       failed+=("no passing claude-review for this diff; Ship step 4 loops until Findings is none")
     body_written ||
       failed+=("no ftl-pr-body-<repo>-${branch//\//-}.md written; Ship step 5 writes the PR body first")
+    read -r tasks states <<<"$(tasklog_counts)"
+    (( ${tasks:-0} == 0 || ${states:-0} > 0 )) ||
+      failed+=("$branch is a plan task with no tasklog state from this session; Ship step 5 records it before printing")
   fi
   [[ "$handed_off" == true ]] ||
     failed+=("the last message is neither the PR URL on its own line nor the cd/push hand-off block of Ship step 5")
