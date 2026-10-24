@@ -1,409 +1,466 @@
-#!/usr/bin/env node
-// tasklog — the task and event log of one work context, in sqlite, so that
-// concurrent sessions append rows instead of rewriting a shared PLAN.md.
-//
-//   cklog  <command>   CloudKey work, in ck.db
-//   vanlog <command>   vanillin work, in van.db
-//   tasklog <command>  the name whose origins match the cwd's repo
-//
-//   plan add <slug> [--path PLAN.md] [--title T]
-//   plan list
-//   state <plan> <code> <state> [--pr N --head sha --branch B --worktree W --subject S]
-//   event <plan> <code> <kind> [text|-]
-//   decide <plan> <text|-> [--by who --quote Q]
-//   show [plan] [--all] [--json]
-//   log <plan> [code] [--since date]
-//   flake add <test_id> [note] | list | rm <test_id> | match
-//   brief <plan> <code>
-//
-// A text argument of "-" is read from stdin, so text never passes through the
-// shell, where quotes break it and the write gate reads it as a command.
-//
-// The names are separate DBs, and each refuses (exit 2) in a repo whose origin
-// it does not own: vanlog never runs inside CloudKey repos, and cklog never in
-// personal ones. Plans and flakes belong to the cwd's repo, so every worktree
-// of a repo shares them.
-"use strict";
+#!/usr/bin/env python3
+# tasklog — the task and event log of one work context, in sqlite, so that
+# concurrent sessions append rows instead of rewriting a shared PLAN.md.
+#
+#   cklog  <command>   CloudKey work, in ck.db
+#   vanlog <command>   vanillin work, in van.db
+#   tasklog <command>  the name whose origins match the cwd's repo
+#
+#   plan add <slug> [--path PLAN.md] [--title T]
+#   plan list
+#   state <plan> <code> <state> [--pr N --head sha --branch B --worktree W --subject S]
+#   event <plan> <code> <kind> [text|-]
+#   decide <plan> <text|-> [--by who --quote Q]
+#   show [plan] [--all] [--json]
+#   log <plan> [code] [--since date]
+#   flake add <test_id> [note] | list | rm <test_id> | match
+#   brief <plan> <code>
+#
+# A text argument of "-" is read from stdin, so text never passes through the
+# shell, where quotes break it and the write gate reads it as a command.
+#
+# The names are separate DBs, and each refuses (exit 2) in a repo whose origin
+# it does not own: vanlog never runs inside CloudKey repos, and cklog never in
+# personal ones. Plans and flakes belong to the cwd's repo, so every worktree
+# of a repo shares them.
+#
+# Python 3.9 stdlib only: macOS ships 3.9, and Ubuntu server and minimal
+# images ship python3 with sqlite3, so it runs with nothing installed.
+import argparse
+import datetime
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+from urllib.request import pathname2url
 
-const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-const { parseArgs } = require("node:util");
-const { DatabaseSync } = require("node:sqlite");
-
-const NAMES = {
-  ck: { db: "ck.db", origins: ["github.com/CloudKey-io/*"] },
-  van: { db: "van.db", origins: ["github.com/parkrw/vanillin"] },
-};
-const STATES = ["planned", "building", "review", "draft", "ready", "merged", "dropped", "blocked"];
-const CLOSED_SQL = ["merged", "dropped"].map((s) => `'${s}'`).join(",");
-const BRIEF_EVENTS = 10;
-
-class Refused extends Error {}
-class Usage extends Error {}
-
-function originOf(cwd) {
-  try {
-    const url = execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return normalizeOrigin(url);
-  } catch {
-    return null;
-  }
+NAMES = {
+    "ck": {"db": "ck.db", "origins": ["github.com/CloudKey-io/*"]},
+    "van": {"db": "van.db", "origins": ["github.com/parkrw/vanillin"]},
 }
+STATES = ["planned", "building", "review", "draft", "ready", "merged", "dropped", "blocked"]
+CLOSED_SQL = "'merged','dropped'"
+BRIEF_EVENTS = 10
+BUSY_TIMEOUT_S = 5
 
-// https://github.com/O/R.git, git@github.com:O/R and ssh://git@github.com/O/R
-// all become github.com/O/R.
-function normalizeOrigin(url) {
-  return url
-    .replace(/^[a-z+]+:\/\//i, "")
-    .replace(/^[^@/]+@/, "")
-    .replace(/^([^/:]+):(?!\d)/, "$1/")
-    .replace(/\.git\/?$/, "")
-    .replace(/\/+$/, "");
+
+class Refused(Exception):
+    pass
+
+
+class Usage(Exception):
+    pass
+
+
+def origin_of(cwd):
+    try:
+        url = subprocess.run(["git", "-C", cwd, "remote", "get-url", "origin"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return normalize_origin(url)
+
+
+# https://github.com/O/R.git, git@github.com:O/R and ssh://git@github.com/O/R
+# all become github.com/O/R.
+def normalize_origin(url):
+    url = re.sub(r"^[a-z+]+://", "", url, flags=re.I)
+    url = re.sub(r"^[^@/]+@", "", url)
+    url = re.sub(r"^([^/:]+):(?!\d)", r"\1/", url)
+    url = re.sub(r"\.git/?$", "", url)
+    return re.sub(r"/+$", "", url)
+
+
+# GitHub owner and repo names are case-insensitive.
+def origin_matches(origin, pattern):
+    regex = "[^/]+".join(re.escape(part) for part in pattern.split("*"))
+    return re.fullmatch(regex, origin, flags=re.I) is not None
+
+
+def owns(name, origin):
+    return origin is not None and any(origin_matches(origin, p) for p in NAMES[name]["origins"])
+
+
+def resolve_name(invoked, origin):
+    from_argv = re.sub(r"log$", "", invoked)
+    if from_argv in NAMES:
+        if not owns(from_argv, origin):
+            raise Refused(f"not a {from_argv} repo (origin: {origin or 'none'})")
+        return from_argv
+    for name in NAMES:
+        if owns(name, origin):
+            return name
+    raise Refused(f"no log owns this repo (origin: {origin or 'none'})")
+
+
+MIGRATIONS = [
+    f"""CREATE TABLE plans (
+       id INTEGER PRIMARY KEY,
+       repo TEXT NOT NULL,
+       slug TEXT NOT NULL,
+       path TEXT,
+       title TEXT,
+       created TEXT NOT NULL,
+       UNIQUE (repo, slug));
+     CREATE TABLE prs (
+       plan INTEGER NOT NULL REFERENCES plans(id),
+       code TEXT NOT NULL,
+       branch TEXT, worktree TEXT, pr INTEGER,
+       state TEXT NOT NULL CHECK (state IN ({",".join(f"'{s}'" for s in STATES)})),
+       head TEXT, subject TEXT,
+       updated TEXT NOT NULL,
+       PRIMARY KEY (plan, code));
+     CREATE TABLE events (
+       id INTEGER PRIMARY KEY,
+       ts TEXT NOT NULL,
+       plan INTEGER NOT NULL REFERENCES plans(id),
+       code TEXT NOT NULL,
+       kind TEXT NOT NULL,
+       text TEXT,
+       session TEXT);
+     CREATE INDEX events_plan ON events (plan, code, ts);
+     CREATE TABLE decisions (
+       id INTEGER PRIMARY KEY,
+       plan INTEGER NOT NULL REFERENCES plans(id),
+       ts TEXT NOT NULL,
+       text TEXT NOT NULL,
+       said_by TEXT,
+       quote TEXT);
+     CREATE TABLE flakes (
+       repo TEXT NOT NULL,
+       test_id TEXT NOT NULL,
+       note TEXT,
+       added TEXT NOT NULL,
+       last_seen TEXT,
+       seen INTEGER NOT NULL DEFAULT 0,
+       PRIMARY KEY (repo, test_id));
+     CREATE TABLE suite_runs (
+       id INTEGER PRIMARY KEY,
+       repo TEXT NOT NULL,
+       worktree TEXT, branch TEXT, head TEXT, cmd TEXT,
+       started TEXT NOT NULL, ended TEXT,
+       exit INTEGER, wait_ms INTEGER, log TEXT,
+       new_reds INTEGER, known_reds INTEGER);""",
+]
+
+
+# As core's apps/api/src/db.js: a writer that sets WAL and migrates, and
+# read-only readers. isolation_level=None leaves BEGIN and COMMIT to the code.
+def open_writer(file):
+    os.makedirs(os.path.dirname(file), exist_ok=True)
+    db = sqlite3.connect(file, timeout=BUSY_TIMEOUT_S, isolation_level=None)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA foreign_keys=ON")
+    with transaction(db):
+        # Read inside the write lock, so two first runs never both migrate.
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        for sql in MIGRATIONS[version:]:
+            for statement in sql.split(";"):
+                if statement.strip():
+                    db.execute(statement)
+        if version < len(MIGRATIONS):
+            db.execute(f"PRAGMA user_version={len(MIGRATIONS)}")
+    return db
+
+
+def open_reader(file):
+    if not os.path.exists(file):
+        open_writer(file).close()
+    db = sqlite3.connect(f"file:{pathname2url(file)}?mode=ro", uri=True,
+                         timeout=BUSY_TIMEOUT_S, isolation_level=None)
+    db.row_factory = sqlite3.Row
+    return db
+
+
+class transaction:
+    def __init__(self, db):
+        self.db = db
+
+    def __enter__(self):
+        self.db.execute("BEGIN IMMEDIATE")
+
+    def __exit__(self, kind, value, tb):
+        self.db.execute("ROLLBACK" if kind else "COMMIT")
+
+
+def iso(t):
+    return t.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
+
+
+def now():
+    return iso(datetime.datetime.now(datetime.timezone.utc))
+
+
+# A date alone is UTC midnight and a time with no offset is local time, as in
+# JavaScript's Date, which the stored timestamps were first written with.
+def parse_since(value):
+    try:
+        if re.fullmatch(r"\d{4}-\d\d-\d\d", value):
+            return iso(datetime.datetime.fromisoformat(value).replace(tzinfo=datetime.timezone.utc))
+        t = datetime.datetime.fromisoformat(re.sub(r"Z$", "+00:00", value))
+    except ValueError:
+        raise Usage(f"--since: not a date: {value}") from None
+    return iso(t if t.tzinfo else t.astimezone())
+
+
+def read_stdin():
+    return sys.stdin.buffer.read().decode("utf-8", "replace")
+
+
+def text_arg(value):
+    return re.sub(r"\n$", "", read_stdin()) if value == "-" else value
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        raise Usage(message)
+
+
+def args(argv, options=(), flags=(), lo=0, hi=None):
+    parser = Parser(add_help=False, allow_abbrev=False)
+    for o in options:
+        parser.add_argument(f"--{o}")
+    for f in flags:
+        parser.add_argument(f"--{f}", action="store_true")
+    parser.add_argument("positionals", nargs="*")
+    parsed = parser.parse_intermixed_args(argv)
+    n = len(parsed.positionals)
+    hi = lo if hi is None else hi
+    if n < lo or n > hi:
+        raise Usage(f"expected {lo if lo == hi else f'{lo}-{hi}'} arguments, got {n}")
+    # A blank flake id is a substring of every test id, and a blank slug or
+    # code is a row nothing can name; an unset shell variable produces either.
+    if any(not p.strip() for p in parsed.positionals):
+        raise Usage("arguments must not be blank")
+    parsed.positionals += [None] * (hi - n)
+    return parsed
+
+
+def plan_row(db, repo, slug):
+    row = db.execute("SELECT * FROM plans WHERE repo = ? AND slug = ?", (repo, slug)).fetchone()
+    if row is None:
+        raise Usage(f"no plan {slug} in {repo}; add it with: plan add {slug}")
+    return row
+
+
+def table(rows, cols):
+    if not rows:
+        return ""
+    cells = [["" if r[c] is None else str(r[c]) for c in cols] for r in rows]
+    width = [max([len(c)] + [len(r[i]) for r in cells]) for i, c in enumerate(cols)]
+
+    def line(r):
+        return "  ".join(s.ljust(width[i]) for i, s in enumerate(r)).rstrip()
+
+    return "\n".join([line(cols)] + [line(r) for r in cells]) + "\n"
+
+
+def cmd_plan(db, ctx, argv):
+    sub, rest = (argv[0], argv[1:]) if argv else (None, [])
+    if sub == "add":
+        a = args(rest, options=("path", "title"), lo=1)
+        slug = a.positionals[0]
+        file = a.path and os.path.normpath(os.path.join(ctx["cwd"], a.path))
+        db.execute("INSERT INTO plans (repo, slug, path, title, created) VALUES (?, ?, ?, ?, ?)",
+                   (ctx["repo"], slug, file, a.title, now()))
+        return f"plan {slug} added\n"
+    if sub == "list":
+        args(rest)
+        rows = db.execute(
+            f"""SELECT slug, title, path,
+                  (SELECT count(*) FROM prs WHERE prs.plan = plans.id AND state NOT IN ({CLOSED_SQL})) AS open
+                FROM plans WHERE repo = ? ORDER BY slug""", (ctx["repo"],)).fetchall()
+        return table(rows, ["slug", "open", "title", "path"])
+    raise Usage("plan add <slug> | plan list")
+
+
+def cmd_state(db, ctx, argv):
+    a = args(argv, options=("pr", "head", "branch", "worktree", "subject"), lo=3)
+    slug, code, state = a.positionals
+    if state not in STATES:
+        raise Usage(f"state must be one of {'|'.join(STATES)}")
+    if a.pr is not None and not re.fullmatch(r"\d+", a.pr):
+        raise Usage("--pr takes a PR number")
+    plan = plan_row(db, ctx["repo"], slug)
+    ts = now()
+    fields = {"branch": a.branch, "worktree": a.worktree, "pr": a.pr and int(a.pr),
+              "head": a.head, "subject": a.subject}
+    with transaction(db):
+        # An option left out keeps the row's earlier value.
+        db.execute(
+            """INSERT INTO prs (plan, code, branch, worktree, pr, state, head, subject, updated)
+               VALUES (:plan, :code, :branch, :worktree, :pr, :state, :head, :subject, :ts)
+               ON CONFLICT (plan, code) DO UPDATE SET
+                 branch = coalesce(:branch, branch), worktree = coalesce(:worktree, worktree),
+                 pr = coalesce(:pr, pr), state = :state, head = coalesce(:head, head),
+                 subject = coalesce(:subject, subject), updated = :ts""",
+            dict(fields, plan=plan["id"], code=code, state=state, ts=ts))
+        detail = [f"{k}={v}" for k, v in fields.items() if v is not None]
+        db.execute("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, 'state', ?, ?)",
+                   (ts, plan["id"], code, " ".join([state] + detail), ctx["session"]))
+    return f"{slug} {code}: {state}\n"
+
+
+def cmd_event(db, ctx, argv):
+    slug, code, kind, text = args(argv, lo=3, hi=4).positionals
+    plan = plan_row(db, ctx["repo"], slug)
+    db.execute("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, ?, ?, ?)",
+               (now(), plan["id"], code, kind, None if text is None else text_arg(text), ctx["session"]))
+    return ""
+
+
+def cmd_decide(db, ctx, argv):
+    a = args(argv, options=("by", "quote"), lo=2)
+    slug, text = a.positionals
+    plan = plan_row(db, ctx["repo"], slug)
+    db.execute("INSERT INTO decisions (plan, ts, text, said_by, quote) VALUES (?, ?, ?, ?, ?)",
+               (plan["id"], now(), text_arg(text), a.by, a.quote))
+    return ""
+
+
+def cmd_show(db, ctx, argv):
+    a = args(argv, flags=("all", "json"), lo=0, hi=1)
+    slug = a.positionals[0]
+    where, params = ["plans.repo = ?"], [ctx["repo"]]
+    if slug:
+        where.append("plans.id = ?")
+        params.append(plan_row(db, ctx["repo"], slug)["id"])
+    if not a.all:
+        where.append(f"prs.state NOT IN ({CLOSED_SQL})")
+    rows = [dict(r) for r in db.execute(
+        f"""SELECT plans.slug AS plan, prs.code, prs.state, prs.pr, prs.branch, prs.head, prs.subject,
+                   prs.worktree, prs.updated
+            FROM prs JOIN plans ON plans.id = prs.plan
+            WHERE {" AND ".join(where)} ORDER BY plans.slug, prs.code""", params)]
+    if a.json:
+        return json.dumps(rows, indent=2, ensure_ascii=False) + "\n"
+    for r in rows:
+        r["head"] = r["head"] and r["head"][:12]
+        r["updated"] = r["updated"][:16]
+    return table(rows, ["plan", "code", "state", "pr", "branch", "head", "updated", "subject"])
+
+
+def cmd_log(db, ctx, argv):
+    a = args(argv, options=("since",), lo=1, hi=2)
+    slug, code = a.positionals
+    plan = plan_row(db, ctx["repo"], slug)
+    since = None if a.since is None else parse_since(a.since)
+    rows = db.execute(
+        """SELECT ts, code, kind, text FROM events
+           WHERE plan = :plan AND (:code IS NULL OR code = :code) AND (:since IS NULL OR ts >= :since)
+           ORDER BY ts, id""", {"plan": plan["id"], "code": code, "since": since}).fetchall()
+    return "".join(f"{r['ts'][:16]}  {r['code']}  {r['kind']}{'  ' + r['text'] if r['text'] else ''}\n"
+                   for r in rows)
+
+
+def cmd_flake(db, ctx, argv):
+    sub, rest = (argv[0], argv[1:]) if argv else (None, [])
+    if sub == "add":
+        test_id, note = args(rest, lo=1, hi=2).positionals
+        db.execute("INSERT INTO flakes (repo, test_id, note, added) VALUES (?, ?, ?, ?) "
+                   "ON CONFLICT DO UPDATE SET note = excluded.note",
+                   (ctx["repo"], test_id.strip(), note, now()))
+        return ""
+    if sub == "list":
+        args(rest)
+        rows = [dict(r) for r in db.execute(
+            "SELECT test_id, note, seen, last_seen FROM flakes WHERE repo = ? ORDER BY test_id", (ctx["repo"],))]
+        for r in rows:
+            r["last_seen"] = r["last_seen"] and r["last_seen"][:10]
+        return table(rows, ["test_id", "seen", "last_seen", "note"])
+    if sub == "rm":
+        test_id = args(rest, lo=1).positionals[0]
+        if not db.execute("DELETE FROM flakes WHERE repo = ? AND test_id = ?",
+                          (ctx["repo"], test_id.strip())).rowcount:
+            raise Usage(f"no flake {test_id}")
+        return ""
+    if sub == "match":
+        args(rest)
+        # A flake's test_id matches every red id that contains it, so one entry
+        # covers a test whose id carries a line number or a parameter.
+        flakes = [r["test_id"] for r in db.execute("SELECT test_id FROM flakes WHERE repo = ?", (ctx["repo"],))]
+        ts = now()
+        ids = [s.strip() for s in read_stdin().split("\n") if s.strip()]
+        out = ""
+        with transaction(db):
+            for test_id in ids:
+                hit = next((f for f in flakes if f in test_id), None)
+                if hit is not None:
+                    db.execute("UPDATE flakes SET seen = seen + 1, last_seen = ? WHERE repo = ? AND test_id = ?",
+                               (ts, ctx["repo"], hit))
+                out += f"{'NEW' if hit is None else 'KNOWN'} {test_id}\n"
+        return out
+    raise Usage("flake add <test_id> [note] | list | rm <test_id> | match")
+
+
+def cmd_brief(db, ctx, argv):
+    slug, code = args(argv, lo=2).positionals
+    plan = plan_row(db, ctx["repo"], slug)
+    pr = db.execute("SELECT * FROM prs WHERE plan = ? AND code = ?", (plan["id"], code)).fetchone()
+    decisions = db.execute("SELECT ts, text, said_by, quote FROM decisions WHERE plan = ? ORDER BY ts, id",
+                           (plan["id"],)).fetchall()
+    events = db.execute("SELECT ts, kind, text FROM events WHERE plan = ? AND code = ? ORDER BY ts DESC, id DESC LIMIT ?",
+                        (plan["id"], code, BRIEF_EVENTS)).fetchall()[::-1]
+    flakes = db.execute("SELECT test_id, note FROM flakes WHERE repo = ? ORDER BY test_id", (ctx["repo"],)).fetchall()
+    out = [f"# {plan['slug']} {code}{' — ' + plan['title'] if plan['title'] else ''}", ""]
+    out += [f"Plan: {plan['path'] or 'none recorded'}", "", "## PR", ""]
+    if pr:
+        out += [f"- {k}: {pr[k]}" for k in ("state", "pr", "branch", "worktree", "head", "subject", "updated")
+                if pr[k] is not None]
+    else:
+        out.append("No row yet.")
+    out += ["", "## Decisions", ""]
+    if not decisions:
+        out.append("None recorded.")
+    for d in decisions:
+        by = f" ({d['said_by']})" if d["said_by"] else ""
+        out.append(f"- {d['ts'][:10]} {d['text']}{by}")
+        if d["quote"]:
+            out.append("  > " + d["quote"].replace("\n", "\n  > "))
+    out += ["", f"## Last {BRIEF_EVENTS} events", ""]
+    if not events:
+        out.append("None recorded.")
+    out += [f"- {e['ts'][:16]} {e['kind']}{': ' + e['text'] if e['text'] else ''}" for e in events]
+    out += ["", "## Known flakes", ""]
+    if not flakes:
+        out.append("None recorded.")
+    out += [f"- `{f['test_id']}`{' — ' + f['note'] if f['note'] else ''}" for f in flakes]
+    return "\n".join(out) + "\n"
+
+
+COMMANDS = {
+    "plan": cmd_plan, "state": cmd_state, "event": cmd_event, "decide": cmd_decide, "show": cmd_show,
+    "log": cmd_log, "flake": cmd_flake, "brief": cmd_brief,
 }
+READS = {("show",), ("log",), ("brief",), ("plan", "list"), ("flake", "list")}
 
-// GitHub owner and repo names are case-insensitive.
-function originMatches(origin, pattern) {
-  const re = pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]+");
-  return new RegExp(`^${re}$`, "i").test(origin);
-}
 
-function resolveName(invoked, origin) {
-  const fromArgv = invoked.replace(/log$/, "");
-  if (Object.hasOwn(NAMES, fromArgv)) {
-    if (!origin || !NAMES[fromArgv].origins.some((p) => originMatches(origin, p)))
-      throw new Refused(`not a ${fromArgv} repo (origin: ${origin ?? "none"})`);
-    return fromArgv;
-  }
-  const name = origin && Object.keys(NAMES).find((n) => NAMES[n].origins.some((p) => originMatches(origin, p)));
-  if (!name) throw new Refused(`no log owns this repo (origin: ${origin ?? "none"})`);
-  return name;
-}
+def main():
+    invoked = os.path.basename(sys.argv[0])
+    command, argv = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else (None, [])
+    try:
+        if command not in COMMANDS:
+            raise Usage(f"commands: {', '.join(COMMANDS)}")
+        cwd = os.getcwd()
+        origin = origin_of(cwd)
+        name = resolve_name(invoked, origin)
+        file = os.path.join(os.environ.get("TASKLOG_DIR") or os.path.expanduser("~/.local/state/claude/tasks"),
+                            NAMES[name]["db"])
+        reads = (command,) in READS or (command, argv[0] if argv else None) in READS
+        db = open_reader(file) if reads else open_writer(file)
+        ctx = {"cwd": cwd, "repo": origin.lower(), "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None}
+        try:
+            sys.stdout.write(COMMANDS[command](db, ctx, argv))
+        finally:
+            db.close()
+    except (Refused, Usage, sqlite3.Error) as e:
+        sys.stderr.write(f"{invoked}: {e}\n")
+        return 2 if isinstance(e, Refused) else 1
+    return 0
 
-const MIGRATIONS = [
-  `CREATE TABLE plans (
-     id INTEGER PRIMARY KEY,
-     repo TEXT NOT NULL,
-     slug TEXT NOT NULL,
-     path TEXT,
-     title TEXT,
-     created TEXT NOT NULL,
-     UNIQUE (repo, slug));
-   CREATE TABLE prs (
-     plan INTEGER NOT NULL REFERENCES plans(id),
-     code TEXT NOT NULL,
-     branch TEXT, worktree TEXT, pr INTEGER,
-     state TEXT NOT NULL CHECK (state IN (${STATES.map((s) => `'${s}'`).join(",")})),
-     head TEXT, subject TEXT,
-     updated TEXT NOT NULL,
-     PRIMARY KEY (plan, code));
-   CREATE TABLE events (
-     id INTEGER PRIMARY KEY,
-     ts TEXT NOT NULL,
-     plan INTEGER NOT NULL REFERENCES plans(id),
-     code TEXT NOT NULL,
-     kind TEXT NOT NULL,
-     text TEXT,
-     session TEXT);
-   CREATE INDEX events_plan ON events (plan, code, ts);
-   CREATE TABLE decisions (
-     id INTEGER PRIMARY KEY,
-     plan INTEGER NOT NULL REFERENCES plans(id),
-     ts TEXT NOT NULL,
-     text TEXT NOT NULL,
-     said_by TEXT,
-     quote TEXT);
-   CREATE TABLE flakes (
-     repo TEXT NOT NULL,
-     test_id TEXT NOT NULL,
-     note TEXT,
-     added TEXT NOT NULL,
-     last_seen TEXT,
-     seen INTEGER NOT NULL DEFAULT 0,
-     PRIMARY KEY (repo, test_id));
-   CREATE TABLE suite_runs (
-     id INTEGER PRIMARY KEY,
-     repo TEXT NOT NULL,
-     worktree TEXT, branch TEXT, head TEXT, cmd TEXT,
-     started TEXT NOT NULL, ended TEXT,
-     exit INTEGER, wait_ms INTEGER, log TEXT,
-     new_reds INTEGER, known_reds INTEGER);`,
-];
 
-// The switch to WAL takes a lock busy_timeout does not wait for, so concurrent
-// first runs that each switch can fail with "database is locked". Each builds
-// its WAL DB aside and links it into place instead; link never overwrites, so
-// one wins and the rest open the winner's. WAL then persists in the file.
-function create(file) {
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    const db = new DatabaseSync(tmp);
-    db.exec("PRAGMA journal_mode=WAL");
-    db.close();
-    fs.linkSync(tmp, file);
-  } catch (e) {
-    if (e.code !== "EEXIST") throw e;
-  } finally {
-    fs.rmSync(tmp, { force: true });
-  }
-}
-
-function open(file) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  if (!fs.existsSync(file)) create(file);
-  const db = new DatabaseSync(file);
-  // busy_timeout first: the migration below takes a write lock, and a first
-  // run from several sessions at once meets it.
-  db.exec("PRAGMA busy_timeout=5000");
-  db.exec("PRAGMA foreign_keys=ON");
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    // Read inside the write lock, so two first runs never both migrate.
-    const { user_version: version } = db.prepare("PRAGMA user_version").get();
-    for (let v = version; v < MIGRATIONS.length; v++) db.exec(MIGRATIONS[v]);
-    if (version < MIGRATIONS.length) db.exec(`PRAGMA user_version=${MIGRATIONS.length}`);
-    db.exec("COMMIT");
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
-  return db;
-}
-
-const now = () => new Date().toISOString();
-
-function textArg(value, what) {
-  if (value === undefined) throw new Usage(`${what} required (or - to read stdin)`);
-  return value === "-" ? fs.readFileSync(0, "utf8").replace(/\n$/, "") : value;
-}
-
-function args(argv, options = {}, min = 0, max = Infinity) {
-  let parsed;
-  try {
-    parsed = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
-  } catch (e) {
-    throw new Usage(e.message);
-  }
-  const n = parsed.positionals.length;
-  if (n < min || n > max) throw new Usage(`expected ${min === max ? min : `${min}-${max}`} arguments, got ${n}`);
-  // A blank flake id is a substring of every test id, and a blank slug or
-  // code is a row nothing can name; an unset shell variable produces either.
-  if (parsed.positionals.some((p) => !p.trim())) throw new Usage("arguments must not be blank");
-  return parsed;
-}
-
-function planRow(db, repo, slug) {
-  const row = db.prepare("SELECT * FROM plans WHERE repo = ? AND slug = ?").get(repo, slug);
-  if (!row) throw new Usage(`no plan ${slug} in ${repo}; add it with: plan add ${slug}`);
-  return row;
-}
-
-function table(rows, cols) {
-  if (!rows.length) return "";
-  const cells = rows.map((r) => cols.map((c) => String(r[c] ?? "")));
-  const width = cols.map((c, i) => Math.max(c.length, ...cells.map((r) => r[i].length)));
-  const line = (r) => r.map((s, i) => s.padEnd(width[i])).join("  ").trimEnd();
-  return [line(cols), ...cells.map(line)].join("\n") + "\n";
-}
-
-const COMMANDS = {
-  plan(db, ctx, argv) {
-    const [sub, ...rest] = argv;
-    if (sub === "add") {
-      const { positionals: [slug], values } = args(rest, { path: { type: "string" }, title: { type: "string" } }, 1, 1);
-      const file = values.path && path.resolve(ctx.cwd, values.path);
-      db.prepare("INSERT INTO plans (repo, slug, path, title, created) VALUES (?, ?, ?, ?, ?)")
-        .run(ctx.repo, slug, file ?? null, values.title ?? null, now());
-      return `plan ${slug} added\n`;
-    }
-    if (sub === "list") {
-      args(rest, {}, 0, 0);
-      const rows = db.prepare(
-        `SELECT slug, title, path,
-           (SELECT count(*) FROM prs WHERE prs.plan = plans.id AND state NOT IN (${CLOSED_SQL})) AS open
-         FROM plans WHERE repo = ? ORDER BY slug`).all(ctx.repo);
-      return table(rows, ["slug", "open", "title", "path"]);
-    }
-    throw new Usage("plan add <slug> | plan list");
-  },
-
-  state(db, ctx, argv) {
-    const opts = { pr: { type: "string" }, head: { type: "string" }, branch: { type: "string" },
-      worktree: { type: "string" }, subject: { type: "string" } };
-    const { positionals: [slug, code, state], values } = args(argv, opts, 3, 3);
-    if (!STATES.includes(state)) throw new Usage(`state must be one of ${STATES.join("|")}`);
-    if (values.pr !== undefined && !/^\d+$/.test(values.pr)) throw new Usage("--pr takes a PR number");
-    const plan = planRow(db, ctx.repo, slug);
-    const ts = now();
-    const fields = { branch: values.branch, worktree: values.worktree, pr: values.pr && Number(values.pr),
-      head: values.head, subject: values.subject };
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      // An option left out keeps the row's earlier value.
-      db.prepare(
-        `INSERT INTO prs (plan, code, branch, worktree, pr, state, head, subject, updated)
-         VALUES ($plan, $code, $branch, $worktree, $pr, $state, $head, $subject, $ts)
-         ON CONFLICT (plan, code) DO UPDATE SET
-           branch = coalesce($branch, branch), worktree = coalesce($worktree, worktree),
-           pr = coalesce($pr, pr), state = $state, head = coalesce($head, head),
-           subject = coalesce($subject, subject), updated = $ts`)
-        .run({ plan: plan.id, code, state, ts, ...Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, v ?? null])) });
-      const detail = Object.entries(fields).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`);
-      db.prepare("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, 'state', ?, ?)")
-        .run(ts, plan.id, code, [state, ...detail].join(" "), ctx.session);
-      db.exec("COMMIT");
-    } catch (e) {
-      db.exec("ROLLBACK");
-      throw e;
-    }
-    return `${slug} ${code}: ${state}\n`;
-  },
-
-  event(db, ctx, argv) {
-    const { positionals: [slug, code, kind, text] } = args(argv, {}, 3, 4);
-    const plan = planRow(db, ctx.repo, slug);
-    const body = text === undefined ? null : textArg(text, "text");
-    db.prepare("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(now(), plan.id, code, kind, body, ctx.session);
-    return "";
-  },
-
-  decide(db, ctx, argv) {
-    const { positionals: [slug, text], values } = args(argv, { by: { type: "string" }, quote: { type: "string" } }, 2, 2);
-    const plan = planRow(db, ctx.repo, slug);
-    db.prepare("INSERT INTO decisions (plan, ts, text, said_by, quote) VALUES (?, ?, ?, ?, ?)")
-      .run(plan.id, now(), textArg(text, "text"), values.by ?? null, values.quote ?? null);
-    return "";
-  },
-
-  show(db, ctx, argv) {
-    const { positionals: [slug], values } = args(argv, { all: { type: "boolean" }, json: { type: "boolean" } }, 0, 1);
-    const where = ["plans.repo = ?"];
-    const params = [ctx.repo];
-    if (slug) { where.push("plans.id = ?"); params.push(planRow(db, ctx.repo, slug).id); }
-    if (!values.all) where.push(`prs.state NOT IN (${CLOSED_SQL})`);
-    const rows = db.prepare(
-      `SELECT plans.slug AS plan, prs.code, prs.state, prs.pr, prs.branch, prs.head, prs.subject,
-              prs.worktree, prs.updated
-       FROM prs JOIN plans ON plans.id = prs.plan
-       WHERE ${where.join(" AND ")} ORDER BY plans.slug, prs.code`).all(...params);
-    if (values.json) return JSON.stringify(rows, null, 2) + "\n";
-    return table(rows.map((r) => ({ ...r, head: r.head?.slice(0, 12), updated: r.updated.slice(0, 16) })),
-      ["plan", "code", "state", "pr", "branch", "head", "updated", "subject"]);
-  },
-
-  log(db, ctx, argv) {
-    const { positionals: [slug, code], values } = args(argv, { since: { type: "string" } }, 1, 2);
-    const plan = planRow(db, ctx.repo, slug);
-    let since = null;
-    if (values.since !== undefined) {
-      const t = new Date(values.since);
-      if (isNaN(t)) throw new Usage(`--since: not a date: ${values.since}`);
-      since = t.toISOString();
-    }
-    const rows = db.prepare(
-      `SELECT ts, code, kind, text FROM events
-       WHERE plan = ? AND ($code IS NULL OR code = $code) AND ($since IS NULL OR ts >= $since)
-       ORDER BY ts, id`).all({ code: code ?? null, since }, plan.id);
-    return rows.map((r) => `${r.ts.slice(0, 16)}  ${r.code}  ${r.kind}${r.text ? `  ${r.text}` : ""}\n`).join("");
-  },
-
-  flake(db, ctx, argv) {
-    const [sub, ...rest] = argv;
-    if (sub === "add") {
-      const { positionals: [id, note] } = args(rest, {}, 1, 2);
-      db.prepare("INSERT INTO flakes (repo, test_id, note, added) VALUES (?, ?, ?, ?) ON CONFLICT DO UPDATE SET note = excluded.note")
-        .run(ctx.repo, id.trim(), note ?? null, now());
-      return "";
-    }
-    if (sub === "list") {
-      args(rest, {}, 0, 0);
-      const rows = db.prepare("SELECT test_id, note, seen, last_seen FROM flakes WHERE repo = ? ORDER BY test_id").all(ctx.repo);
-      return table(rows.map((r) => ({ ...r, last_seen: r.last_seen?.slice(0, 10) })), ["test_id", "seen", "last_seen", "note"]);
-    }
-    if (sub === "rm") {
-      const { positionals: [id] } = args(rest, {}, 1, 1);
-      const { changes } = db.prepare("DELETE FROM flakes WHERE repo = ? AND test_id = ?").run(ctx.repo, id.trim());
-      if (!changes) throw new Usage(`no flake ${id}`);
-      return "";
-    }
-    if (sub === "match") {
-      args(rest, {}, 0, 0);
-      // A flake's test_id matches every red id that contains it, so one entry
-      // covers a test whose id carries a line number or a parameter.
-      const flakes = db.prepare("SELECT test_id FROM flakes WHERE repo = ?").all(ctx.repo).map((r) => r.test_id);
-      const seen = db.prepare("UPDATE flakes SET seen = seen + 1, last_seen = ? WHERE repo = ? AND test_id = ?");
-      const ts = now();
-      const ids = fs.readFileSync(0, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
-      let out = "";
-      db.exec("BEGIN IMMEDIATE");
-      try {
-        for (const id of ids) {
-          const hit = flakes.find((f) => id.includes(f));
-          if (hit !== undefined) seen.run(ts, ctx.repo, hit);
-          out += `${hit !== undefined ? "KNOWN" : "NEW"} ${id}\n`;
-        }
-        db.exec("COMMIT");
-      } catch (e) {
-        db.exec("ROLLBACK");
-        throw e;
-      }
-      return out;
-    }
-    throw new Usage("flake add <test_id> [note] | list | rm <test_id> | match");
-  },
-
-  brief(db, ctx, argv) {
-    const { positionals: [slug, code] } = args(argv, {}, 2, 2);
-    const plan = planRow(db, ctx.repo, slug);
-    const pr = db.prepare("SELECT * FROM prs WHERE plan = ? AND code = ?").get(plan.id, code);
-    const decisions = db.prepare("SELECT ts, text, said_by, quote FROM decisions WHERE plan = ? ORDER BY ts, id").all(plan.id);
-    const events = db.prepare("SELECT ts, kind, text FROM events WHERE plan = ? AND code = ? ORDER BY ts DESC, id DESC LIMIT ?")
-      .all(plan.id, code, BRIEF_EVENTS).reverse();
-    const flakes = db.prepare("SELECT test_id, note FROM flakes WHERE repo = ? ORDER BY test_id").all(ctx.repo);
-    const out = [`# ${plan.slug} ${code}${plan.title ? ` — ${plan.title}` : ""}`, ""];
-    out.push(`Plan: ${plan.path ?? "none recorded"}`, "", "## PR", "");
-    if (pr) {
-      for (const k of ["state", "pr", "branch", "worktree", "head", "subject", "updated"])
-        if (pr[k] != null) out.push(`- ${k}: ${pr[k]}`);
-    } else out.push("No row yet.");
-    out.push("", "## Decisions", "");
-    if (!decisions.length) out.push("None recorded.");
-    for (const d of decisions) {
-      out.push(`- ${d.ts.slice(0, 10)} ${d.text}${d.said_by ? ` (${d.said_by})` : ""}`);
-      if (d.quote) out.push(`  > ${d.quote.replace(/\n/g, "\n  > ")}`);
-    }
-    out.push("", `## Last ${BRIEF_EVENTS} events`, "");
-    if (!events.length) out.push("None recorded.");
-    for (const e of events) out.push(`- ${e.ts.slice(0, 16)} ${e.kind}${e.text ? `: ${e.text}` : ""}`);
-    out.push("", "## Known flakes", "");
-    if (!flakes.length) out.push("None recorded.");
-    for (const f of flakes) out.push(`- \`${f.test_id}\`${f.note ? ` — ${f.note}` : ""}`);
-    return out.join("\n") + "\n";
-  },
-};
-
-function main() {
-  const invoked = path.basename(process.argv[1]);
-  const [command, ...argv] = process.argv.slice(2);
-  try {
-    if (!Object.hasOwn(COMMANDS, command ?? "")) throw new Usage(`commands: ${Object.keys(COMMANDS).join(", ")}`);
-    const cwd = process.cwd();
-    const origin = originOf(cwd);
-    const name = resolveName(invoked, origin);
-    const dir = process.env.TASKLOG_DIR || path.join(os.homedir(), ".local/state/claude/tasks");
-    const db = open(path.join(dir, NAMES[name].db));
-    const ctx = { cwd, repo: origin.toLowerCase(), session: process.env.CLAUDE_CODE_SESSION_ID || null };
-    process.stdout.write(COMMANDS[command](db, ctx, argv));
-    db.close();
-  } catch (e) {
-    process.stderr.write(`${invoked}: ${e.message}\n`);
-    process.exitCode = e instanceof Refused ? 2 : 1;
-  }
-}
-
-main();
+if __name__ == "__main__":
+    sys.exit(main())

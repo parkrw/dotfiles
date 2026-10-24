@@ -2,7 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Personal macOS dotfiles. There is no build and no application code — these are configuration files deployed into `$HOME` via GNU Stow. The scripts and hooks that have tests keep them beside themselves as `test-*.sh` pipe tests, each run with `bash <file>`; there is no CI.
+Personal macOS dotfiles. There is no build and no application code — these are configuration files deployed into `$HOME` via GNU Stow. The scripts and hooks that have tests keep them beside themselves, each run directly: older bash ones as `test-*.sh` pipe tests (`bash <file>`), Python ones as `test_*.py` unittest files (`python3 <file>`); there is no CI.
+
+New scripts are Python 3, standard library only, written to run on 3.9 (macOS's `/usr/bin/python3`). Ubuntu server and minimal images ship `python3` with `sqlite3` and macOS has it once the Command Line Tools are in, so they run with nothing to install.
 
 ## Git
 
@@ -47,7 +49,7 @@ Custom shell tools deployed to `~/.local/bin`:
 - `cht.sh` — **vendored third-party** cheat.sh shell client (has its own `update`/`version` self-management). Don't hand-edit; treat as upstream.
 - `pr-wait` — polls a PR until its checks settle and GitHub's merge state says it can squash-merge; the exit code names the verdict (ready, failed, behind/conflict, blocked, closed, timeout). `/ftl ship --integrate` waits on it after opening the PR.
 - `claude-review-stats` — zero-dependency Node. Reports on `~/.claude/review-ledger/`, where `review-branch.sh` records every review: verdicts, cost, what became of each finding in the branch's next review, and the finding categories (area and cause) assigned by `--categorize` with haiku. Each run also imports the reviewer's own headless transcripts from `~/.claude/projects` before Claude Code's `cleanupPeriodDays` deletes them. `--json` carries the area/cause taxonomy with the runs and findings; the `review-insights` skill renders it as a page.
-- `tasklog` — zero-dependency Node on `node:sqlite`: a plan, PR-state, event, decision and flake log per work context, so concurrent sessions append rows instead of rewriting a PLAN.md. `cklog` (CloudKey, `ck.db`) and `vanlog` (vanillin, `van.db`) are tracked symlinks to it; each exits 2 in a repo whose origin it does not own. DBs live in `${TASKLOG_DIR:-~/.local/state/claude/tasks}`. Text passed as `-` is read from stdin. Tests: `bash scripts/.local/bin/test-tasklog.sh`.
+- `tasklog` — Python stdlib on `sqlite3`: a plan, PR-state, event, decision and flake log per work context, so concurrent sessions append rows instead of rewriting a PLAN.md. `cklog` (CloudKey, `ck.db`) and `vanlog` (vanillin, `van.db`) are tracked symlinks to it; each exits 2 in a repo whose origin it does not own. DBs live in `${TASKLOG_DIR:-~/.local/state/claude/tasks}`. Text passed as `-` is read from stdin. As core's `apps/api/src/db.js`: write commands open a writer that sets WAL and migrates, read commands a read-only reader. Tests: `python3 scripts/.local/bin/test_tasklog.py`.
 
 The `claude` file (untracked) is **not** part of these dotfiles. It's a symlink the Claude Code installer wrote to `~/.local/bin/claude` (pointing at `~/.local/share/claude/versions/<ver>`); because `~/.local/bin` is a folded Stow symlink to this directory, that write landed inside the repo. It's machine- and version-specific — don't commit it (gitignore it, or unfold the dir so `~/.local/bin` holds per-file symlinks).
 
