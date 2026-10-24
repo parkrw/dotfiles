@@ -214,7 +214,7 @@ git push -u origin <branch>
 gh pr create --title '<subject>' --body-file <body-file>
 ```
 
-When Orient step 2b printed a plan, record this task's status before printing: `tasklog state <plan> <code> building --branch <branch> --head <sha>`.
+When Orient step 2b printed a plan, record this task's status before printing: `tasklog state <plan> <code> <state> --branch <branch> --head <sha>`, `<state>` being `blocked` when a `NEW RED` stopped the work and `building` otherwise.
 
 Then one line per adjacent smell found, and nothing else.
 
@@ -339,9 +339,9 @@ With `--integrate`, no fetch, no second rebase or merge and no re-review: push t
 - `git -C <worktree> push -u origin <branch>`, then `cd <worktree> && gh pr create --title '<subject>' --body-file <body-file>`. Literal paths. Single-quote the title; one with an apostrophe goes in double quotes and carries no `$` or backtick. No `--draft`: a draft is the human's call, and CI may run nothing on one.
 - Go on to step 6 with the URL `gh pr create` printed.
 
-Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), step 3a stopped, or the gate or pre-push refuses: print the block for the human, as plain Ship does.
+Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), a `NEW RED` stands, step 3a stopped, or the gate or pre-push refuses: print the block for the human, as plain Ship does.
 
-When Orient step 2b printed a plan, record this task's status as the last write before printing: `tasklog state <plan> <code> <state> --branch <branch> --head <sha>`, plus `--pr <N>` when `--integrate` opened one. `<state>` is `ready` after step 6's `0`, `blocked` when the work stopped, and `review` otherwise. Then `tasklog event <plan> <code> handoff -` with the PR URL and step 6's verdict, or why it stopped, on stdin.
+When Orient step 2b printed a plan, record this task's status as the last write before printing: `tasklog state <plan> <code> <state> --branch <branch> --head <sha>`, plus `--pr <N>` when `--integrate` opened one. `<state>` is `ready` after step 6's `0`, `merged` or `dropped` after its `4` as GitHub says, `blocked` when the work stopped, and `review` otherwise. Then `tasklog event <plan> <code> handoff -` with the PR URL and step 6's verdict, or why it stopped, on stdin.
 
 `<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `git merge <default>` in place of `git rebase <default>`. When step 1 carried uncommitted work over, the block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy; it discards work, so it stays the human's. The subject follows Check step 6; a PR that finishes an issue ends its body with `Closes #N`.
 
@@ -360,6 +360,6 @@ Round 1 of at most 5. Run `pr-wait <url>` in the background and wait for it; CI 
 - `4 closed`: someone merged or closed it. Print the URL and the verdict; nothing else runs.
 - `5 timeout`: it lists the pending checks. Start the next round without a push; a second timeout hands off as `3` does.
 
-After a fix, conflict or merge: `git -C <worktree> push`, a fast-forward of the branch the PR tracks, then the next round. Do not push when step 4 stopped with findings open; hand off as `3` does, with the open findings. When a later round judged a finding wrong, rewrite `<body-file>` with it and `gh pr edit <url> --body-file <body-file>`, which the gate asks for.
+After a fix, conflict or merge: `git -C <worktree> push`, a fast-forward of the branch the PR tracks, then the next round. Do not push when step 4 stopped with findings open or a `NEW RED` stands; hand off as `3` does, with the open findings. When a later round judged a finding wrong, rewrite `<body-file>` with it and `gh pr edit <url> --body-file <body-file>`, which the gate asks for.
 
 After round 5 without a `0`, hand off as `3` does, listing each check still failing as `check - cause`.
