@@ -134,13 +134,31 @@ const MIGRATIONS = [
      new_reds INTEGER, known_reds INTEGER);`,
 ];
 
+// The switch to WAL takes a lock busy_timeout does not wait for, so concurrent
+// first runs that each switch can fail with "database is locked". Each builds
+// its WAL DB aside and links it into place instead; link never overwrites, so
+// one wins and the rest open the winner's. WAL then persists in the file.
+function create(file) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    const db = new DatabaseSync(tmp);
+    db.exec("PRAGMA journal_mode=WAL");
+    db.close();
+    fs.linkSync(tmp, file);
+  } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
 function open(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (!fs.existsSync(file)) create(file);
   const db = new DatabaseSync(file);
-  // busy_timeout first: the WAL switch and the migration below take write
-  // locks, and a first run from several sessions at once meets them.
+  // busy_timeout first: the migration below takes a write lock, and a first
+  // run from several sessions at once meets it.
   db.exec("PRAGMA busy_timeout=5000");
-  db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA foreign_keys=ON");
   db.exec("BEGIN IMMEDIATE");
   try {

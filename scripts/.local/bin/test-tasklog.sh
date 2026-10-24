@@ -126,6 +126,8 @@ for p in "${pids[@]}"; do wait "$p"; done
 run "concurrent writers" "$T/core" 0 "$BIN/cklog" plan list
 n=$(grep -c '^race-' <<<"$out")
 [[ $n == 20 ]] && ok "20 concurrent first runs all add their plan" || ko "20 concurrent first runs all add their plan" "$n plans; $(cat "$T/race.err")"
+got="$(sql "$TASKLOG_DIR/ck.db" "SELECT journal_mode FROM pragma_journal_mode") $(ls "$TASKLOG_DIR" | grep -c '\.tmp$')"
+[[ "$got" == "wal 0" ]] && ok "concurrent first runs leave one WAL DB and no temp files" || ko "concurrent first runs leave one WAL DB and no temp files" "$got; $(ls "$TASKLOG_DIR")"
 run "concurrent events" "$T/core" 0 "$BIN/cklog" log race-1
 n=$(grep -c 'tick  writer' <<<"$out")
 [[ $n == 20 ]] && ok "20 concurrent events all land" || ko "20 concurrent events all land" "$n events; $(cat "$T/race.err")"
