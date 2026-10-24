@@ -29,7 +29,9 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
                    the working tree), commit, then push and gh pr create
                    for the human
   /ftl ship       worktree (created on main/detached), fetch, check,
-                   commit, then claude-review (opus, xhigh)
+                   commit, a Sonnet pre-review of the diff
+                   (past findings, edge cases), then
+                   claude-review (opus, xhigh)
                    in a loop - run each runtime proof's test,
                    fix each finding it does not refute as a class,
                    rerun the checks except the suite, commit,
@@ -296,7 +298,9 @@ Then `git -C "$worktree" diff --name-only <default> -- CHANGELOG.md` prints noth
 
 ## 4. Review loop
 
-Before round 1, Check step 2's commands, the full test suite among them with no `NEW RED`, have passed on HEAD. Round 1 of at most 10:
+Before round 1, a pre-review: one Sonnet subagent (`model: "sonnet"`) reads `git -C "$worktree" diff <base>...HEAD` and Orient 2a's past findings for every path the diff touches. It writes one line per past finding, `does not recur: <why>` or `RECURS at <path:line>: <what>`, then at most 15 edge cases the diff meets, one line each, `- <function/component/route>: <input or state> -> <expected behaviour>`: empty, one, many, equal values, the boundary, the error path, legacy records, what the change leaves for its own next run, every caller and consumer of what it adds, renames or removes, and for UI both color schemes and RTL. Fix each RECURS and each edge case the code gets wrong, with a test, and commit.
+
+Then Check step 2's commands, the full test suite among them with no `NEW RED`, have passed on HEAD. Round 1 of at most 10:
 
 ```
 claude-review -C "$worktree" --yes --engine claude --model opus --effort xhigh
