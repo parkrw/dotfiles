@@ -826,17 +826,27 @@ local_ok=0
 # ── git classification ──
 #
 # Reads and plain local writes were allowed above; what is left discards work,
-# rewrites config, or is a shape the segment analysis could not clear.
+# rewrites config, or is a shape the segment analysis could not clear. Every
+# git segment is judged, not just a leading one: `npm test && git restore f`
+# discards work as surely as the restore alone. On an opaque line the segments
+# cannot be trusted, so any local write there asks.
 
-if [[ "$first" == "git" ]]; then
+if echo "$bare" | grep -Eq '(^|[[:space:]&|;(])git([[:space:]]|$)'; then
   git_part_ok && exit 0
-  sub=$(git_sub_of "$bare")
-  case "$sub" in
-    add|stage|commit|switch|checkout|restore|reset|merge|rebase|cherry-pick|revert|rm|mv|am|apply|submodule|clean)
-      emit ask "Local git write ($sub) — needs approval." ;;
-    worktree|branch|config|remote|stash)
-      git_segment_ok "$(segments | head -1)" || emit ask "Local git write ($sub) — needs approval." ;;
-  esac
+  while IFS= read -r seg; do
+    seg=$(echo "$seg" | sed -E 's/^[[:space:]]*[({]?[[:space:]]*((if|then|else|elif|do|while|until|time|!)[[:space:]]+)*//')
+    [[ "$(word_of "$seg")" == git ]] || continue
+    if [[ "$opaque" != 1 ]]; then
+      local_ok=1; git_segment_ok "$seg" && { local_ok=0; continue; }; local_ok=0
+    fi
+    sub=$(git_sub_of "$seg")
+    case "$sub" in
+      add|stage|commit|switch|checkout|restore|reset|merge|rebase|cherry-pick|revert|rm|mv|am|apply|submodule|clean)
+        emit ask "Local git write ($sub) — needs approval." ;;
+      worktree|branch|config|remote|stash)
+        git_segment_ok "$seg" || emit ask "Local git write ($sub) — needs approval." ;;
+    esac
+  done < <(segments)
   exit 0
 fi
 
