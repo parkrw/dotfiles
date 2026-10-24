@@ -76,6 +76,7 @@ Two heads on one repo share nothing in `$LANES`: neither renames the other's mar
 
 ## Refs
 install: <cmd>  test: <cmd>  lint/build: <cmd>  merge style: squash|merge|rebase
+tasklog: fan-<lane>|none
 
 | issue | slug | est | owns | deps | status | branch | worktree | pane |
 |---|---|---|---|---|---|---|---|---|
@@ -136,14 +137,14 @@ Guard: a `$FAN/plan.md` with any row not `landed`/`dropped` → stop and ask: `-
    gh issue create --title "<title in voice>" --body-file "$SP/issue-NN.md" [--label <measured>]
    ```
 
-6. Write `plan.md` with the numbers. Fall through to Fan out.
+6. Write `plan.md` with the numbers. Then `tasklog plan add fan-<lane> --path $FAN/plan.md`, `<lane>` being `${FAN##*/}` up to its first `-`, and write `fan-<lane>` on Refs' `tasklog` line, so workers log state and events where `tasklog show` reads them. `tasklog` exits 2 when no log owns this repo's origin: write `none`. Fall through to Fan out.
 
 ## Fan out - `/fan`, `/fan NN MM [..]`
 
 The head stays in this checkout and does not implement during a batch.
 
 1. **Size.** Issue numbers that have no row yet get one first: read the issue, set `est` and `owns` from it and the code, measure Voice if the block is missing. Ready rows: `status ready`, every dep `landed` or its issue closed (`gh issue view N --json state -q .state`). Batch = ready rows with pairwise-disjoint `owns`; compare the globs, and containment is overlap (`src/api/**` contains `src/api/auth/**`, so those two serialize). `N = min(disjoint ready, 4)`, 2 when any row is `~L`. Explicit numbers override the pick up to 5, never the disjointness rule. Then across lanes: a row whose `owns` overlaps an `inflight` or `review` row in `others` defers the same way, because that file is under another worker's hands right now; a `shipped` row there is an open PR, so it is a rebase for whoever merges second, not a block, exactly as within a lane. One ready row → Inline below, not a batch. Report the pick (`Fanning 3: #12 #15 #18; deferred #14 (dep #12), #16 (owns overlaps #15), #19 (owns overlaps #40, lane 8ae991)`) with `others` under it, one OK.
-2. **Brief.** Write `$FAN/briefs/NN.md` per row, for a zero-context reader: goal; the `owns` globs; sub-tasks as behaviors, each with the test it proves and the files; exact verify commands; done-when; the Voice block verbatim; grep-verified names, never assumed ones.
+2. **Brief.** Write `$FAN/briefs/NN.md` per row, for a zero-context reader: goal; the `owns` globs; sub-tasks as behaviors, each with the test it proves and the files; exact verify commands; done-when; Refs' `tasklog` plan and the code `NN`; the Voice block verbatim; grep-verified names, never assumed ones.
 3. **Claim.** Branch `<issue>-<slug>` unless Voice measured another shape. Per row: `git ls-remote --exit-code --heads origin <branch>` exits 2, `gh pr list --search <N> --state open` is empty. The gate re-checks both at worktree creation; doing it here keeps the prompts in one pane.
 4. **Worktrees.** `git pull --ff-only` in this checkout (allowed outright; it fetches everything, and the fast-forward applies only to the current branch). Then per row, approval-gated:
 
@@ -173,7 +174,7 @@ The head stays in this checkout and does not implement during a batch.
 
    The seed, with `<FAN>`, `NN`, and `<branch>` substituted and joined into one line:
 
-   > Read `<FAN>/briefs/NN.md`, then `gh issue view NN`. Write only inside the brief's owns globs; a change needed outside them goes in the report, not the tree. Commit per sub-task, approval-gated, subjects in the brief's Voice. Do not push, open a PR, or touch the issue until told `ship`. Never comment on, edit, label, or close an issue; never write anything into the repo tree but the change; no `Co-authored-by` or `Claude-Session` trailers, no generated-by line anywhere. Run the brief's verify command last and record its real exit code. Then write `<FAN>/reports/NN.md`: line 1 exactly `STATUS: green|blocked - <8 words or fewer>` (a non-zero exit is `blocked`, never green), line 2 exactly `VERIFY: <command> exit <code>`, then branch, commits, files touched, full verify output, surprises. Then `touch <FAN>/reports/NN.done` whatever the status: it means "I have reported", not "I succeeded", and withholding it on failure hangs the batch in silence. Rework arrives in this pane; address it, overwrite the report, touch `NN.done` again. On `ship`: push the branch `<branch>` to origin, open the PR with a title and body in the brief's Voice that links the issue the way Voice says, append the PR number to the report, and `touch <FAN>/reports/NN.shipped`. Context budget: 25% nudge, never exceed 30%. Hard caps: never more than 6 subagents/workers total, never `--effort max`, do the implementation yourself.
+   > Read `<FAN>/briefs/NN.md`, then `gh issue view NN`. Write only inside the brief's owns globs; a change needed outside them goes in the report, not the tree. Commit per sub-task, approval-gated, subjects in the brief's Voice. Do not push, open a PR, or touch the issue until told `ship`. When the brief names a `tasklog` plan other than `none`, log to it as code `NN`: `tasklog state <plan> NN building --branch <branch>` now, `tasklog event <plan> NN report -` with the report's line 1 on stdin each time you report, plus `tasklog state <plan> NN blocked` when it is blocked, and `tasklog state <plan> NN review --pr <number>` on `ship`; text goes on stdin, never as an argument. Never comment on, edit, label, or close an issue; never write anything into the repo tree but the change; no `Co-authored-by` or `Claude-Session` trailers, no generated-by line anywhere. Run the brief's verify command last and record its real exit code. Then write `<FAN>/reports/NN.md`: line 1 exactly `STATUS: green|blocked - <8 words or fewer>` (a non-zero exit is `blocked`, never green), line 2 exactly `VERIFY: <command> exit <code>`, then branch, commits, files touched, full verify output, surprises. Then `touch <FAN>/reports/NN.done` whatever the status: it means "I have reported", not "I succeeded", and withholding it on failure hangs the batch in silence. Rework arrives in this pane; address it, overwrite the report, touch `NN.done` again. On `ship`: push the branch `<branch>` to origin, open the PR with a title and body in the brief's Voice that links the issue the way Voice says, append the PR number to the report, and `touch <FAN>/reports/NN.shipped`. Context budget: 25% nudge, never exceed 30%. Hard caps: never more than 6 subagents/workers total, never `--effort max`, do the implementation yourself.
 
    The seed names no git or gh write command literally. The gate reads the `printf` that writes the seed file, and a `git push` inside that text is denied before the file exists.
 

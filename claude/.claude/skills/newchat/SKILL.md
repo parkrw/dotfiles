@@ -9,7 +9,7 @@ Structure, in order:
 
 1. **The task** — one line, imperative, with issue/PR numbers and where to read them (`gh issue view N`). Name the parent epic if there is one.
 2. **Where** — when the task continues work this session did on a branch, one line: `Branch <branch> in <absolute checkout path>; work there.` The checkout is where this session edited and committed, which can differ from `$PWD`. Resolve it with `git -C "$(dirname <a file you edited>)" rev-parse --show-toplevel`, and `branch --show-current` the same way. Omit the line when that branch is the default branch or HEAD is detached, when nothing was edited, and outside a repo: the Standing rules' branch-first applies instead.
-3. **"Context a fresh read won't give you:"** — the payload. Only facts the new session cannot derive from the repo, the issues, or the docs:
+3. **"Context a fresh read won't give you:"** — the payload. Only facts the new session cannot derive from the repo, the issues, or the docs. When the task is a plan's task and `tasklog plan list` has a row for that plan, start from `tasklog brief <plan> <code>`: the prompt names that command, and the section adds only what the brief's state, decisions and events leave out. Then:
    - decisions settled in conversation, stated as settled (with the why in one clause, e.g. "no palette value changes — values are #261's, blocked on the brand owner")
    - exact values, measurements, or names established during the session
    - traps discovered: things that look like X but are Y ("the two token blocks share names but are deliberately different themes")

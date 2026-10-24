@@ -98,7 +98,9 @@ What the reviewer will find, found first. Two lists, both printed:
 
 A plan of record lives outside the repo, and the task or a loaded memory names its path. Read that file's section for this task and nothing else; never list or glob `~/.claude/plans/`, which holds every repo's plans. Print `plan: <path>`, or `plan: none` when nothing names one.
 
-The plan holds the task's status, and the hand-offs update it. A memory holds the pointer to the plan and the human's decisions, and changes only on a new decision; status never goes in a memory, since two copies drift.
+The task's status lives in `tasklog`, not in the plan file, so concurrent sessions append rows instead of rewriting one file. `<plan>` is the plan's slug and `<code>` the task's code in it, such as `P5`. When `tasklog plan list` has no row for the plan, `tasklog plan add <plan> --path <path>`. Then `tasklog brief <plan> <code>` prints the task's state, the plan's decisions, its last events and the repo's flakes; read it with the plan section. A change records `tasklog state <plan> <code> building --branch <branch> --worktree <worktree>` once step 0 has made the worktree, and the hand-offs record the rest with `tasklog state` and `tasklog event <plan> <code> <kind> -`. A text argument is always `-`, the text on stdin, so quotes never pass through the shell. When `tasklog` exits 2, no log owns this repo's origin: the hand-offs update the plan file's Status section instead.
+
+A memory holds the pointer to the plan and the human's decisions, and changes only on a new decision; status never goes in a memory, since two copies drift.
 
 ## 3. The lead's conventions, measured
 
@@ -162,6 +164,10 @@ Every item is pass or fail with the output line that shows it. Do not hand off w
 
 Run the commands from Orient step 3, from the repo root, each with its pass line. Then:
 
+- The full test suite - the done command that runs every workspace's tests, such as a root `npm test` - runs as `suite <command>`, in the background, and the session waits for it. `suite` holds one of a few machine-wide slots, so parallel sessions take turns instead of loading the machine into timeouts. It ends with `suite: exit X, N new, M known, waited Ws`, after one `NEW RED` or `KNOWN RED` line per failing test id:
+  - `KNOWN RED`: a registered flake. Report it with the summary line and do not chase it; a run whose only reds are known passes.
+  - `NEW RED`: the work stops - no review, no push - and the hand-off reports its test id and the log path. A red this diff caused is fixed as a finding, and the suite runs again; one it did not cause waits for the human, who registers flakes.
+  - A non-zero exit with no red listed fails, as any done command does.
 - `git diff --cached | grep -nE '^\+.*\.(skip|only)\('` prints nothing.
 - A bug fix carries a test that failed before the fix. Name the test.
 - Where a touched workspace has a `test:coverage` script, run it with a JSON report - vitest: `--coverage.reporter=json --coverage.reportsDirectory=<scratch>/cov-<workspace>`; c8: `--reporter=json --reports-dir=<scratch>/cov-<workspace>`; nyc: `--reporter=json --report-dir=<scratch>/cov-<workspace>` - and `diff-uncovered origin/<default> <scratch>/cov-*/coverage-final.json` prints only its count line. It judges committed, staged and unstaged lines alike, so run it before the commit. Each `path:line` it prints is an added line no test executed: it gets a test, or a hand-off line saying why it cannot execute. Each `path:line branch` is an added line holding a branch arm no test took: it gets a test that takes that arm, or a hand-off line saying why the arm cannot be taken. A `no report covers:` line names changed source no report saw: take a report for its workspace, or write a hand-off line naming the file and why it has none.
@@ -208,7 +214,7 @@ git push -u origin <branch>
 gh pr create --title '<subject>' --body-file <body-file>
 ```
 
-When Orient step 2b printed a plan, update this task's status in it before printing: branch and commit sha.
+When Orient step 2b printed a plan, record this task's status before printing: `tasklog state <plan> <code> building --branch <branch> --head <sha>`.
 
 Then one line per adjacent smell found, and nothing else.
 
@@ -216,7 +222,7 @@ Then one line per adjacent smell found, and nothing else.
 
 Fetch, check, commit, review, fix, repeat, until the reviewer reports no findings. Ship runs every local git write itself, in the worktree resolved in step 1; the write gate allows them without a prompt. Only the push and `gh pr create` are printed for the human at the end.
 
-The order is fixed: CI's full test suite passes, then `claude-review`, then the push, then the PR. The full suite runs twice: before round 1, and after the last round when a fix was committed since round 1. One round that passes runs it once, on the commit it reviewed. A push that skips the review meets it anyway: where the review gate is live, pre-push denies a branch diff without a passing review.
+The order is fixed: CI's full test suite passes, run through `suite` as Check step 2 says, then `claude-review`, then the push, then the PR. The full suite runs twice: before round 1, and after the last round when a fix was committed since round 1. One round that passes runs it once, on the commit it reviewed. A push that skips the review meets it anyway: where the review gate is live, pre-push denies a branch diff without a passing review.
 
 With `--integrate`, Ship also integrates the default branch itself (step 3a), once, before the review, resolves conflicts, then pushes and opens a PR ready for review, since CI may skip a draft. Step 6 then waits for CI and fixes what it reports, until the squash merge waits only on the human, who reviews and clicks it.
 
@@ -290,7 +296,7 @@ Then `git -C "$worktree" diff --name-only <default> -- CHANGELOG.md` prints noth
 
 ## 4. Review loop
 
-Before round 1, Check step 2's commands, the full test suite among them, have passed on HEAD. Round 1 of at most 10:
+Before round 1, Check step 2's commands, the full test suite among them with no `NEW RED`, have passed on HEAD. Round 1 of at most 10:
 
 ```
 claude-review -C "$worktree" --yes --engine claude --model opus --effort xhigh
@@ -314,7 +320,7 @@ Run it in the background and wait for it; a review takes minutes and a foregroun
 
 After round 10 with findings still open, or a round where every finding is wrong - nothing to commit, so the next round would judge the same diff - stop: print each open finding as `path:line - defect`, with the reason for each one judged wrong, then hand off anyway. The human decides.
 
-However the loop ends, when a fix was committed since round 1, run the full suite on HEAD before handing off. It passes: hand off. It fails: fix each failure as a finding, commit, and start round N+1, since the commit changed the diff the last round approved. Past round 10, print the failures with the open findings and hand off anyway.
+However the loop ends, when a fix was committed since round 1, run the full suite on HEAD before handing off, as `suite <command>` in the background. It passes, known reds aside: hand off. A `NEW RED` this diff did not cause: hand off with it, as Check step 2 says. Otherwise fix each failure as a finding, commit, and start round N+1, since the commit changed the diff the last round approved. Past round 10, print the failures with the open findings and hand off anyway.
 
 ## 5. Hand off
 
@@ -335,7 +341,7 @@ With `--integrate`, no fetch, no second rebase or merge and no re-review: push t
 
 Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), step 3a stopped, or the gate or pre-push refuses: print the block for the human, as plain Ship does.
 
-When Orient step 2b printed a plan, update this task's status in it as the last write before printing: branch, head sha, and the PR URL with step 6's verdict when `--integrate` opened one, or why it stopped.
+When Orient step 2b printed a plan, record this task's status as the last write before printing: `tasklog state <plan> <code> <state> --branch <branch> --head <sha>`, plus `--pr <N>` when `--integrate` opened one. `<state>` is `ready` after step 6's `0`, `blocked` when the work stopped, and `review` otherwise. Then `tasklog event <plan> <code> handoff -` with the PR URL and step 6's verdict, or why it stopped, on stdin.
 
 `<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `git merge <default>` in place of `git rebase <default>`. When step 1 carried uncommitted work over, the block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy; it discards work, so it stays the human's. The subject follows Check step 6; a PR that finishes an issue ends its body with `Closes #N`.
 
