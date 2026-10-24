@@ -166,7 +166,7 @@ Run the commands from Orient step 3, from the repo root, each with its pass line
 
 - The full test suite - the done command that runs every workspace's tests, such as a root `npm test` - runs as `suite <command>`, in the background, and the session waits for it. `suite` holds one of a few machine-wide slots, so parallel sessions take turns instead of loading the machine into timeouts. It ends with `suite: exit X, N new, M known, waited Ws`, after one `NEW RED` or `KNOWN RED` line per failing test id:
   - `KNOWN RED`: a registered flake. Report it with the summary line and do not chase it; a run whose only reds are known passes.
-  - `NEW RED`: the work stops - no review, no push - and the hand-off reports its test id and the log path. A red this diff caused is fixed as a finding, and the suite runs again; one it did not cause waits for the human, who registers flakes.
+  - `NEW RED`: the work stops - no review, no push - and the hand-off reports its test id and the summary line. A red this diff caused is fixed as a finding, and the suite runs again; one it did not cause waits for the human, who registers flakes.
   - A non-zero exit with no red listed fails, as any done command does.
 - `git diff --cached | grep -nE '^\+.*\.(skip|only)\('` prints nothing.
 - A bug fix carries a test that failed before the fix. Name the test.
