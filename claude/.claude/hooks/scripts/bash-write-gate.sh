@@ -3,7 +3,10 @@
 #
 # Permission tiers:
 #   reads + read-only git/gh        -> allow (no prompt)
-#   create NEW file                 -> allow (no prompt)
+#   redirect or tee into a file     -> allow (no prompt)
+#   …into .git, ~/.claude hooks or
+#     settings, ~/.config/git, or a
+#     gate marker                   -> ask
 #   git pull --ff-only, git tag     -> allow (no prompt)
 #   local git writes (add, commit,
 #     branch, switch, stash, merge,
@@ -21,7 +24,6 @@
 #     on origin, or whose issue is
 #     someone else's                -> deny (always)
 #   merge/rebase, other pulls       -> allow (default), deny (.claude-merge-off)
-#   overwrite/modify EXISTING file  -> ask
 #   push of a feature branch, gh
 #     pr create                     -> allow (default), deny (.claude-remote-off)
 #   other gh writes                 -> ask (default), deny (.claude-remote-off)
@@ -40,7 +42,7 @@
 #
 # A compound line is judged segment by segment, wherever the git or gh segment
 # sits: it can be auto-approved only when every segment is itself in the allow
-# tier and nothing is redirected into a file. Command substitution, process
+# tier and nothing is redirected into a protected path. Command substitution, process
 # substitution, backgrounding and newlines can hide an arbitrary command, so
 # they block `allow` and the line falls through to the ask/deny rules.
 set -e
@@ -141,9 +143,10 @@ first=$(word_of "$cmd")
 
 # Segments that read or filter — the only ones auto-allowed in compound commands.
 # Excludes anything that runs a command handed to it (xargs, eval, sh, find -exec)
-# and anything that writes (tee, mv, cp, export). sed and yq lose the exemption
-# under -i, find under -exec or -delete.
-seg_filters='cat|head|tail|less|more|grep|egrep|fgrep|rg|jq|yq|wc|sort|uniq|cut|tr|awk|sed|column|nl|fold|rev|tac|echo|printf|true|false|date|basename|dirname|realpath|readlink|pbcopy|cd|pwd|ls|file|stat|du|df|which|type|test|\[|\[\[|read|seq|diff|cmp|comm|paste|shasum|sleep|find'
+# and anything that moves or removes files (mv, cp, export). tee writes only
+# its targets, which protected_write vets like a redirect's. sed and yq lose the
+# exemption under -i, find under -exec or -delete.
+seg_filters='cat|head|tail|less|more|grep|egrep|fgrep|rg|jq|yq|wc|sort|uniq|cut|tr|awk|sed|column|nl|fold|rev|tac|echo|printf|true|false|date|basename|dirname|realpath|readlink|pbcopy|cd|pwd|ls|file|stat|du|df|which|type|test|\[|\[\[|read|seq|diff|cmp|comm|paste|shasum|sleep|find|tee'
 seg_git='status|log|diff|show|reflog|shortlog|whatchanged|blame|describe|rev-parse|rev-list|merge-base|name-rev|symbolic-ref|var|cat-file|ls-files|ls-tree|ls-remote|for-each-ref|count-objects|grep|fetch|show-ref|check-ignore'
 # A block that has already validated its own subcommand against the remote and
 # marker rules adds it here before asking whether the rest of the line is safe.
@@ -261,9 +264,56 @@ writes_a_file(){ # $1 = part of the line, default all of it
     | grep -vE '^(/dev/|/tmp/|/private/tmp/|/var/tmp/|/var/folders/)' | grep -q .
 }
 
+# Every file the line redirects or tees into, as written. Single-quoted text
+# is blanked first, so awk's `$1 > $2` names no file.
+write_targets(){
+  echo "$bare_dq" | grep -oE '[0-9&]?>>?[[:space:]]*[^[:space:]&|;<>]+' \
+    | sed -E 's/^[0-9&]?>>?[[:space:]]*//' | grep -vE '^&?[0-9-]$' || true
+  echo "$bare_dq" | tr '|;&' '\n\n\n' | awk '$1 == "tee" { for (i = 2; i <= NF; i++) if ($i !~ /^-/) print $i }'
+}
+
+# A local file write is allowed anywhere but where the gates themselves live:
+# a write there could repoint a hook, drop a marker or rewrite settings, which
+# would turn off the remote protections. Prints `protected` for such a target,
+# `unresolved` for one behind a variable the gate cannot expand, which it
+# neither allows nor asks about, or nothing.
+write_risk(){
+  local t risk=""
+  while IFS= read -r t; do
+    t=${t//\"/}; t=${t//\'/}
+    [[ -z "$t" ]] && continue
+    t=${t/#\~/$HOME}
+    t=${t//\$\{HOME\}/$HOME}; t=${t//\$HOME/$HOME}
+    t=${t//\$\{TMPDIR\}/${TMPDIR:-/tmp}}; t=${t//\$TMPDIR/${TMPDIR:-/tmp}}
+    t=${t//\$\{PWD\}/$gitdir}; t=${t//\$PWD/$gitdir}
+    if [[ "$t" == *[\$\`]* ]]; then risk=unresolved; continue; fi
+    [[ "$t" != /* ]] && t="$gitdir/$t"
+    case "$t" in
+      /dev/*) ;;
+      */.git|*/.git/*|*/.claude/settings*.json|*/.claude/hooks/*|*/.config/git/*|\
+      */.claude-remote-off|*/.claude-merge-off|*/.claude-ftl) echo protected; return ;;
+    esac
+  done < <(write_targets)
+  echo "$risk"
+}
+risk=$(write_risk)
+
+# A line whose git and gh segments are all allowable, chained to commands the
+# gate does not know (a build, a test run): nothing here for the gate to ask
+# about, so Claude Code's own permission rules judge the rest.
+git_part_ok(){
+  [[ "$opaque" == 1 || "$risk" == protected ]] && return 1
+  local seg local_ok=1
+  while IFS= read -r seg; do
+    segment_ok "$seg" && continue
+    echo "$seg" | grep -Eq '(^|[[:space:](])(git|gh)([[:space:]]|$)' && return 1
+  done < <(segments)
+  return 0
+}
+
 can_allow(){
   [[ "$opaque" == 1 ]] && return 1
-  writes_a_file && return 1
+  [[ -n "$risk" ]] && return 1
   local seg
   while IFS= read -r seg; do
     segment_ok "$seg" || return 1
@@ -760,6 +810,7 @@ Approve only if the uncommitted changes are meant to move."
 fi
 
 # Every deny is above this point, so asking here cannot mask one.
+[[ "$risk" == protected ]] && emit ask "Writes into .git, the Claude hooks or settings, git's global hooks, or a gate marker — needs approval."
 [[ "$staging" == "?" ]] && emit ask "git add/commit with a pathspec the gate cannot place in the repo — it may expand to the whole tree."
 
 # ── local git writes ──
@@ -778,6 +829,7 @@ local_ok=0
 # rewrites config, or is a shape the segment analysis could not clear.
 
 if [[ "$first" == "git" ]]; then
+  git_part_ok && exit 0
   sub=$(git_sub_of "$bare")
   case "$sub" in
     add|stage|commit|switch|checkout|restore|reset|merge|rebase|cherry-pick|revert|rm|mv|am|apply|submodule|clean)
@@ -793,26 +845,6 @@ if [[ "$first" == "touch" || "$first" == "mkdir" ]] && can_allow; then
   emit allow "Creating files/directories."
 fi
 
-# redirect / tee — split create (allow) vs overwrite-existing (ask)
-targets=""
-echo "$cmd" | grep -Eq '>[^&]|^>|>$' && targets+=$'\n'$(echo "$cmd" | grep -oE '[0-9&]?>>?[[:space:]]*[^[:space:]&|;<>]+' | sed -E 's/^[0-9&]?>>?[[:space:]]*//')
-[[ "$first" == "tee" ]] && targets+=$'\n'$(echo "$cmd" | sed -E 's/^[[:space:]]*tee[[:space:]]+//' | tr ' ' '\n' | grep -vE '^-')
-
-if [[ -n "$(echo "$targets" | tr -d '[:space:]')" ]]; then
-  any_exist=0; any_new=0
-  while IFS= read -r t; do
-    [[ -z "$t" ]] && continue
-    case "$t" in /tmp/*|/private/tmp/*|/var/tmp/*|/var/folders/*|/dev/*) continue;; esac
-    e="${t/#\~/$HOME}"; [[ "$e" != /* ]] && e="$cwd/$e"
-    if [[ -e "$e" ]]; then any_exist=1; else any_new=1; fi
-  done <<< "$targets"
-  if [[ "$any_exist" == 1 ]]; then
-    emit ask "Redirect/tee targets an existing file — would overwrite/modify it. Approve only if intended."
-  fi
-  base=$(basename "$first" 2>/dev/null || echo "$first")
-  if [[ "$any_new" == 1 ]] && can_allow && ! echo "$base" | grep -Eq '^(rm|rmdir|mv|cp|chmod|chown|chgrp|ln|truncate|sed|dd|shred|git|gh)$'; then
-    emit allow "Creating a new file (target does not exist)."
-  fi
-fi
+[[ -n "$(write_targets)" ]] && can_allow && emit allow "Local file write."
 
 exit 0
