@@ -115,6 +115,11 @@
           },
           {
             "type": "command",
+            "command": "~/.claude/hooks/scripts/suite-gate.py",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "~/.claude/hooks/scripts/git-state-inject.sh",
             "timeout": 5
           },
