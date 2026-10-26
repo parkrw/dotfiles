@@ -31,7 +31,7 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
   /ftl ship       worktree (created on main/detached), fetch, check,
                    commit, a Sonnet pre-review of the diff
                    (past findings, edge cases), then
-                   claude-review (opus, xhigh)
+                   claude-review (opus, high)
                    in a loop - run each runtime proof's test,
                    fix each finding it does not refute as a class,
                    rerun the checks except the suite, commit,
@@ -303,8 +303,10 @@ Before round 1, a pre-review: one Sonnet subagent (`model: "sonnet"`) reads `git
 Then Check step 2's commands, the full test suite among them with no `NEW RED`, have passed on HEAD. Round 1 of at most 10:
 
 ```
-claude-review -C "$worktree" --yes --engine claude --model opus --effort xhigh
+claude-review -C "$worktree" --yes --engine claude --model opus --effort high
 ```
+
+Every round, and every review Ship --integrate runs after a CI fix, uses exactly this command: opus at high, never another model or effort, never `--bump`, never codex.
 
 Run it in the background and wait for it; a review takes minutes and a foreground timeout would kill it mid-run. It prints the report, then a `review-branch: PASS` or `FAIL` line naming the report file.
 
