@@ -209,11 +209,11 @@ A repo with `CHANGELOG.md` and no fragment tooling gets it set up first, as its 
 
 ## 7. Hand off
 
-Run the local half yourself: `git switch -c <branch>` when on the default branch, named as measured in Orient step 3, then `git add <path>... && git commit -m '<subject>'`. A subject with an apostrophe goes in double quotes and carries no `$` or backtick. Write the PR body to `<body-file>`, as Ship step 5 does, then print the remote half for the human, placeholders filled in:
+Run the local half yourself: `git switch -c <branch>` when on the default branch, named as measured in Orient step 3, then `git add <path>... && git commit -m '<subject>'`. A subject with an apostrophe goes in double quotes and carries no `$` or backtick. Write the PR body to `<body-file>` and take `<title>`, as Ship step 5 does, then print the remote half for the human, placeholders filled in:
 
 ```
 git push -u origin <branch>
-gh pr create --title '<subject>' --body-file <body-file>
+gh pr create --title '<title>' --body-file <body-file>
 ```
 
 When Orient step 2b printed a plan, record this task's status before printing: `tasklog state <plan> <code> <state> --branch <branch> --head <sha>`, `<state>` being `blocked` when a `NEW RED` stopped the work and `building` otherwise.
@@ -337,19 +337,19 @@ Before any block is printed or `--integrate` pushes, write the PR body with the 
 ```
 cd <worktree>
 git push -u origin <branch>
-gh pr create --title '<subject>' --body-file <body-file>
+gh pr create --title '<title>' --body-file <body-file>
 ```
 
 With `--integrate`, no fetch, no second rebase or merge and no re-review: push the branch as reviewed, even when `<default>` has moved since step 3a. Instead of printing a block:
 
-- `git -C <worktree> push -u origin <branch>`, then `cd <worktree> && gh pr create --title '<subject>' --body-file <body-file>`. Literal paths. Single-quote the title; one with an apostrophe goes in double quotes and carries no `$` or backtick. No `--draft`: a draft is the human's call, and CI may run nothing on one.
+- `git -C <worktree> push -u origin <branch>`, then `cd <worktree> && gh pr create --title '<title>' --body-file <body-file>`. Literal paths. Single-quote the title; one with an apostrophe goes in double quotes and carries no `$` or backtick. No `--draft`: a draft is the human's call, and CI may run nothing on one.
 - Go on to step 6 with the URL `gh pr create` printed.
 
 Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), a `NEW RED` stands, step 3a stopped, or the gate or pre-push refuses: print the block for the human, as plain Ship does.
 
 When Orient step 2b printed a plan, record this task's status as the last write before printing: `tasklog state <plan> <code> <state> --branch <branch> --head <sha>`, plus `--pr <N>` when `--integrate` opened one. `<state>` is `ready` after step 6's `0`, `merged` or `dropped` after its `4` as GitHub says, `blocked` when the work stopped, and `review` otherwise. Then `tasklog event <plan> <code> handoff -` with the PR URL and step 6's verdict, or why it stopped, on stdin.
 
-`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `git merge <default>` in place of `git rebase <default>`. When step 1 carried uncommitted work over, the block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy; it discards work, so it stays the human's. The subject follows Check step 6; a PR that finishes an issue ends its body with `Closes #N`.
+`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `git merge <default>` in place of `git rebase <default>`. When step 1 carried uncommitted work over, the block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy; it discards work, so it stays the human's. `<title>` is the line of the `changelog.d` fragment this branch adds, read from the file, never written: `head -n1 <worktree>/changelog.d/<fragment>.md`. A squash merge lands it, so a commit subject is never the title. With no fragment, the subject follows Check step 6. The write gate denies a title that differs from the fragment line or runs past 50 characters. A PR that finishes an issue ends its body with `Closes #N`.
 
 ## 6. Wait for green - `--integrate` only
 
