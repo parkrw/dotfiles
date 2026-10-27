@@ -18,14 +18,17 @@ tool=$(echo "$INPUT" | jq -r '.tool_name // ""')
 
 # The one exception: /ftl ship --integrate runs unattended, and its Sonnet
 # pre-review (skills/ftl/SKILL.md, Ship step 4) would stall it on a prompt.
-# ftl-mode.sh records the mode; the spawn must match the skill's exact shape.
+# ftl-mode.sh records the mode. The description is matched loosely because
+# Claude paraphrases it ("Pre-review changelog branch diff") despite the skill
+# naming it exactly; mode, model and agent type keep the exception narrow.
 session=$(jq -r '.session_id // ""' <<<"$INPUT")
 session=${session//[^a-zA-Z0-9_-]/}
 mode=""
 [[ -n "$session" && -f "$HOOKS_DIR/state/ftl-mode-$session" ]] \
   && IFS= read -r mode < "$HOOKS_DIR/state/ftl-mode-$session" || true
 if [[ "$mode" == integrate || "$mode" == task-ship ]] && jq -e '.tool_input
-     | .description == "ftl pre-review" and .model == "sonnet"
+     | (.description // "" | ascii_downcase | test("pre-?review"))
+       and .model == "sonnet"
        and ((.subagent_type // "general-purpose") == "general-purpose")' <<<"$INPUT" >/dev/null; then
   jq -n '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",permissionDecisionReason:"ftl ship --integrate pre-review."}}'
   exit 0
