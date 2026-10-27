@@ -23,8 +23,8 @@
       "Bash(gh pr view:*)",
       "Bash(tmux paste-buffer:*)",
       "Bash(tmux send-keys:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
+      "Bash(git:*)",
+      "Bash(rm:*)",
       "Bash(ssh core.ckdev.io:*)",
       "Bash(ssh hbops.mgmt.infra.ckdev.io:*)"
     ],
@@ -50,8 +50,7 @@
       "Bash(shred:*)"
     ],
     "ask": [
-      "Agent",
-      "Bash(rm:*)",
+      "Bash(git rm:*)",
       "Bash(rmdir:*)"
     ],
     "defaultMode": "auto",

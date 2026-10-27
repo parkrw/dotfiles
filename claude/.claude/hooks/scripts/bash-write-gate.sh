@@ -6,7 +6,7 @@
 #   redirect or tee into a file     -> allow (no prompt)
 #   …into .git, ~/.claude hooks or
 #     settings, ~/.config/git, or a
-#     gate marker                   -> ask
+#     gate marker, or an rm there   -> ask
 #   git pull --ff-only, git tag     -> allow (no prompt)
 #   local git writes (add, commit,
 #     branch, switch, stash, merge,
@@ -14,7 +14,7 @@
 #     remote-tracking ref as the
 #     other side too                -> allow (no prompt)
 #   …that discard uncommitted work,
-#     config/remote writes, a
+#     git rm, config/remote writes, a
 #     pathspec it cannot place in
 #     the repo, --no-verify, or an
 #     opaque line                   -> ask
@@ -167,7 +167,6 @@ git_local_ok(){ # $1 = segment
   case "$sub" in
     add|stage|commit|branch|merge|rebase|cherry-pick|revert|mv|am|apply|tag) return 0 ;;
     reset)     ! has_opt "$args" '--hard|--merge' ;;
-    rm)        ! has_opt "$args" '-[a-zA-Z]*f[a-zA-Z]*|--force' ;;
     switch)    ! has_opt "$args" '-[a-zA-Z]*f[a-zA-Z]*|--force|--discard-changes' ;;
     restore)   has_opt "$args" '-S|--staged' && ! has_opt "$args" '-W|--worktree' ;;
     stash)     ! echo "$args" | grep -Eq '^(drop|clear)([[:space:]]|$)' ;;
@@ -272,6 +271,15 @@ write_targets(){
   echo "$bare_dq" | tr '|;&' '\n\n\n' | awk '$1 == "tee" { for (i = 2; i <= NF; i++) if ($i !~ /^-/) print $i }'
 }
 
+# Every path the line hands to rm: removing a hook, a setting or a marker
+# loosens a gate as surely as overwriting one. The raw line is split, so a
+# single-quoted path is seen too; a stray match only asks.
+rm_targets(){
+  echo "$cmd" | tr '|;&' '\n\n\n' \
+    | sed -E 's/^[[:space:]]*[({]?[[:space:]]*((if|then|else|elif|do|while|until|time|!)[[:space:]]+)*//' \
+    | awk '$1 == "rm" { for (i = 2; i <= NF; i++) if ($i !~ /^-/) print $i }'
+}
+
 # A local file write is allowed anywhere but where the gates themselves live:
 # a write there could repoint a hook, drop a marker or rewrite settings, which
 # would turn off the remote protections. Prints `protected` for such a target,
@@ -293,7 +301,7 @@ write_risk(){
       */.git|*/.git/*|*/.claude/settings*.json|*/.claude/hooks/*|*/.config/git/*|\
       */.claude-remote-off|*/.claude-merge-off|*/.claude-ftl) echo protected; return ;;
     esac
-  done < <(write_targets)
+  done < <(write_targets; rm_targets)
   echo "$risk"
 }
 risk=$(write_risk)
@@ -810,7 +818,7 @@ Approve only if the uncommitted changes are meant to move."
 fi
 
 # Every deny is above this point, so asking here cannot mask one.
-[[ "$risk" == protected ]] && emit ask "Writes into .git, the Claude hooks or settings, git's global hooks, or a gate marker — needs approval."
+[[ "$risk" == protected ]] && emit ask "Writes into or removes from .git, the Claude hooks or settings, git's global hooks, or a gate marker — needs approval."
 [[ "$staging" == "?" ]] && emit ask "git add/commit with a pathspec the gate cannot place in the repo — it may expand to the whole tree."
 
 # ── local git writes ──
