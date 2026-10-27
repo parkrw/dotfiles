@@ -41,7 +41,7 @@ check "git -C main commit denied"                "$T/repoB" "git -C $T/repoA com
 # the cd target, not the session cwd.
 check "cd main && commit denied (no miss)"       "$T/repoB" "cd $T/repoA && git commit -m 'x: y'"      deny
 
-check "a push with a substitution asks"          "$T/repoB" 'git status && git push $(echo origin)'  ask
+check "a push with a substitution defers"        "$T/repoB" 'git status && git push $(echo origin)'  defer
 check "reads alone stay allowed"                 "$T/repoB" 'git status && git log -3 | head -1'      allow
 
 # Worktrees are local writes; only a forced removal, which discards the

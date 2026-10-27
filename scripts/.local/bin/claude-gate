@@ -2,9 +2,9 @@
 # claude-gate — show and flip the per-repo Claude permission toggles.
 #
 #   claude-gate                 status for this repo
-#   claude-gate remote on|off   feature-branch push, PR create/edit, comments:
-#                               allow <-> deny;
-#                               other gh writes: ask <-> deny       (default on)
+#   claude-gate remote on|off   feature-branch push, gh writes, /ftl merge of
+#                               your own green PR: allow <-> deny;
+#                               dangerous gh writes: ask <-> deny   (default on)
 #   claude-gate merge  on|off   merge/rebase:        allow <-> deny (default on)
 #   claude-gate review on|off   require a fresh-context review before push
 #                                                                    (default off)
@@ -20,9 +20,9 @@
 # Flipping one toggle offers the others, because the failure mode is tightening
 # a repo months ago and forgetting the rest are still set.
 #
-# No toggle enables a push to main/master or the default branch, or
-# `gh pr merge`. bash-write-gate.sh and the pre-push git hook deny those
-# permanently.
+# No toggle enables a push to main/master or the default branch, or a
+# `gh pr merge` outside /ftl ship --integrate. bash-write-gate.sh and the
+# pre-push git hook deny those permanently.
 set -euo pipefail
 
 REPOS_FILE="$HOME/.claude/hooks/review-gate-repos"
@@ -54,7 +54,7 @@ state() {
 
 describe() {
   case $1 in
-    remote) echo "push / gh:            on = allow feature-branch push, PR create/edit and comments, ask other gh; off = deny" ;;
+    remote) echo "push / gh:            on = allow feature-branch push, gh writes and the /ftl merge of your own green PR, ask dangerous gh; off = deny" ;;
     merge)  echo "merge / rebase:       on = allow, off = deny" ;;
     review) echo "on = push blocked until the branch diff passes review" ;;
     ftl)    echo "on = every prompt runs through /ftl" ;;

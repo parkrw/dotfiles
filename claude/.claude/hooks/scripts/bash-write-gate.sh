@@ -14,10 +14,11 @@
 #     remote-tracking ref as the
 #     other side too                -> allow (no prompt)
 #   …that discard uncommitted work,
-#     git rm, config/remote writes, a
-#     pathspec it cannot place in
-#     the repo, --no-verify, or an
-#     opaque line                   -> ask
+#     git rm, config/remote writes,
+#     reflog expire, update-ref,
+#     gc --prune, filter-branch,
+#     --no-verify, or a switch that
+#     carries a dirty tree          -> ask
 #   bulk staging (add -A/-u, commit
 #     -a, a whole-tree pathspec)    -> deny (always)
 #   new branch whose name is taken
@@ -25,16 +26,23 @@
 #     someone else's                -> deny (always)
 #   merge/rebase, other pulls       -> allow (default), deny (.claude-merge-off)
 #   push of a feature branch, gh
-#     pr create/edit, gh pr/issue
-#     comment, gh api comment
-#     post/edit/reply               -> allow (default), deny (.claude-remote-off)
-#   other gh writes                 -> ask (default), deny (.claude-remote-off)
+#     writes                        -> allow (default), deny (.claude-remote-off)
+#   gh writes that delete, archive,
+#     transfer, publish, approve, or
+#     touch repo settings, access,
+#     releases, workflows, secrets
+#     or credentials                -> ask (default), deny (.claude-remote-off)
 #   gh pr create/edit whose title is
 #     not the branch's changelog.d
 #     fragment line (≤50), in a repo
 #     with changelog.d/README.md    -> deny (always)
-#   push to main/master or the
-#     default branch, gh pr merge   -> deny, always. No marker changes it.
+#   gh pr merge --squash
+#     --match-head-commit <sha> of
+#     your own green, CLEAN PR under
+#     /ftl ship --integrate         -> allow (default), deny (.claude-remote-off)
+#   any other gh pr merge, push to
+#     main/master or the default
+#     branch                        -> deny, always. No marker changes it.
 #   force-push, push of tags,
 #     --all/--mirror, a remote
 #     branch deletion               -> deny (always)
@@ -42,7 +50,7 @@
 #
 # Two per-repo opt-OUT markers, both files in the repo root. They tighten a
 # repo below the default; their absence is the permissive default:
-#   .claude-remote-off  push/gh writes allow/ask -> deny; gh reads stay allowed
+#   .claude-remote-off  push/gh writes/merge allow/ask -> deny; gh reads stay allowed
 #   .claude-merge-off   merge/rebase   allow     -> deny
 # Flip them with `claude-gate`.
 #
@@ -83,12 +91,8 @@ remote_off=0; merge_off=0
 [[ -n "$repo_root" && -f "$repo_root/.claude-merge-off"  ]] && merge_off=1
 cur=$(git -C "$gitdir" branch --show-current 2>/dev/null || true)
 
-remote_gate(){
-  if [[ "$remote_off" == 1 ]]; then
-    emit deny "$1 blocked — this repo is opted out (.claude-remote-off). Re-enable with: claude-gate remote on"
-  else
-    emit ask "$1 — needs approval."
-  fi
+remote_off_deny(){
+  emit deny "$1 blocked — this repo is opted out (.claude-remote-off). Re-enable with: claude-gate remote on"
 }
 
 # ── segment analysis ──
@@ -202,6 +206,8 @@ git_local_ok(){ # $1 = segment
   sub=$(git_sub_of "$1"); args=$(git_args_of "$1")
   case "$sub" in
     add|stage|commit|branch|merge|rebase|cherry-pick|revert|mv|am|apply|tag) return 0 ;;
+    # Every push and pull that reaches here is past its own deny rules.
+    push|pull) return 0 ;;
     reset)     ! has_opt "$args" '--hard|--merge' ;;
     switch)    ! has_opt "$args" '-[a-zA-Z]*f[a-zA-Z]*|--force|--discard-changes' ;;
     restore)   has_opt "$args" '-S|--staged' && ! has_opt "$args" '-W|--worktree' ;;
@@ -229,6 +235,7 @@ git_segment_ok(){
   sub=$(git_sub_of "$1"); args=$(git_args_of "$1")
   # --output sends log/diff/show output to a file.
   echo "$args" | grep -Eq -- '(^|[[:space:]])--output(=|[[:space:]])' && return 1
+  [[ "$sub" == reflog ]] && echo "$args" | grep -Eq '^(expire|delete)([[:space:]]|$)' && return 1
   [[ -n "$seg_extra_git" ]] && echo "$sub" | grep -Eq "^(${seg_extra_git})$" && return 0
   echo "$sub" | grep -Eq "^(${seg_git})$" && return 0
   [[ "$local_ok" == 1 ]] && git_local_ok "$1" && return 0
@@ -276,29 +283,86 @@ gh_api_words(){ # $1 = args after gh, starting with api
     } }'
 }
 
-gh_comment_id='([0-9]+|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})'
-gh_comment_path="(issues|pulls)/comments/${gh_comment_id}|(issues|pulls)/${gh_comment_id}/comments|pulls/${gh_comment_id}/comments/${gh_comment_id}/replies"
-
-# Posting, editing or replying to a comment through the REST API: one
-# endpoint, comment-shaped, and no method but POST or PATCH, so DELETE asks.
-gh_api_comment_write(){ # $1 = args after gh, starting with api
-  local words
-  words=$(gh_api_words "$1")
-  [[ $(echo "$words" | grep -c '^A ') == 1 ]] || return 1
-  echo "$words" | grep -Eq "^A /?repos/[^/[:space:]]+/[^/[:space:]]+/(${gh_comment_path})\$" || return 1
-  ! echo "$words" | grep '^M ' | grep -Eqvi '^M (POST|PATCH)$'
+# A gh api write that deletes, changes a repository's settings, access or
+# automation, or a graphql mutation that does. The method is the last -X; one
+# the gate cannot read counts as dangerous. The raw line is searched for the
+# endpoint, since a quoted one is blanked from the segment.
+gh_api_dangerous(){ # $1 = args after gh, starting with api
+  local method
+  method=$(gh_api_words "$1" | sed -n 's/^M //p' | tail -1 | tr '[:lower:]' '[:upper:]')
+  [[ -n "$method" && ! "$method" =~ ^(GET|POST|PATCH|PUT)$ ]] && return 0
+  echo "$cmd_no_prose" | grep -Eq "(^|[[:space:]\"'])/?repos/[^/[:space:]\"']+/[^/[:space:]\"']+/?([\"'[:space:]]|\$)|/transfer\b|/collaborators|/invitations|/keys\b|/hooks\b|/secrets|/variables|/rulesets|/protection|/environments|/actions/permissions" && return 0
+  echo "$cmd_no_prose" | grep -Eqi '\bmutation\b' \
+    && echo "$cmd_no_prose" | grep -Eq '\b(delete|archive|unarchive|transfer)[A-Z]|updateRepository|DeployKey|Collaborator|BranchProtection|Ruleset'
 }
 
-# Writes that open or edit a PR or say something on one: the PR's own fields
-# and comments. Deleting a comment, closing, reviewing and merging stay out.
+# Prints why a gh pr merge is refused and fails, or prints nothing. Claude
+# merges only in /ftl's integrate modes, which ftl-mode.sh records per session,
+# and only a PR the gh user authored once every check passed or skipped and
+# GitHub calls the merge CLEAN. --match-head-commit pins the merge to the head
+# checked here, so a push after the check makes GitHub refuse it. Any gh call
+# that fails refuses.
+merge_refusal(){
+  local session mode line sel="" repo="" sha="" squash=0 w view checks me
+  [[ "$remote_off" == 1 ]] && { echo "this repo is opted out (.claude-remote-off)"; return 1; }
+  session=$(echo "$input" | jq -r '.session_id // ""'); session=${session//[^a-zA-Z0-9_-]/}
+  [[ -n "$session" && -f "$HOME/.claude/hooks/state/ftl-mode-$session" ]] \
+    && IFS= read -r mode < "$HOME/.claude/hooks/state/ftl-mode-$session"
+  [[ "${mode:-}" == integrate || "${mode:-}" == task-ship ]] || { echo "this session is not in /ftl ship --integrate"; return 1; }
+  line=$(printf '%s' "$bare" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+  if [[ "$opaque" == 1 ]] || echo "$line" | grep -Eq '[;&|<>()`$]' \
+     || ! echo "$line" | grep -Eq '^gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
+    echo "it is not one lone gh pr merge command"; return 1
+  fi
+  read -ra w <<<"$(echo "$line" | sed -E 's/^gh[[:space:]]+pr[[:space:]]+merge//')"
+  set -- "${w[@]}"
+  while (($#)); do
+    case $1 in
+      -s|--squash) squash=1 ;;
+      --match-head-commit) sha=${2:-}; shift ;;
+      --match-head-commit=*) sha=${1#*=} ;;
+      -R|--repo) repo=${2:-}; shift ;;
+      --repo=*) repo=${1#*=} ;;
+      -*) echo "flag $1 is not allowed"; return 1 ;;
+      *) [[ -z "$sel" ]] || { echo "one PR at a time"; return 1; }; sel=$1 ;;
+    esac
+    shift
+  done
+  [[ "$squash" == 1 ]] || { echo "--squash is required"; return 1; }
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "--match-head-commit needs the full 40-character head sha"; return 1; }
+  [[ -n "$sel" ]] || { echo "name the PR"; return 1; }
+  w=(); [[ -n "$repo" ]] && w=(-R "$repo")
+  me=$(cd "$gitdir" 2>/dev/null && gh api user --jq .login 2>/dev/null) || me=""
+  view=$(cd "$gitdir" 2>/dev/null && gh pr view "$sel" "${w[@]}" --json author,state,isDraft,headRefOid,mergeStateStatus 2>/dev/null) || view=""
+  checks=$(cd "$gitdir" 2>/dev/null && gh pr checks "$sel" "${w[@]}" --json name,bucket 2>/dev/null) || true
+  [[ -n "$me" && -n "$view" ]] || { echo "gh could not read the PR or the gh user"; return 1; }
+  [[ "$(jq -r .author.login <<<"$view")" == "$me" ]] || { echo "the PR is $(jq -r .author.login <<<"$view")'s, not $me's"; return 1; }
+  [[ "$(jq -r '.state + " " + (.isDraft | tostring)' <<<"$view")" == "OPEN false" ]] || { echo "the PR is not open and ready"; return 1; }
+  [[ "$(jq -r .headRefOid <<<"$view")" == "$sha" ]] || { echo "the PR head is $(jq -r .headRefOid <<<"$view"), not $sha"; return 1; }
+  jq -e 'length > 0 and all(.bucket == "pass" or .bucket == "skipping")' <<<"${checks:-null}" >/dev/null 2>&1 \
+    || { echo "not every check has passed or skipped"; return 1; }
+  [[ "$(jq -r .mergeStateStatus <<<"$view")" =~ ^(CLEAN|HAS_HOOKS)$ ]] || { echo "mergeStateStatus is $(jq -r .mergeStateStatus <<<"$view")"; return 1; }
+}
+
+# A gh write is allowed unless it deletes, archives, transfers or renames,
+# changes repo settings, publishes a repo, gist, release or workflow run,
+# approves a PR, or touches credentials, secrets or extensions. Merging is
+# judged on its own below.
 gh_write_ok(){ # $1 = args after gh
   local sub act
   sub=$(echo "$1" | awk '{print $1}'); act=$(echo "$1" | awk '{print $2}')
+  case "$act" in delete|delete-*|archive|unarchive|transfer|rename) return 1 ;; esac
   case "$sub $act" in
-    "pr create"|"pr edit") return 0 ;;
+    "pr merge"|"pr update-branch"|"repo sync"|"repo edit") return 1 ;;
+    "pr close")                   ! has_opt "$1" '-d|--delete-branch' ;;
     "pr comment"|"issue comment") ! has_opt "$1" '--delete-last' ;;
-    "api "*) gh_api_comment_write "$1" ;;
-    *) return 1 ;;
+    "pr review")                  ! has_opt "$1" '-a|--approve' ;;
+    "pr checkout")                ! has_opt "$1" '-f|--force' ;;
+    "repo create")                ! has_opt "$1" '--public' ;;
+    "gist create")                ! has_opt "$1" '-p|--public' ;;
+    "api "*)                      ! gh_api_dangerous "$1" ;;
+    release\ *|workflow\ *|auth\ *|extension\ *|ssh-key\ *|gpg-key\ *|secret\ *|variable\ *|alias\ *) return 1 ;;
+    *) return 0 ;;
   esac
 }
 
@@ -331,15 +395,19 @@ gh_segment_ok(){
 }
 
 # Every gh command on the line, including one inside $(…) or backticks or on a
-# later line, is a read. A gh word that does not start its command, as in
-# `xargs gh …`, fails: the gate cannot see what runs it. Redirections like
-# 2>&1 are dropped first so their & cannot cut a gh command in two.
+# later line, is a read, or with seg_extra_gh set an allowed write. gh handed
+# to a runner, as in `xargs gh …`, fails: the gate cannot see what it runs. gh
+# as a plain argument, as in `brew upgrade gh`, is no gh command. Redirections
+# like 2>&1 are dropped first so their & cannot cut a gh command in two.
 gh_reads_only(){
-  local piece
+  local piece w
   while IFS= read -r piece; do
     echo "$piece" | grep -Eq '(^|[[:space:]])gh([[:space:]]|$)' || continue
     piece=$(echo "$piece" | sed -E 's/^[[:space:]]*((if|then|else|elif|do|while|until|time|!)[[:space:]]+)*//')
-    [[ "$(word_of "$piece")" == gh ]] && segment_ok "$piece" || return 1
+    w=$(word_of "$piece")
+    if [[ "$w" == gh ]]; then segment_ok "$piece" || return 1
+    else echo "$w" | grep -Eqx 'xargs|env|command|exec|nohup|timeout|watch|sudo|parallel|eval' && return 1
+    fi
   done < <(bare_and_bodies | sed -E 's/[0-9]*>&[0-9-]*//g; s/&>/>/g' | awk '{gsub(/\$\(|[;|&()`]/,"\n"); print}')
   return 0
 }
@@ -703,10 +771,10 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
     main|master|"") emit deny "push from main/master (or an undetermined branch) is human-only." ;;
   esac
   [[ "$cur" == "$default_branch" ]] && emit deny "push from the default branch '$cur' is human-only."
+  [[ "$remote_off" == 1 ]] && remote_off_deny "Remote write (push)"
   seg_extra_git='push'
-  [[ "$remote_off" != 1 ]] && can_allow && emit allow "git push of a feature branch."
+  can_allow && emit allow "git push of a feature branch."
   seg_extra_git=''
-  remote_gate "Remote write (push)"
 fi
 
 if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+commit\b'; then
@@ -724,11 +792,15 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
   seg_extra_git='pull'
   can_allow && emit allow "git pull writes only local history."
   seg_extra_git=''
-  remote_gate "Remote write (pull, compound command)"
 fi
 
-echo "$cmd_no_prose" | grep -Eq '\bgh\b[^|;&]*\bpr[[:space:]]+merge\b' && emit deny "gh pr merge is denied permanently — no marker file enables it.
-If YOU run this yourself: GitHub merges the PR head into its base branch ON THE SERVER, immediately, and with --delete-branch also deletes the head branch. There is no local undo — reversing it needs a revert PR."
+if echo "$cmd_no_prose" | grep -Eq '\bgh\b[^|;&]*\bpr[[:space:]]+merge\b'; then
+  if why=$(merge_refusal); then
+    emit allow "gh pr merge: your PR, every check green, merge state clean, head pinned."
+  fi
+  emit deny "gh pr merge refused: $why.
+Claude merges only under /ftl ship --integrate (or /ftl <task> --ship), a PR the gh user authored, every check passed or skipped, mergeStateStatus CLEAN, as one lone command: gh pr merge <pr> --squash --match-head-commit <full head sha>"
+fi
 echo "$cmd_no_prose" | grep -Eq '\bgh\b[^|;&]*\b(pr[[:space:]]+update-branch|repo[[:space:]]+sync)\b' \
   && emit deny "gh pr update-branch and gh repo sync write to a remote branch on the server — denied permanently. Run it yourself."
 # gh api defaults to GET; a field, an input file or another method makes it a
@@ -781,17 +853,14 @@ fi
 
 # ── gh ──
 #
-# A gh line not allowed above asks only for a gh command that is not a read.
-# A read chained to a command the gate does not know, or inside `$(…)`, falls
-# through to the rules below. Opening or editing a PR and posting or editing a
-# comment are allowed; merging a PR never is.
-if [[ "$remote_off" != 1 ]] \
-   && echo "$bare" | grep -Eq '(^|[[:space:]&|;(])gh[[:space:]]'; then
+# A gh write is allowed unless gh_write_ok calls it dangerous, which asks once
+# every deny is behind. seg_extra_gh stays set, so the local-write block can
+# allow a line that pairs a commit with a gh write.
+if ! gh_reads_only; then
+  [[ "$remote_off" == 1 ]] && remote_off_deny "gh write"
   seg_extra_gh=1
-  can_allow && emit allow "gh PR or comment write."
-  seg_extra_gh=''
+  can_allow && emit allow "gh write."
 fi
-gh_reads_only || remote_gate "gh CLI command"
 
 # ── merge / rebase ──
 #
@@ -815,7 +884,8 @@ fi
 # asks. The git-hook halves are post-checkout (a warning, because git cannot
 # veto a branch) and ownership_gate in pre-push (the clobber denial itself).
 #
-# Fails closed: an origin it cannot reach is an `ask`, not an `allow`.
+# An origin it cannot reach answers nothing, and pre-push still guards the
+# clobber.
 nb_args=""
 if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+worktree[[:space:]]+add\b'; then
   nb_args=$(echo "$cmd" | sed -E 's/.*worktree[[:space:]]+add([[:space:]]|$)//')
@@ -862,11 +932,6 @@ $prs
 To work on theirs:  git fetch origin && git switch $new_branch
 Otherwise pick a branch name that is yours alone."
 
-  elif [[ "$ls_rc" != 2 ]]; then
-    # 2 means the remote simply has no such branch. Anything else — no network,
-    # no such remote, auth failure — leaves the question unanswered.
-    emit ask "Could not reach origin to check whether '$new_branch' already exists there (git ls-remote exited $ls_rc).
-Approve only if you know that name is free. A duplicate of a teammate's branch is reconcilable only by a force-push."
   fi
 
   # A branch named for an issue claims that issue. Someone else's open PR or
@@ -887,11 +952,7 @@ Starting '$new_branch' duplicates it. Review or build on that PR's head instead:
       istate=${iv%%$'\t'*}; iassign=${iv#*$'\t'}
       if [[ "$istate" == "OPEN" ]]; then
         me=$(gh_in_repo api user --jq .login) || me=""
-        if [[ -z "$iassign" ]]; then
-          emit ask "issue #$issue is open and unassigned. Assign yourself first so nobody else picks it up:
-  gh issue edit $issue --add-assignee @me
-Approve to create '$new_branch' anyway."
-        elif [[ -z "$me" ]] || ! printf '%s' "$iassign" | tr ',' '\n' | grep -qxF "$me"; then
+        if [[ -n "$iassign" ]] && { [[ -z "$me" ]] || ! printf '%s' "$iassign" | tr ',' '\n' | grep -qxF "$me"; }; then
           emit deny "issue #$issue is assigned to $iassign, not you${me:+ ($me)}.
 Starting '$new_branch' duplicates their work. Ask them, or take an issue that is yours."
         fi
@@ -933,7 +994,8 @@ fi
 
 # Every deny is above this point, so asking here cannot mask one.
 [[ "$risk" == protected ]] && emit ask "Writes into or removes from .git, the Claude hooks or settings, git's global hooks, or a gate marker — needs approval."
-[[ "$staging" == "?" ]] && emit ask "git add/commit with a pathspec the gate cannot place in the repo — it may expand to the whole tree."
+seg_extra_gh=1
+gh_reads_only || emit ask "gh write that deletes, archives, transfers, publishes, approves, or touches repo settings, access, releases, workflows or credentials — needs approval."
 
 # ── local git writes ──
 #
@@ -950,21 +1012,21 @@ local_ok=0
 # Reads and plain local writes were allowed above; what is left discards work,
 # rewrites config, or is a shape the segment analysis could not clear. Every
 # git segment is judged, not just a leading one: `npm test && git restore f`
-# discards work as surely as the restore alone. On an opaque line the segments
-# cannot be trusted, so any local write there asks.
+# discards work as surely as the restore alone. An opaque line is judged the
+# same way: each substitution's commands are segments of their own, and what
+# the gate cannot see is left to Claude Code's own rules.
 
 if bare_and_bodies | grep -Eq '(^|[[:space:]&|;(])git([[:space:]]|$)'; then
   git_part_ok && exit 0
   while IFS= read -r seg; do
     seg=$(echo "$seg" | sed -E 's/^[[:space:]]*[({]?[[:space:]]*((if|then|else|elif|do|while|until|time|!)[[:space:]]+)*//')
     [[ "$(word_of "$seg")" == git ]] || continue
-    if [[ "$opaque" != 1 ]]; then
-      local_ok=1; git_segment_ok "$seg" && { local_ok=0; continue; }; local_ok=0
-    fi
+    local_ok=1; git_segment_ok "$seg" && { local_ok=0; continue; }; local_ok=0
     sub=$(git_sub_of "$seg")
     case "$sub" in
-      add|stage|commit|switch|checkout|restore|reset|merge|rebase|cherry-pick|revert|rm|mv|am|apply|submodule|clean)
+      add|stage|commit|switch|checkout|restore|reset|merge|rebase|cherry-pick|revert|rm|mv|am|apply|submodule|clean|reflog|update-ref|prune|filter-branch|filter-repo)
         emit ask "Local git write ($sub) — needs approval." ;;
+      gc) has_opt "$(git_args_of "$seg")" '--prune(=[^[:space:]]*)?' && emit ask "git gc --prune can drop unreachable commits — needs approval." ;;
       worktree|branch|config|remote|stash)
         git_segment_ok "$seg" || emit ask "Local git write ($sub) — needs approval." ;;
     esac

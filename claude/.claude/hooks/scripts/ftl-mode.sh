@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ftl-mode.sh — UserPromptExpansion and PreToolUse(Skill). Records which /ftl
 # mode the session is in, and the prompt that started it, for
-# ftl-stop-gate.sh. Two events because each sees one way in only: a typed /ftl
+# ftl-stop-gate.sh and bash-write-gate.sh's merge check. Two events because each sees one way in only: a typed /ftl
 # expands without a Skill tool call, and a Skill call by Claude never expands
 # a prompt.
 # Kill switch: ~/.claude/hooks/.no-ftl-mode

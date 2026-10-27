@@ -36,7 +36,6 @@
       "ListAgents",
       "SendFeedback",
       "ScheduleWakeup",
-      "Bash(gh pr merge:*)",
       "Bash(git reset --hard:*)",
       "Bash(git add -A:*)",
       "Bash(git add --all:*)",
@@ -50,8 +49,7 @@
       "Bash(shred:*)"
     ],
     "ask": [
-      "Bash(git rm:*)",
-      "Bash(rmdir:*)"
+      "Bash(git rm:*)"
     ],
     "defaultMode": "auto",
     "additionalDirectories": [
@@ -122,16 +120,6 @@
             "type": "command",
             "command": "~/.claude/hooks/scripts/pr-size-gate.sh",
             "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/scripts/agent-ask-gate.sh",
-            "timeout": 5
           }
         ]
       },
@@ -291,7 +279,7 @@
       "**Primary use of Claude Code**: software development",
       "**Trusted repo**: CloudKey-io/core (this checkout and its origin remote), private — confidential material (non-secret) is fine to commit here; secrets and personal/regulated data are never cleared into it by visibility alone",
       "**Org-specific CLIs**: None configured",
-      "**routine under CloudKey-io/core prefix**: every git command and `rm` runs without a prompt, subject to the write gate. It asks for `git rm`, what discards uncommitted work (`restore`, a path `checkout`, a forced `switch`/`worktree remove`, `stash drop|clear`), `config` and `remote` writes, `--no-verify`, a pathspec it cannot place in the repo (for example `$var`, `~`, a `..` climb, an absolute path outside it, `--pathspec-from-file`, exclude or attr magic), and an `rm` or write into `.git`, the Claude hooks or settings, `~/.config/git` or a gate marker. It denies bulk staging (`git add -A`/`-u` or a whole-tree pathspec like `.`, `./`, `:/`, `*`; `git commit -a` in any flag cluster or with such a pathspec), a commit on main/master, `reset --hard`, `clean -f` and `rm -rf`. Read-only `gh` commands (view, list, diff, checks, status, watch, search, a GET or graphql query via `gh api`) run without a prompt, inside `$(…)` too. `git push` of a feature branch, `gh pr create`/`edit`, `gh pr`/`issue comment` and a comment post, edit or reply through `gh api` run without a prompt; other mutating `gh` commands ask; a push to main/master or the default branch, a force-push, a tag push and `gh pr merge` are permanently denied; `git pull`, `git tag` and a merge or rebase onto `origin/…` are local and run without a prompt unless the repo opts out with `.claude-merge-off`"
+      "**routine under CloudKey-io/core prefix**: every git command and `rm` runs without a prompt, subject to the write gate. It asks for `git rm`, what discards uncommitted work (`restore`, a path `checkout`, a forced `switch`/`worktree remove`, `stash drop|clear`), `reflog expire`, `update-ref`, `gc --prune`, `filter-branch`, `config` and `remote` writes, `--no-verify`, a switch that carries a dirty tree, and an `rm` or write into `.git`, the Claude hooks or settings, `~/.config/git` or a gate marker. It denies bulk staging (`git add -A`/`-u` or a whole-tree pathspec like `.`, `./`, `:/`, `*`; `git commit -a` in any flag cluster or with such a pathspec), a commit on main/master, `reset --hard`, `clean -f` and `rm -rf`. Read-only `gh` commands (view, list, diff, checks, status, watch, search, a GET or graphql query via `gh api`) run without a prompt, inside `$(…)` too. `git push` of a feature branch and `gh` writes run without a prompt; a `gh` write that deletes, archives, transfers, publishes, approves or touches repo settings, access, secrets or credentials asks; gh pr merge runs only under /ftl ship --integrate on your own PR with every check green and merge state CLEAN; a push to main/master or the default branch, a force-push and a tag push are permanently denied; `git pull`, `git tag` and a merge or rebase onto `origin/…` are local and run without a prompt unless the repo opts out with `.claude-merge-off`"
     ]
   },
   "voiceEnabled": true
