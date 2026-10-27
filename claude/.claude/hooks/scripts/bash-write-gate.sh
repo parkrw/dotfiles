@@ -133,7 +133,23 @@ echo "$bare"    | grep -Eq '>\(|<\('             && opaque=1
 echo "$bare"    | grep -Eq '(^|[^&>])&([^&>]|$)' && opaque=1
 [[ "$cmd" == *$'\n'* ]] && opaque=1
 
-segments(){ echo "$bare" | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}'; }
+# bare blanks a double-quoted "$(…)", but the shell still runs it. Each
+# substitution body, at any depth, is a command of its own: printed one per
+# line with its own quoted text blanked.
+subst_bodies(){
+  printf '%s\n' "$bare_dq" | awk '
+    { s = $0; n = length(s); top = 0; tick = 0
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "`") { if (tick) print substr(s, tick + 1, i - tick - 1); tick = tick ? 0 : i }
+        else if (c == "$" && substr(s, i + 1, 1) == "(") { st[++top] = i + 2; i++ }
+        else if (c == "(" && top) st[++top] = 0
+        else if (c == ")" && top) { b = st[top--]; if (b) print substr(s, b, i - b) }
+      } }' | while IFS= read -r body; do blank_quotes "$body"; done
+}
+bare_and_bodies(){ echo "$bare"; if [[ "$opaque" == 1 ]]; then subst_bodies; fi; }
+
+segments(){ bare_and_bodies | awk '{gsub(/\|\||&&|;|\|/,"\n"); print}'; }
 
 word_of(){ echo "$1" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*([[:space:]]+|$))*//' | awk '{print $1}'; }
 git_global='(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+|--no-pager|--paginate|-p)[[:space:]]+'
@@ -156,6 +172,10 @@ seg_git='status|log|diff|show|reflog|shortlog|whatchanged|blame|describe|rev-par
 # marker rules adds it here before asking whether the rest of the line is safe.
 seg_extra_git=''
 seg_extra_gh=''
+# gh api's method and field flags in every spelling pflag takes: -XPUT, -X=PUT,
+# --method PUT, -ftitle=x, a short cluster such as -iF.
+gh_method='(^|[[:space:]])(-[a-zA-Z]*X[[:space:]]*=?|--method([[:space:]]+|=))'
+gh_field='(^|[[:space:]])(-[a-zA-Z]*[fF]|--field|--raw-field)'
 # Set by the local-write block once every deny and deliberate ask is behind it.
 local_ok=0
 
@@ -214,7 +234,7 @@ git_segment_ok(){
 
 gh_segment_ok(){
   [[ -n "$seg_extra_gh" ]] && echo "$1" | grep -Eq '^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' && return 0
-  local rest sub act method='(^|[[:space:]])(-X[[:space:]]*=?|--method([[:space:]]+|=))'
+  local rest sub act
   rest=$(echo "$1" | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*gh[[:space:]]+((-R|--repo|--hostname)([[:space:]]+|=)[^[:space:]]+[[:space:]]+)*//')
   sub=$(echo "$rest" | awk '{print $1}'); act=$(echo "$rest" | awk '{print $2}')
   case "$sub" in
@@ -230,11 +250,11 @@ gh_segment_ok(){
     # graphql is still a read unless the query is a mutation. The query sits
     # in quotes, so the raw line is searched; one read from a file is unseen.
     api)
-      if echo "$rest" | grep -Eq -- "$method"; then
-        echo "$rest" | grep -Eqi -- "${method}GET([[:space:]]|\$)"; return
+      if echo "$rest" | grep -Eq -- "$gh_method"; then
+        echo "$rest" | grep -Eqi -- "${gh_method}GET([[:space:]]|\$)"; return
       fi
       echo "$rest" | grep -Eq -- '(^|[[:space:]])--input([[:space:]=]|$)' && return 1
-      echo "$rest" | grep -Eq -- '(^|[[:space:]])(-[a-zA-Z]*[fF]|--field|--raw-field)' || return 0
+      echo "$rest" | grep -Eq -- "$gh_field" || return 0
       [[ "$act" == graphql ]] && ! echo "$cmd" | grep -Eqi '\bmutation\b|=@'; return ;;
   esac
   return 1
@@ -250,7 +270,7 @@ gh_reads_only(){
     echo "$piece" | grep -Eq '(^|[[:space:]])gh([[:space:]]|$)' || continue
     piece=$(echo "$piece" | sed -E 's/^[[:space:]]*((if|then|else|elif|do|while|until|time|!)[[:space:]]+)*//')
     [[ "$(word_of "$piece")" == gh ]] && segment_ok "$piece" || return 1
-  done < <(echo "$bare" | sed -E 's/[0-9]*>&[0-9-]*//g; s/&>/>/g' | awk '{gsub(/\$\(|[;|&()`]/,"\n"); print}')
+  done < <(bare_and_bodies | sed -E 's/[0-9]*>&[0-9-]*//g; s/&>/>/g' | awk '{gsub(/\$\(|[;|&()`]/,"\n"); print}')
   return 0
 }
 
@@ -348,30 +368,6 @@ can_allow(){
     segment_ok "$seg" || return 1
   done < <(segments)
   return 0
-}
-
-# A line that chains a read to a write asks as a whole, and a refusal drops the
-# read with it; split, the read runs unprompted. A list element is a read when
-# every pipeline stage is one and a stage does more than move or print. The
-# blocks' own seg_extra grants are not reads here.
-reads_beside_a_write(){
-  [[ "$opaque" == 1 ]] && return 1
-  local seg_extra_git='' seg_extra_gh='' local_ok=0
-  local el stage w reads=0 writes=0 is_read real
-  while IFS= read -r el; do
-    [[ -z "${el//[[:space:]]/}" ]] && continue
-    case "$(word_of "$el")" in for|while|until|if|case|do|then|else|elif|fi|done|esac) return 1 ;; esac
-    is_read=1; real=0
-    while IFS= read -r stage; do
-      if ! segment_ok "$stage" || writes_a_file "$stage"; then is_read=0; break; fi
-      w=$(word_of "$(echo "$stage" | sed -E 's/^[[:space:]]*[({][[:space:]]*//')")
-      case "$w" in cd|echo|printf|true|false|:|pwd|date|sleep|test|\[|\[\[|read) ;; *) real=1 ;; esac
-    done < <(echo "$el" | tr '|' '\n')
-    if [[ "$is_read" == 0 ]]; then writes=1
-    elif [[ "$real" == 1 ]]; then reads=1
-    fi
-  done < <(echo "$bare" | awk '{gsub(/\|\||&&|;/,"\n"); print}')
-  [[ "$reads" == 1 && "$writes" == 1 ]]
 }
 
 # ── DENY backstop (always, no opt-in) ──
@@ -669,8 +665,8 @@ echo "$cmd" | grep -Eq '\bgh\b[^|;&]*\b(pr[[:space:]]+update-branch|repo[[:space
 # write. These endpoints and mutations move a branch or commit onto one.
 if echo "$cmd" | grep -Eq '\bgh\b[^|;&]*\bapi\b' \
    && echo "$cmd" | grep -Eq '(git/refs|/merges\b|/merge-upstream|/branches/|/pulls/[^/[:space:]]+/(merge|update-branch)|/contents/|mergePullRequest|mergeBranch|(create|update|delete)Refs?\b|createCommitOnBranch|enablePullRequestAutoMerge|updatePullRequestBranch)' \
-   && echo "$cmd" | grep -Eq -- '(^|[[:space:]])(-f|-F|--field|--raw-field|--input|-X|--method)([[:space:]=]|$)' \
-   && ! echo "$cmd" | grep -Eq -- '(^|[[:space:]])(-X|--method)([[:space:]]+|=)GET([[:space:]]|$)'; then
+   && echo "$cmd" | grep -Eq -- "$gh_method|$gh_field|(^|[[:space:]])--input([[:space:]=]|\$)" \
+   && ! echo "$cmd" | grep -Eqi -- "${gh_method}GET([[:space:]]|\$)"; then
   emit deny "gh api write to a ref, merge, branch or contents endpoint moves a remote branch — denied permanently. Run it yourself."
 fi
 echo "$cmd" | grep -Eq '\bgit\b.*\breset\b.*--hard'          && emit deny "git reset --hard discards work — run it yourself."
@@ -886,7 +882,7 @@ local_ok=0
 # discards work as surely as the restore alone. On an opaque line the segments
 # cannot be trusted, so any local write there asks.
 
-if echo "$bare" | grep -Eq '(^|[[:space:]&|;(])git([[:space:]]|$)'; then
+if bare_and_bodies | grep -Eq '(^|[[:space:]&|;(])git([[:space:]]|$)'; then
   git_part_ok && exit 0
   while IFS= read -r seg; do
     seg=$(echo "$seg" | sed -E 's/^[[:space:]]*[({]?[[:space:]]*((if|then|else|elif|do|while|until|time|!)[[:space:]]+)*//')
