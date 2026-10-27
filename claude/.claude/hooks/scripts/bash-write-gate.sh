@@ -27,6 +27,10 @@
 #   push of a feature branch, gh
 #     pr create                     -> allow (default), deny (.claude-remote-off)
 #   other gh writes                 -> ask (default), deny (.claude-remote-off)
+#   gh pr create/edit whose title is
+#     not the branch's changelog.d
+#     fragment line (≤50), in a repo
+#     with changelog.d/README.md    -> deny (always)
 #   push to main/master or the
 #     default branch, gh pr merge   -> deny, always. No marker changes it.
 #   force-push, push of tags,
@@ -656,6 +660,32 @@ echo "$cmd" | grep -Eq '\bshred\b'                           && emit deny "shred
 # to Claude Code's own permission rules.
 if echo "$bare" | grep -Eq '(^|[[:space:]&|;(`])(git|gh)([[:space:]]|$)' && can_allow; then
   emit allow "Read-only git/gh command."
+fi
+
+# ── PR title ──
+#
+# In a repo with changelog fragments the squash merge lands the PR title, and
+# the lead's convention is that the title is the branch's fragment line, word
+# for word, at most 50 characters. A title copied from a commit subject drifts.
+if [[ -n "$repo_root" && -f "$repo_root/changelog.d/README.md" ]] \
+   && echo "$bare" | grep -Eq '(^|[[:space:]&|;(])gh[[:space:]]+pr[[:space:]]+(create|edit)([[:space:]]|$)'; then
+  pr_verb=$(echo "$bare" | sed -nE 's/.*gh[[:space:]]+pr[[:space:]]+(create|edit).*/\1/p')
+  has_title=0
+  echo "$bare" | grep -Eq -- '(^|[[:space:]])(--title|-t)([[:space:]=]|$)' && has_title=1
+  title=$(printf '%s' "$cmd" | perl -ne 'if (/(?:^|\s)(?:--title|-t)(?:=|\s+)(?:\x27([^\x27]*)\x27|"([^"]*)"|(\S+))/) { print defined $1 ? $1 : defined $2 ? $2 : $3; exit }')
+  if [[ "$pr_verb" == create || "$has_title" == 1 ]]; then
+    base=$(git -C "$gitdir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)
+    lines=""
+    while IFS= read -r f; do
+      [[ -n "$f" && "$f" != changelog.d/README.md ]] && lines+="$(head -n1 "$repo_root/$f")"$'\n'
+    done < <(git -C "$gitdir" diff --name-only --diff-filter=A "$base"...HEAD -- 'changelog.d/*.md' 2>/dev/null)
+    lines="${lines%$'\n'}"
+    [[ -z "$lines" ]] && emit deny "gh pr $pr_verb: this branch adds no changelog.d fragment. Write the fragment first; the PR title is its line, word for word."
+    [[ "$has_title" == 0 ]] && emit deny "gh pr create needs --title set to the changelog fragment line, word for word: $lines"
+    (( ${#title} > 50 )) && emit deny "PR title is ${#title} characters; the limit is 50. Use the changelog fragment line: $lines"
+    printf '%s\n' "$lines" | grep -Fxq -- "$title" \
+      || emit deny "PR title must be the changelog fragment line, word for word. Title: '$title'. Fragment: $lines"
+  fi
 fi
 
 # ── gh ──

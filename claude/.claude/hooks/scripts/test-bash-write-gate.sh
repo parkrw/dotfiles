@@ -75,6 +75,28 @@ check "worktree add of a taken branch allowed"    "$T/repoC" "git worktree add -
 check "worktree add off a remote ref allowed"     "$T/repoC" "git worktree add -b wt-new $T/repoC-wt-new origin/main" allow
 check "worktree add then remove --force asks"     "$T/repoC" "git worktree add -b wt-new $T/repoC-wt-new HEAD && git worktree remove --force $T/exists" ask
 
+# In a repo with changelog fragments, the PR title is the branch's fragment
+# line, word for word, at most 50 characters.
+mkrepo "$T/repoE" main
+mkdir "$T/repoE/changelog.d" && echo spec > "$T/repoE/changelog.d/README.md"
+git -C "$T/repoE" add changelog.d/README.md
+git -C "$T/repoE" -c user.email=t@t -c user.name=t commit -q -m readme
+git -C "$T/repoE" update-ref refs/remotes/origin/main main
+git -C "$T/repoE" switch -q -c feat/frag
+check "pr title without a fragment denied"        "$T/repoE" "gh pr create --title 'web: x' --body-file /tmp/b.md" deny
+echo 'web: Overview leads with what needs you' > "$T/repoE/changelog.d/frag.md"
+git -C "$T/repoE" add changelog.d/frag.md
+git -C "$T/repoE" -c user.email=t@t -c user.name=t commit -q -m frag
+check "pr title = fragment line allowed"          "$T/repoE" "gh pr create --title 'web: Overview leads with what needs you' --body-file /tmp/b.md" allow
+check "pr title in double quotes allowed"         "$T/repoE" 'gh pr create --title "web: Overview leads with what needs you" --body-file /tmp/b.md' allow
+check "pr title = commit subject denied"          "$T/repoE" "gh pr create --title 'web: Platform overview, storage, data centers table' --body-file /tmp/b.md" deny
+check "pr title over 50 denied"                   "$T/repoE" "gh pr create -t 'web: Overview leads with what needs you, and much more' --body-file /tmp/b.md" deny
+check "pr create without --title denied"          "$T/repoE" 'gh pr create --fill' deny
+check "pr edit to another title denied"           "$T/repoE" "gh pr edit 7 --title 'web: something else'" deny
+check "pr edit to the fragment line asks"         "$T/repoE" "gh pr edit 7 --title 'web: Overview leads with what needs you'" ask
+check "pr edit of the body alone asks"            "$T/repoE" 'gh pr edit 7 --body-file /tmp/b.md' ask
+check "pr create in a repo without fragments"     "$T/repoB" "gh pr create --title 'anything goes here, at any length at all, really' --body x" allow
+
 echo "---"
 echo "$pass passed, $fail failed"
 exit $((fail > 0))
