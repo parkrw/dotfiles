@@ -40,7 +40,7 @@
 #
 # Two per-repo opt-OUT markers, both files in the repo root. They tighten a
 # repo below the default; their absence is the permissive default:
-#   .claude-remote-off  push/gh        allow/ask -> deny
+#   .claude-remote-off  push/gh writes allow/ask -> deny; gh reads stay allowed
 #   .claude-merge-off   merge/rebase   allow     -> deny
 # Flip them with `claude-gate`.
 #
@@ -213,28 +213,45 @@ git_segment_ok(){
 }
 
 gh_segment_ok(){
-  [[ "$remote_off" == 1 ]] && return 1
   [[ -n "$seg_extra_gh" ]] && echo "$1" | grep -Eq '^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' && return 0
-  local rest sub act
-  rest=$(echo "$1" | sed -E 's/^[[:space:]]*gh[[:space:]]+((-R|--repo|--hostname)[[:space:]]+[^[:space:]]+[[:space:]]+)*//')
+  local rest sub act method='(^|[[:space:]])(-X[[:space:]]*=?|--method([[:space:]]+|=))'
+  rest=$(echo "$1" | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*gh[[:space:]]+((-R|--repo|--hostname)([[:space:]]+|=)[^[:space:]]+[[:space:]]+)*//')
   sub=$(echo "$rest" | awk '{print $1}'); act=$(echo "$rest" | awk '{print $2}')
   case "$sub" in
-    pr|issue)                  case "$act" in view|list|diff|checks|status) return 0 ;; esac ;;
-    run|repo|workflow|release) case "$act" in view|list) return 0 ;; esac ;;
-    label)                     case "$act" in list|"") return 0 ;; esac ;;
-    auth)                      [[ "$act" == status ]] && return 0 ;;
-    search|status|version|--version|help) return 0 ;;
-    # gh api defaults to GET; a field, an input file or another method turns
-    # it into a write.
+    pr)    case "$act" in view|list|ls|diff|checks|status) return 0 ;; esac ;;
+    issue) case "$act" in view|list|ls|status) return 0 ;; esac ;;
+    run)   case "$act" in view|list|ls|watch) return 0 ;; esac ;;
+    repo|workflow|release|label|gist|codespace|ruleset|project|org|extension|alias|cache|secret|variable|config|gpg-key|ssh-key)
+           case "$act" in view|list|ls|get|check|field-list|item-list) return 0 ;; esac ;;
+    auth)  [[ "$act" == status ]] && return 0 ;;
+    search|status|browse|version|--version|help|completion) return 0 ;;
+    # gh api defaults to GET, and under -X GET its fields are query
+    # parameters. Otherwise a field or an input file makes it a POST, which on
+    # graphql is still a read unless the query is a mutation. The query sits
+    # in quotes, so the raw line is searched; one read from a file is unseen.
     api)
-      echo "$rest" | grep -Eq -- '(^|[[:space:]])(-f|-F|--field|--raw-field|--input)([[:space:]=]|$)' && return 1
-      if echo "$rest" | grep -Eq -- '(^|[[:space:]])(-X|--method)([[:space:]]+|=)'; then
-        echo "$rest" | grep -Eq -- '(^|[[:space:]])(-X|--method)([[:space:]]+|=)GET([[:space:]]|$)' && return 0
-        return 1
+      if echo "$rest" | grep -Eq -- "$method"; then
+        echo "$rest" | grep -Eqi -- "${method}GET([[:space:]]|\$)"; return
       fi
-      return 0 ;;
+      echo "$rest" | grep -Eq -- '(^|[[:space:]])--input([[:space:]=]|$)' && return 1
+      echo "$rest" | grep -Eq -- '(^|[[:space:]])(-[a-zA-Z]*[fF]|--field|--raw-field)' || return 0
+      [[ "$act" == graphql ]] && ! echo "$cmd" | grep -Eqi '\bmutation\b|=@'; return ;;
   esac
   return 1
+}
+
+# Every gh command on the line, including one inside $(…) or backticks or on a
+# later line, is a read. A gh word that does not start its command, as in
+# `xargs gh …`, fails: the gate cannot see what runs it. Redirections like
+# 2>&1 are dropped first so their & cannot cut a gh command in two.
+gh_reads_only(){
+  local piece
+  while IFS= read -r piece; do
+    echo "$piece" | grep -Eq '(^|[[:space:]])gh([[:space:]]|$)' || continue
+    piece=$(echo "$piece" | sed -E 's/^[[:space:]]*((if|then|else|elif|do|while|until|time|!)[[:space:]]+)*//')
+    [[ "$(word_of "$piece")" == gh ]] && segment_ok "$piece" || return 1
+  done < <(echo "$bare" | sed -E 's/[0-9]*>&[0-9-]*//g; s/&>/>/g' | awk '{gsub(/\$\(|[;|&()`]/,"\n"); print}')
+  return 0
 }
 
 segment_ok(){
@@ -698,16 +715,16 @@ fi
 
 # ── gh ──
 #
-# A gh line not allowed above is a remote write or a shape the segment
-# analysis does not recognise, such as `$(gh …)`. Opening a PR is allowed;
-# merging one never is.
+# A gh line not allowed above asks only for a gh command that is not a read.
+# A read chained to a command the gate does not know, or inside `$(…)`, falls
+# through to the rules below. Opening a PR is allowed; merging one never is.
 if [[ "$remote_off" != 1 ]] \
    && echo "$bare" | grep -Eq '(^|[[:space:]&|;(])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
   seg_extra_gh=1
   can_allow && emit allow "gh pr create."
   seg_extra_gh=''
 fi
-echo "$bare" | grep -Eq '(^|[[:space:]&|;(`])gh([[:space:]]|$)' && remote_gate "gh CLI command"
+gh_reads_only || remote_gate "gh CLI command"
 
 # ── merge / rebase ──
 #
