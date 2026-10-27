@@ -25,7 +25,9 @@
 #     someone else's                -> deny (always)
 #   merge/rebase, other pulls       -> allow (default), deny (.claude-merge-off)
 #   push of a feature branch, gh
-#     pr create                     -> allow (default), deny (.claude-remote-off)
+#     pr create/edit, gh pr/issue
+#     comment, gh api comment
+#     post/edit/reply               -> allow (default), deny (.claude-remote-off)
 #   other gh writes                 -> ask (default), deny (.claude-remote-off)
 #   gh pr create/edit whose title is
 #     not the branch's changelog.d
@@ -232,10 +234,68 @@ git_segment_ok(){
   esac
 }
 
+# gh api's arguments after `api`, one per line: `M <method>` for each method
+# flag and `A <arg>` for each positional, every flag's value skipped so a
+# header or field cannot pass for the endpoint.
+gh_api_words(){ # $1 = args after gh, starting with api
+  echo "$1" | awk '{
+    for (i = 2; i <= NF; i++) {
+      w = $i
+      if (w ~ /^--/) {
+        n = w; v = ""; inline = index(w, "=")
+        if (inline) { n = substr(w, 1, inline - 1); v = substr(w, inline + 1) }
+        if (n ~ /^--(method|field|raw-field|header|input|jq|template|cache|preview|hostname)$/) {
+          if (!inline) v = $(++i)
+          if (n == "--method") print "M " v
+        }
+        continue
+      }
+      if (w ~ /^-./) {
+        for (j = 2; j <= length(w); j++) {
+          c = substr(w, j, 1)
+          if (c ~ /[XFfHqtp]/) {
+            v = substr(w, j + 1); sub(/^=/, "", v)
+            if (v == "") v = $(++i)
+            if (c == "X") print "M " v
+            break
+          }
+        }
+        continue
+      }
+      print "A " w
+    } }'
+}
+
+gh_comment_id='([0-9]+|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})'
+gh_comment_path="(issues|pulls)/comments/${gh_comment_id}|(issues|pulls)/${gh_comment_id}/comments|pulls/${gh_comment_id}/comments/${gh_comment_id}/replies"
+
+# Posting, editing or replying to a comment through the REST API: one
+# endpoint, comment-shaped, and no method but POST or PATCH, so DELETE asks.
+gh_api_comment_write(){ # $1 = args after gh, starting with api
+  local words
+  words=$(gh_api_words "$1")
+  [[ $(echo "$words" | grep -c '^A ') == 1 ]] || return 1
+  echo "$words" | grep -Eq "^A /?repos/[^/[:space:]]+/[^/[:space:]]+/(${gh_comment_path})\$" || return 1
+  ! echo "$words" | grep '^M ' | grep -Eqvi '^M (POST|PATCH)$'
+}
+
+# Writes that open or edit a PR or say something on one: the PR's own fields
+# and comments. Deleting a comment, closing, reviewing and merging stay out.
+gh_write_ok(){ # $1 = args after gh
+  local sub act
+  sub=$(echo "$1" | awk '{print $1}'); act=$(echo "$1" | awk '{print $2}')
+  case "$sub $act" in
+    "pr create"|"pr edit") return 0 ;;
+    "pr comment"|"issue comment") ! has_opt "$1" '--delete-last' ;;
+    "api "*) gh_api_comment_write "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
 gh_segment_ok(){
-  [[ -n "$seg_extra_gh" ]] && echo "$1" | grep -Eq '^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' && return 0
   local rest sub act
   rest=$(echo "$1" | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*gh[[:space:]]+((-R|--repo|--hostname)([[:space:]]+|=)[^[:space:]]+[[:space:]]+)*//')
+  [[ -n "$seg_extra_gh" ]] && gh_write_ok "$rest" && return 0
   sub=$(echo "$rest" | awk '{print $1}'); act=$(echo "$rest" | awk '{print $2}')
   case "$sub" in
     pr)    case "$act" in view|list|ls|diff|checks|status) return 0 ;; esac ;;
@@ -713,11 +773,12 @@ fi
 #
 # A gh line not allowed above asks only for a gh command that is not a read.
 # A read chained to a command the gate does not know, or inside `$(…)`, falls
-# through to the rules below. Opening a PR is allowed; merging one never is.
+# through to the rules below. Opening or editing a PR and posting or editing a
+# comment are allowed; merging a PR never is.
 if [[ "$remote_off" != 1 ]] \
-   && echo "$bare" | grep -Eq '(^|[[:space:]&|;(])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
+   && echo "$bare" | grep -Eq '(^|[[:space:]&|;(])gh[[:space:]]'; then
   seg_extra_gh=1
-  can_allow && emit allow "gh pr create."
+  can_allow && emit allow "gh PR or comment write."
   seg_extra_gh=''
 fi
 gh_reads_only || remote_gate "gh CLI command"

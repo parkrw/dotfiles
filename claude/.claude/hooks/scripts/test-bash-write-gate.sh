@@ -85,8 +85,8 @@ check "pr title = commit subject denied"          "$T/repoE" "gh pr create --tit
 check "pr title over 50 denied"                   "$T/repoE" "gh pr create -t 'web: Overview leads with what needs you, and much more' --body-file /tmp/b.md" deny
 check "pr create without --title denied"          "$T/repoE" 'gh pr create --fill' deny
 check "pr edit to another title denied"           "$T/repoE" "gh pr edit 7 --title 'web: something else'" deny
-check "pr edit to the fragment line asks"         "$T/repoE" "gh pr edit 7 --title 'web: Overview leads with what needs you'" ask
-check "pr edit of the body alone asks"            "$T/repoE" 'gh pr edit 7 --body-file /tmp/b.md' ask
+check "pr edit to the fragment line allowed"      "$T/repoE" "gh pr edit 7 --title 'web: Overview leads with what needs you'" allow
+check "pr edit of the body alone allowed"         "$T/repoE" 'gh pr edit 7 --body-file /tmp/b.md' allow
 check "pr create in a repo without fragments"     "$T/repoB" "gh pr create --title 'anything goes here, at any length at all, really' --body x" allow
 
 echo "---"

@@ -39,7 +39,7 @@
 - Commit before a merge or rebase.
 - Rebase only an unpushed branch. A pushed branch takes `git merge <default>` so review comments keep their shas.
 - Read-only git and gh commands (log, diff, status, show, blame, pr view, issue list, etc.) run without a prompt.
-- `git push` of a feature branch and `gh pr create` run without a prompt. A push to `main`/`master` or the default branch, a force-push, a tag push, a remote branch deletion, and `gh pr merge` are denied. Other mutating `gh` commands ask. `git pull --ff-only` is allowed even under `.claude-merge-off`: it advances a branch pointer or fails, so it can neither write a merge commit nor rewrite a sha.
+- `git push` of a feature branch, `gh pr create`/`edit`, `gh pr`/`issue comment` and a comment post, edit or reply through `gh api` run without a prompt. A push to `main`/`master` or the default branch, a force-push, a tag push, a remote branch deletion, and `gh pr merge` are denied. Other mutating `gh` commands ask, deleting a comment among them. `git pull --ff-only` is allowed even under `.claude-merge-off`: it advances a branch pointer or fails, so it can neither write a merge commit nor rewrite a sha.
 - Never work around a gate. `--no-verify`, a repo-local `core.hooksPath`, and hand-writing or deleting a marker file are all off limits; ask me instead.
 - Never edit `CHANGELOG.md` directly, in any repo; a change adds a `changelog.d/<slug>.md` fragment. A repo without fragment tooling gets it set up the way CloudKey core does (`/ftl` Check section 5).
 
@@ -49,7 +49,7 @@
 
 | Toggle | Default | On | Off |
 | --- | --- | --- | --- |
-| `remote` | on | feature-branch `git push` and `gh pr create` allowed; other `gh` writes ask | all denied |
+| `remote` | on | feature-branch `git push`, PR create/edit and comments allowed; other `gh` writes ask | all denied |
 | `merge` | on | **local** merge/rebase allowed | both denied |
 | `review` | off | push denied until the branch diff passes a fresh-context review | no review required |
 | `ftl` | off | every prompt that is not a slash command is told to run through `/ftl` | prompts run as typed |

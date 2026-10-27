@@ -2,7 +2,8 @@
 # claude-gate — show and flip the per-repo Claude permission toggles.
 #
 #   claude-gate                 status for this repo
-#   claude-gate remote on|off   feature-branch push, gh pr create: allow <-> deny;
+#   claude-gate remote on|off   feature-branch push, PR create/edit, comments:
+#                               allow <-> deny;
 #                               other gh writes: ask <-> deny       (default on)
 #   claude-gate merge  on|off   merge/rebase:        allow <-> deny (default on)
 #   claude-gate review on|off   require a fresh-context review before push
@@ -53,7 +54,7 @@ state() {
 
 describe() {
   case $1 in
-    remote) echo "push / gh:            on = allow feature-branch push and PR create, ask other gh; off = deny" ;;
+    remote) echo "push / gh:            on = allow feature-branch push, PR create/edit and comments, ask other gh; off = deny" ;;
     merge)  echo "merge / rebase:       on = allow, off = deny" ;;
     review) echo "on = push blocked until the branch diff passes review" ;;
     ftl)    echo "on = every prompt runs through /ftl" ;;
