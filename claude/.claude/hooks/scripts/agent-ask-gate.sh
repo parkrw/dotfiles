@@ -3,7 +3,7 @@
 # without explicit per-call approval. A hook decision overrides settings
 # allow-lists, so this survives an accidental "Agent" re-added to
 # settings.local.json by a "don't ask again" click — it prompts for every
-# spawn but the /ftl ship --integrate pre-review, and never hard-blocks.
+# spawn but the /ftl ship pre-review, and never hard-blocks.
 # Per-script kill switch: touch ~/.claude/hooks/.no-agent-ask-gate
 source "$HOME/.claude/hooks/scripts/common.sh"
 
@@ -16,8 +16,8 @@ read_input
 tool=$(echo "$INPUT" | jq -r '.tool_name // ""')
 [[ "$tool" == "Agent" ]] || exit 0
 
-# The one exception: /ftl ship --integrate runs unattended, and its Sonnet
-# pre-review (skills/ftl/SKILL.md, Ship step 4) would stall it on a prompt.
+# The one exception: every /ftl ship mode runs a fixed Sonnet pre-review
+# (skills/ftl/SKILL.md, Ship step 4) that would stall the ship on a prompt.
 # ftl-mode.sh records the mode. The description is matched loosely because
 # Claude paraphrases it ("Pre-review changelog branch diff") despite the skill
 # naming it exactly; mode, model and agent type keep the exception narrow.
@@ -26,11 +26,11 @@ session=${session//[^a-zA-Z0-9_-]/}
 mode=""
 [[ -n "$session" && -f "$HOOKS_DIR/state/ftl-mode-$session" ]] \
   && IFS= read -r mode < "$HOOKS_DIR/state/ftl-mode-$session" || true
-if [[ "$mode" == integrate || "$mode" == task-ship ]] && jq -e '.tool_input
+if [[ "$mode" == ship || "$mode" == integrate || "$mode" == task-ship ]] && jq -e '.tool_input
      | (.description // "" | ascii_downcase | test("pre-?review"))
        and .model == "sonnet"
        and ((.subagent_type // "general-purpose") == "general-purpose")' <<<"$INPUT" >/dev/null; then
-  jq -n '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",permissionDecisionReason:"ftl ship --integrate pre-review."}}'
+  jq -n '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",permissionDecisionReason:"ftl ship pre-review."}}'
   exit 0
 fi
 
