@@ -128,6 +128,14 @@ blank_quotes(){ # $1=line $2=1 keeps double-quoted text
 }
 bare=$(blank_quotes "$cmd")
 bare_dq=$(blank_quotes "$cmd" 1)
+# A body or title is text GitHub stores, so the gh denies search the line with
+# it blanked: a comment that mentions `pr merge` is not a merge. Every other
+# quoted string stays, so `sh -c '… gh pr merge …'` is still caught, and so
+# does a double-quoted body holding `$(` or a backtick, which the shell runs.
+cmd_no_prose=$(printf '%s\n' "$cmd" | perl -pe '
+  my $q = qr/\x27[^\x27]*\x27|"(?:[^"\\\x60\$]|\\.|\$(?!\())*"/;
+  s/((?:^|\s)(?:-[bt]|--body|--title)(?:\s+|=))$q/$1\x27\x27/g;
+  s/((?:^|\s)(?:-[a-zA-Z]*[fF]|--field|--raw-field)(?:\s+|=))(?:body=$q|\x27body=[^\x27]*\x27|"body=(?:[^"\\\x60\$]|\\.|\$(?!\())*")/$1body=\x27\x27/g')
 
 opaque=0
 echo "$bare_dq" | grep -Eq '\$\(|`'              && opaque=1
@@ -178,6 +186,8 @@ seg_extra_gh=''
 # --method PUT, -ftitle=x, a short cluster such as -iF.
 gh_method='(^|[[:space:]])(-[a-zA-Z]*X[[:space:]]*=?|--method([[:space:]]+|=))'
 gh_field='(^|[[:space:]])(-[a-zA-Z]*[fF]|--field|--raw-field)'
+# pflag keeps the last -X, so `-X GET -X DELETE` sends a DELETE.
+gh_method_is_get(){ echo "$1" | grep -oE -- "${gh_method}[A-Za-z]+" | tail -1 | grep -Eqi '[[:space:]=X]GET$'; }
 # Set by the local-write block once every deny and deliberate ask is behind it.
 local_ok=0
 
@@ -311,7 +321,7 @@ gh_segment_ok(){
     # in quotes, so the raw line is searched; one read from a file is unseen.
     api)
       if echo "$rest" | grep -Eq -- "$gh_method"; then
-        echo "$rest" | grep -Eqi -- "${gh_method}GET([[:space:]]|\$)"; return
+        gh_method_is_get "$rest"; return
       fi
       echo "$rest" | grep -Eq -- '(^|[[:space:]])--input([[:space:]=]|$)' && return 1
       echo "$rest" | grep -Eq -- "$gh_field" || return 0
@@ -717,16 +727,16 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
   remote_gate "Remote write (pull, compound command)"
 fi
 
-echo "$cmd" | grep -Eq '\bgh\b[^|;&]*\bpr[[:space:]]+merge\b' && emit deny "gh pr merge is denied permanently — no marker file enables it.
+echo "$cmd_no_prose" | grep -Eq '\bgh\b[^|;&]*\bpr[[:space:]]+merge\b' && emit deny "gh pr merge is denied permanently — no marker file enables it.
 If YOU run this yourself: GitHub merges the PR head into its base branch ON THE SERVER, immediately, and with --delete-branch also deletes the head branch. There is no local undo — reversing it needs a revert PR."
-echo "$cmd" | grep -Eq '\bgh\b[^|;&]*\b(pr[[:space:]]+update-branch|repo[[:space:]]+sync)\b' \
+echo "$cmd_no_prose" | grep -Eq '\bgh\b[^|;&]*\b(pr[[:space:]]+update-branch|repo[[:space:]]+sync)\b' \
   && emit deny "gh pr update-branch and gh repo sync write to a remote branch on the server — denied permanently. Run it yourself."
 # gh api defaults to GET; a field, an input file or another method makes it a
 # write. These endpoints and mutations move a branch or commit onto one.
-if echo "$cmd" | grep -Eq '\bgh\b[^|;&]*\bapi\b' \
-   && echo "$cmd" | grep -Eq '(git/refs|/merges\b|/merge-upstream|/branches/|/pulls/[^/[:space:]]+/(merge|update-branch)|/contents/|mergePullRequest|mergeBranch|(create|update|delete)Refs?\b|createCommitOnBranch|enablePullRequestAutoMerge|updatePullRequestBranch)' \
-   && echo "$cmd" | grep -Eq -- "$gh_method|$gh_field|(^|[[:space:]])--input([[:space:]=]|\$)" \
-   && ! echo "$cmd" | grep -Eqi -- "${gh_method}GET([[:space:]]|\$)"; then
+if echo "$cmd_no_prose" | grep -Eq '\bgh\b[^|;&]*\bapi\b' \
+   && echo "$cmd_no_prose" | grep -Eq '(git/refs|/merges\b|/merge-upstream|/branches/|/pulls/[^/[:space:]]+/(merge|update-branch)|/contents/|mergePullRequest|mergeBranch|(create|update|delete)Refs?\b|createCommitOnBranch|enablePullRequestAutoMerge|updatePullRequestBranch)' \
+   && echo "$cmd_no_prose" | grep -Eq -- "$gh_method|$gh_field|(^|[[:space:]])--input([[:space:]=]|\$)" \
+   && ! gh_method_is_get "$cmd_no_prose"; then
   emit deny "gh api write to a ref, merge, branch or contents endpoint moves a remote branch — denied permanently. Run it yourself."
 fi
 echo "$cmd" | grep -Eq '\bgit\b.*\breset\b.*--hard'          && emit deny "git reset --hard discards work — run it yourself."
