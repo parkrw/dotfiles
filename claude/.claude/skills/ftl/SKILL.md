@@ -233,12 +233,12 @@ With `--integrate`, Ship also integrates the default branch itself (step 3a), on
 
 - `worktree=$(git rev-parse --show-toplevel)` and `branch=$(git branch --show-current)`. Print both.
 - Empty `branch` (detached HEAD) or `main`/`master`: create the worktree.
-  - `name`: a 2-4 word kebab-case slug of the change in the diff. Print it. `name` already a branch or `../<repo>-<name>` already exists: stop and ask.
-  - `git worktree add -b <name> ../<repo>-<name> HEAD`. `worktree` is the absolute path of `../<repo>-<name>`; `branch` is `name`.
+  - `name`: a 2-4 word kebab-case slug of the change in the diff. Print it. `<parent>` is the repo's parent directory when it lies inside the session's working directories - the launch directory plus `permissions.additionalDirectories`, as the environment lists them - and `~/Developments/worktrees`, spelled as an absolute path, otherwise. `name` already a branch or `<parent>/<repo>-<name>` already exists: stop and ask.
+  - `git worktree add -b <name> <parent>/<repo>-<name> HEAD`. `worktree` is that absolute path; `branch` is `name`.
   - Uncommitted work in the original checkout: carry it over, tracked then untracked - `git diff --binary HEAD | git -C "$worktree" apply --index`, then `git ls-files -z -o --exclude-standard | rsync -a --from0 --files-from=- ./ "$worktree"/`. Either fails: stop, and leave both checkouts as they are.
   - Never clean the original checkout. Its copy of the changes stays; step 5 tells the human to discard it once the worktree is verified.
 - `git worktree list`: if `branch` is checked out at another path, that path is `worktree`. One checkout holds the files, the commits and the review.
-- `worktree` differs from the session cwd: `cd <worktree>`, literal path, without asking the human; entering is part of Ship, not a decision. Then run `pwd` in a separate call and print it. The harness keeps a `cd` only inside the session's working directories - the launch directory plus `permissions.additionalDirectories` - and resets it after the call otherwise; inside them, Edit and Write on `worktree` run without a prompt too. `pwd` is not `worktree`: the `cd` was reset, so call the `EnterWorktree` tool with `path: "$worktree"` (load it via ToolSearch first), which asks the human once whatever the allow rules say, then `pwd` again; anything other than `worktree`: stop.
+- `worktree` differs from the session cwd: `cd <worktree>`, literal path, without asking the human; entering is part of Ship, not a decision. Then run `pwd` in a separate call and print it. The harness keeps a `cd` only inside the session's working directories - the launch directory plus `permissions.additionalDirectories` - and resets it after the call otherwise; inside them, Edit and Write on `worktree` run without a prompt too. `pwd` is not `worktree`: the `cd` was reset, because an existing worktree sits outside them; carry on without it, every command below names `worktree` by `-C` or an absolute path. Never call `EnterWorktree` or `ExitWorktree`: settings deny both.
 - From here every command is still `git -C "$worktree" …` and `claude-review -C "$worktree" …`. No bare `git`: if the cwd drifts, `-C` keeps each command on the right checkout.
 
 ## 2. Fetch
@@ -276,7 +276,7 @@ Resolve `<default>` and `<default-checkout>` as step 5 does.
 
 The review judges integrated code. When `<default-checkout>` is absent from `git worktree list`, run the one command that unblocks it, then go on. When `pull --ff-only` fails - uncommitted paths in `<default-checkout>` overlap the incoming commits, or its `<default>` has diverged from origin - do not stop: back in the worktree, integrate against local `<default>` as it stands, and keep `integrated against local <default>, <N> behind origin/<default>: <git's error line>` for step 5, `<N>` from `git -C "$worktree" rev-list --count <default>..origin/<default>`. Never review first and hand the human a rebase after.
 
-After a `cd`, run both lines below from the worktree. After the `EnterWorktree` fallback, the session sits in the worktree it isolated, and that isolation refuses any git aimed outside it, `-C` included. Leave it for the pull: `ExitWorktree` with `action: "keep"`, then the pull, then `EnterWorktree` with `path: "<worktree>"`, then the rebase.
+Run both lines below from the worktree.
 
 ```
 git -C <default-checkout> pull --ff-only
@@ -333,7 +333,7 @@ However the loop ends, when a fix was committed since round 1, run the full suit
 
 Without `--integrate`, first rerun step 2's `fetch`, then `git -C "$worktree" rev-list --count HEAD..origin/HEAD`, since the review loop can outlast a merge to the default branch. Count above `0` - behind: run `git -C <default-checkout> pull --ff-only`, then `git -C <worktree> rebase <default>`, literal paths; a conflict is resolved, or aborted, as step 3a does. The human pastes the block below into a shell that sits in some other directory and has no `$worktree`, so every path is a literal absolute path and the block opens with `cd`. Print it, placeholders filled, and nothing else - no smell line, no summary.
 
-Before any block is printed or `--integrate` pushes, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<repo>-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree, and outside `.git`, which an `EnterWorktree` session may not write; `<branch-slug>` is `<branch>` with each `/` as `-`, so no two branches share one. The body ends with `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. It never mentions conflicts, their resolution, or the rebase or merge: integration is plumbing, not the change. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
+Before any block is printed or `--integrate` pushes, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<repo>-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree and outside `.git`; `<branch-slug>` is `<branch>` with each `/` as `-`, so no two branches share one. The body ends with `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. It never mentions conflicts, their resolution, or the rebase or merge: integration is plumbing, not the change. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
 
 ```
 cd <worktree>

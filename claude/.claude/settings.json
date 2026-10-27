@@ -46,7 +46,9 @@
       "Bash(rm -rf:*)",
       "Bash(rm -fr:*)",
       "Bash(dd:*)",
-      "Bash(shred:*)"
+      "Bash(shred:*)",
+      "EnterWorktree",
+      "ExitWorktree"
     ],
     "ask": [
       "Bash(git rm:*)"
@@ -54,7 +56,8 @@
     "defaultMode": "auto",
     "additionalDirectories": [
       "~/Developments/work/ck/programmin",
-      "~/Developments/progrums"
+      "~/Developments/progrums",
+      "~/Developments/worktrees"
     ]
   },
   "model": "opus",
