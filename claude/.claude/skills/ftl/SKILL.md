@@ -37,7 +37,8 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
                    fix each finding it does not refute as a class,
                    rerun the checks except the suite, commit,
                    re-review - until zero findings; the full suite
-                   runs before round 1 and after the last round;
+                   runs before round 1, and after the last round
+                   only the tests it listed as failed or flaky;
                    then rebase when behind and print
                    cd, push and gh pr create
   /ftl ship --integrate
@@ -225,7 +226,7 @@ Then one line per adjacent smell found, and nothing else.
 
 Fetch, check, commit, review, fix, repeat, until the reviewer reports no findings. Ship runs every local git write itself, in the worktree resolved in step 1; the write gate allows them without a prompt. Only the push and `gh pr create` are printed for the human at the end.
 
-The order is fixed: CI's full test suite passes, run through `suite` as Check step 2 says, then `claude-review`, then the push, then the PR. The full suite runs twice: before round 1, and after the last round when a fix was committed since round 1. One round that passes runs it once, on the commit it reviewed. A push that skips the review meets it anyway: where the review gate is live, pre-push denies a branch diff without a passing review.
+The order is fixed: CI's full test suite passes, run through `suite` as Check step 2 says, then `claude-review`, then the push, then the PR. The full suite runs once, before round 1. After the last round, when a fix was committed since round 1, only the tests a full suite run listed as `NEW RED` or `KNOWN RED` run again, on HEAD. A push that skips the review meets it anyway: where the review gate is live, pre-push denies a branch diff without a passing review.
 
 With `--integrate`, Ship also integrates the default branch itself (step 3a), once, before the review, resolves conflicts, then pushes and opens a PR ready for review, since CI may skip a draft. Step 6 then waits for CI and fixes what it reports, then squash-merges it when the gh user authored it; anyone else's PR waits on the human.
 
@@ -323,11 +324,11 @@ Run it in the background and wait for it; a review takes minutes and a foregroun
   - Add the test that fails without the fix, if the repo has tests; for a confirmed finding, that is its proof test. A doc or prose finding needs none.
   - A finding that is wrong gets no code change. Keep it, as `path:line - defect - reason`, for the PR body's `Disputed findings` section: the human sees every finding the author dismissed.
 
-  Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged, except the full suite: a fix is new code the checkers have not seen. In its place run the test files the fix touched; the suite waits for the last round. Fix what fails and add those paths again, or name it as left out and why, as Check allows. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
+  Then `git -C "$worktree" add <path>...` and rerun Check step 2's commands on what is staged, except the full suite: a fix is new code the checkers have not seen. In its place run the test files the fix touched. Fix what fails and add those paths again, or name it as left out and why, as Check allows. Then `git -C "$worktree" commit -m '<fix subject>'` and start round N+1.
 
 After round 10 with findings still open, or a round where every finding is wrong - nothing to commit, so the next round would judge the same diff - stop: print each open finding as `path:line - defect`, with the reason for each one judged wrong, then hand off anyway. The human decides.
 
-However the loop ends, when a fix was committed since round 1, run the full suite on HEAD before handing off, as `suite <command>` in the background. It passes, known reds aside: hand off. A `NEW RED` this diff did not cause: hand off with it, as Check step 2 says. Otherwise fix each failure as a finding, commit, and start round N+1, since the commit changed the diff the last round approved. Past round 10, print the failures with the open findings and hand off anyway.
+However the loop ends, when a fix was committed since round 1, rerun on HEAD only the tests a full suite run on this branch listed as `NEW RED` or `KNOWN RED`, never the full suite: each fix round already ran the test files it touched. Run each id's file - the part before ` > ` or `: ` - with the repo's runner for that file, in the background. None listed, or they pass: hand off. An id listed as `KNOWN RED` that fails again is the flake: report it and do not chase it. A failure this diff did not cause: hand off with it, as Check step 2 says. Otherwise fix each failure as a finding, commit, and start round N+1, since the commit changed the diff the last round approved. Past round 10, print the failures with the open findings and hand off anyway.
 
 ## 5. Hand off
 
