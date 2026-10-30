@@ -44,7 +44,8 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
   /ftl ship --integrate
                   ship, but integrate the default branch itself
                    (pull --ff-only, then rebase if unpushed or merge
-                   if pushed), resolve conflicts, review, then push
+                   if pushed), resolve conflicts, run the tests
+                   the integration could break, review, then push
                    and open a PR ready for review, even if the
                    default branch moved during the review; then wait
                    for CI and the merge state, fixing failures,
@@ -226,7 +227,7 @@ Then one line per adjacent smell found, and nothing else.
 
 Fetch, check, commit, review, fix, repeat, until the reviewer reports no findings. Ship runs every local git write itself, in the worktree resolved in step 1; the write gate allows them without a prompt. Only the push and `gh pr create` are printed for the human at the end.
 
-The order is fixed: CI's full test suite passes, run through `suite` as Check step 2 says, then `claude-review`, then the push, then the PR. The full suite runs once, before round 1. After the last round, when a fix was committed since round 1, only the tests a full suite run listed as `NEW RED` or `KNOWN RED` run again, on HEAD. A push that skips the review meets it anyway: where the review gate is live, pre-push denies a branch diff without a passing review.
+The order is fixed: CI's full test suite passes, run through `suite` as Check step 2 says, then `claude-review`, then the push, then the PR. The full suite runs once, before round 1. After the last round, when a fix was committed since round 1, only the tests a full suite run listed as `NEW RED` or `KNOWN RED` run again, on HEAD. An integration or a CI fix never runs it: the session picks and runs the tests the change could break, as steps 3a and 6 say, and CI runs the full suite on the push. A push that skips the review meets it anyway: where the review gate is live, pre-push denies a branch diff without a passing review.
 
 With `--integrate`, Ship also integrates the default branch itself (step 3a), once, before the review, resolves conflicts, then pushes and opens a PR ready for review, since CI may skip a draft. Step 6 then waits for CI and fixes what it reports, then squash-merges it when the gh user authored it; anyone else's PR waits on the human.
 
@@ -294,7 +295,7 @@ A conflict: resolve it. For each file in `git -C <worktree> diff --name-only --d
 
 Abort instead (`rebase --abort` or `merge --abort`) and stop, naming the conflicted files, when a conflicted file is binary, generated or a lockfile, or when the two sides change the same behavior in different directions - that choice is the lead's.
 
-After the last `--continue`: `git -C <worktree> diff <default> | grep -nE '^\+(<{7}|>{7})( |$)'` prints nothing (a rebase runs no pre-commit hook), then rerun Check step 2's commands and fix and commit what fails.
+Once the rebase or merge has moved HEAD, conflicts or not: `git -C <worktree> diff <default> | grep -nE '^\+(<{7}|>{7})( |$)'` prints nothing (a rebase runs no pre-commit hook), then rerun Check step 2's commands except the full suite, which CI runs on the push. In its place decide which tests the integration could break and run those. Start from the test files covering each file both `git -C <worktree> diff --name-only ORIG_HEAD...<default>` and `git -C <worktree> diff --name-only <default>...ORIG_HEAD` list - `ORIG_HEAD` is the branch tip before the integration, and every conflicted file is among them - then add the tests this branch adds or changes, and those of code the default side changed that this branch calls or is called by. Print `integration tests: <files> - <why>`, then fix and commit what fails.
 
 Then `git -C "$worktree" diff --name-only <default> -- CHANGELOG.md` prints nothing: the change's entry is its fragment.
 
@@ -302,7 +303,7 @@ Then `git -C "$worktree" diff --name-only <default> -- CHANGELOG.md` prints noth
 
 Before round 1, a pre-review: one Sonnet subagent (`model: "sonnet"`, `description: "ftl pre-review"`, no `subagent_type` - in every ship mode the agent gate allows exactly that spawn without a prompt) reads `git -C "$worktree" diff <base>...HEAD` and Orient 2a's past findings for every path the diff touches. It writes one line per past finding, `does not recur: <why>` or `RECURS at <path:line>: <what>`, then at most 15 edge cases the diff meets, one line each, `- <function/component/route>: <input or state> -> <expected behaviour>`: empty, one, many, equal values, the boundary, the error path, legacy records, what the change leaves for its own next run, every caller and consumer of what it adds, renames or removes, and for UI both color schemes and RTL. Save its output, unedited, to `~/.claude/review-ledger/prereview/<repo>-<branch>-<sha>.md` - `<repo>` the basename of Orient 2a's `<main-checkout>`, `<branch>` with each `/` as `-`, `<sha>` from `git -C "$worktree" rev-parse --short=12 HEAD` - so it can be graded later against the round-1 findings the ledger records for that branch. Fix each RECURS and each edge case the code gets wrong, with a test, and commit.
 
-Then Check step 2's commands, the full test suite among them with no `NEW RED`, have passed on HEAD. Round 1 of at most 10:
+Then Check step 2's commands, the full test suite among them with no `NEW RED`, have passed on HEAD; after an integration or a CI fix, the tests step 3a or step 6 chose stand in for the full suite. Round 1 of at most 10:
 
 ```
 claude-review -C "$worktree" --yes --engine claude --model opus --effort high
@@ -363,8 +364,8 @@ Round 1 of at most 5. Run `pr-wait <url>` in the background and wait for it; CI 
 - `0 ready` on anyone else's PR, or `ready, awaiting approval`: hand off. Print the PR URL alone on its line, then the verdict, then step 3a's `integrated against local` line when its pull failed, and, when step 1 carried work over, the restore and clean line from step 5.
 - `1 failed`: it lists each failed check with its link. Read why before touching code: `gh run view --job <job-id> --log-failed`, the job id being the number after `/job/` in the link. A review bot's check carries its findings in that log or in `gh pr view <url> --comments`. Then:
   - A failure this diff did not cause - a runner, network or registry error, or a test the default branch's latest run of that workflow also fails (`gh run list --branch <default> --workflow '<workflow>' --limit 3`): no code change. `gh run rerun <run-id> --failed`, then the next round. The same check failing again in the next round is treated as this diff's.
-  - Otherwise each failure is a finding: fix it in `"$worktree"` as a class, with its test, as step 4 does, then Check step 2's commands, commit, and rerun step 4's review loop on the new diff.
-- `2 conflict` or `2 behind`: the default branch moved. `git -C <default-checkout> pull --ff-only`, then `git -C <worktree> merge <default>` - the branch is pushed, so never a rebase - and resolve conflicts as step 3a does, then Check step 2's commands and step 4's review loop. `gh pr update-branch` is denied; the merge is local.
+  - Otherwise each failure is a finding: fix it in `"$worktree"` as a class, with its test, as step 4 does. Then rerun Check step 2's commands except the full suite, which CI runs again on the push. In its place decide which tests the fix could break and run those, starting from the tests the failed check reported and the test files the fix touched; print `ci-fix tests: <files> - <why>`. Commit, and rerun step 4's review loop on the new diff.
+- `2 conflict` or `2 behind`: the default branch moved. `git -C <default-checkout> pull --ff-only`, then `git -C <worktree> merge <default>` - the branch is pushed, so never a rebase - then resolve conflicts and test as step 3a does, and run step 4's review loop. `gh pr update-branch` is denied; the merge is local.
 - `3 blocked`: GitHub refuses the merge for a reason CI cannot fix - a required check that never reported, a ruleset condition, squash merge disabled. Hand off: the PR URL alone on its line, then the verdict and the output of `gh pr checks <url> --required`.
 - `4 closed`: someone merged or closed it. Print the URL and the verdict; nothing else runs.
 - `5 timeout`: it lists the pending checks. Start the next round without a push; a second timeout hands off as `3` does.
