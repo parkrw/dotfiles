@@ -3,8 +3,13 @@
 #
 #   pr-wait [<pr>] [--timeout <minutes>]   (default: the current branch's PR, 60 minutes)
 #
-# Polls every 30s. The checks count as finished only when none is pending on
-# two polls in a row at the same head sha, since a workflow chained off another
+# Polls every 30s. Any red ends the wait without waiting for the other checks:
+# a conflict, a branch GitHub wants updated, or a failed or cancelled check. A
+# red counts once two polls in a row at the same head sha show it, since a
+# check just rerun reports its old failure until the rerun registers.
+#
+# Otherwise the checks count as finished only when none is pending on two polls
+# in a row at the same head sha, since a workflow chained off another
 # registers its checks only once the first ends; no check at all counts only
 # after 3 minutes at that head, since a fresh push reports none until its
 # workflows queue. Then GitHub's merge state decides, because only it knows the
@@ -13,8 +18,11 @@
 # Exit codes, each after a final "pr-wait: <verdict> <url>" line:
 #   0 ready     no check failed, squash merge is enabled, nothing blocks the
 #               merge but a human approval
-#   1 failed    a check failed or was cancelled; each is listed with its link
-#   2 behind    the default branch moved, or conflicts with the PR
+#   1 failed    a check failed or was cancelled, even while others still run;
+#               each is listed with its link
+#   2 behind    the default branch moved, or conflicts with the PR; reported
+#               before a failed check, since a conflicting PR runs no
+#               pull_request workflow
 #   3 blocked   no check failed, yet GitHub refuses the merge, or squash merge
 #               is disabled for the repo
 #   4 closed    merged or closed while waiting
@@ -44,7 +52,7 @@ trap 'rm -f "$errors"' EXIT
 finish() { echo "pr-wait: $2 $url"; exit "$1"; }
 list() { jq -r --arg b "$1" '.[] | select(.bucket | IN($b | split(",")[])) | "  \(.bucket) \(.name) \(.link)"' <<<"$checks"; }
 
-head= head_since=0 previous= shown=
+head= head_since=0 previous= shown= red_before=
 while :; do
   now=$(date +%s)
   view=$(gh pr view "$url" --json state,headRefOid,mergeable,mergeStateStatus,reviewDecision 2>/dev/null) || view=
@@ -55,33 +63,42 @@ while :; do
     state=$(jq -r .state <<<"$view")
     [[ $state == OPEN ]] || finish 4 "$(tr '[:upper:]' '[:lower:]' <<<"$state")"
     sha=$(jq -r .headRefOid <<<"$view")
-    [[ $sha == "$head" ]] || { head=$sha head_since=$now previous=; }
+    [[ $sha == "$head" ]] || { head=$sha head_since=$now previous= red_before=; }
 
     counts=$(jq -r 'group_by(.bucket) | map("\(length) \(.[0].bucket)") | join(", ") | if . == "" then "no checks" else . end' <<<"$checks")
     [[ $counts == "$shown" ]] || { echo "pr-wait: ${head:0:12} $counts"; shown=$counts; }
+
+    mergeable=$(jq -r .mergeable <<<"$view")
+    status=$(jq -r .mergeStateStatus <<<"$view")
+    red=$(jq -c '[.[] | select(.bucket == "fail" or .bucket == "cancel") | [.name, .link]] | sort' <<<"$checks")
+    case $mergeable/$status in
+      CONFLICTING/*|*/DIRTY) red+=" conflict" ;;
+      */BEHIND) red+=" behind" ;;
+    esac
+    if [[ $red != "[]" && $red == "$red_before" ]]; then
+      case $red in
+        *" conflict") finish 2 conflict ;;
+        *" behind") finish 2 behind ;;
+      esac
+      list fail,cancel
+      finish 1 failed
+    fi
+    red_before=$red
 
     signature="$sha $(jq -c 'map([.name, .bucket]) | sort' <<<"$checks")"
     pending=$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$checks")
     total=$(jq length <<<"$checks")
     settled=false
-    if (( pending == 0 )) && [[ $signature == "$previous" ]] && (( total > 0 || now - head_since >= 180 )); then
+    if [[ $red == "[]" ]] && (( pending == 0 )) && [[ $signature == "$previous" ]] && (( total > 0 || now - head_since >= 180 )); then
       settled=true
     fi
     previous=$signature
 
     if [[ $settled == true ]]; then
-      if jq -e 'any(.bucket == "fail" or .bucket == "cancel")' <<<"$checks" >/dev/null; then
-        list fail,cancel
-        finish 1 failed
-      fi
-      mergeable=$(jq -r .mergeable <<<"$view")
-      status=$(jq -r .mergeStateStatus <<<"$view")
       review=$(jq -r '.reviewDecision // ""' <<<"$view")
       # UNKNOWN while GitHub computes mergeability; UNSTABLE lags a check that
       # just turned green. Both settle on a later poll.
       case $mergeable/$status in
-        CONFLICTING/*|*/DIRTY) finish 2 conflict ;;
-        */BEHIND) finish 2 behind ;;
         UNKNOWN/*|*/UNKNOWN|*/UNSTABLE) ;;
         */CLEAN|*/HAS_HOOKS|*/BLOCKED)
           if [[ $status == BLOCKED && $review != REVIEW_REQUIRED ]]; then

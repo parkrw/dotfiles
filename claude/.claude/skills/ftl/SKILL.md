@@ -49,8 +49,8 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
                    and open a PR ready for review, even if the
                    default branch moved during the review; then wait
                    for CI and the merge state, fixing failures,
-                   conflicts and a stale branch, then squash-merge
-                   it when you authored it
+                   conflicts and a stale branch, then ask you to
+                   squash-merge it when you authored it
   /ftl <task> --ship
                   orient, build, then ship --integrate; stops only
                    for a decision the build cannot make alone
@@ -229,7 +229,7 @@ Fetch, check, commit, review, fix, repeat, until the reviewer reports no finding
 
 The order is fixed: CI's full test suite passes, run through `suite` as Check step 2 says, then `claude-review`, then the push, then the PR. The full suite runs once, before round 1. After the last round, when a fix was committed since round 1, only the tests a full suite run listed as `NEW RED` or `KNOWN RED` run again, on HEAD. An integration or a CI fix never runs it: the session picks and runs the tests the change could break, as steps 3a and 6 say, and CI runs the full suite on the push. A push that skips the review meets it anyway: where the review gate is live, pre-push denies a branch diff without a passing review.
 
-With `--integrate`, Ship also integrates the default branch itself (step 3a), once, before the review, resolves conflicts, then pushes and opens a PR ready for review, since CI may skip a draft. Step 6 then waits for CI and fixes what it reports, then squash-merges it when the gh user authored it; anyone else's PR waits on the human.
+With `--integrate`, Ship also integrates the default branch itself (step 3a), once, before the review, resolves conflicts, then pushes and opens a PR ready for review, since CI may skip a draft. Step 6 then waits for CI and fixes what it reports, then squash-merges it when the gh user authored it and the human confirms; anyone else's PR waits on the human.
 
 ## 1. Worktree
 
@@ -356,14 +356,14 @@ When Orient step 2b printed a plan, record this task's status as the last write 
 
 ## 6. Wait for green - `--integrate` only
 
-The PR is green when every check has passed or skipped and GitHub would let it squash-merge. Claude then merges it when the gh user authored it; the write gate allows `gh pr merge` only then, only in this mode, and only as the lone command in the `0 ready` bullet.
+The PR is green when every check has passed or skipped and GitHub would let it squash-merge. Claude then merges it when the gh user authored it; the write gate passes `gh pr merge` only then, only in this mode, and only as the lone command in the `0 ready` bullet, and asks the human to confirm the squash merge.
 
-Round 1 of at most 5. Run `pr-wait <url>` in the background and wait for it; CI takes minutes to an hour, and the background run re-invokes the session when it exits. End the waiting turn with `waiting for CI: <url>`, the URL mid-line: a URL alone on its line is the hand-off. `pr-wait` prints a line each time the check counts change, then one verdict line, and exits:
+Round 1 of at most 5. Run `pr-wait <url>` in the background and wait for it; CI takes minutes to an hour, and the background run re-invokes the session when it exits. End the waiting turn with `waiting for CI: <url>`, the URL mid-line: a URL alone on its line is the hand-off. `pr-wait` prints a line each time the check counts change, then one verdict line, and exits - on the first red, a conflict or a failed check, without waiting for the other checks:
 
-- `0 ready`, on a PR whose `gh pr view <url> --json author -q .author.login` equals `gh api user -q .login`: read the head with `gh pr view <url> --json headRefOid -q .headRefOid`, then run `gh pr merge <url> --squash --match-head-commit <sha>` with the sha typed literally, alone on the line, no `$(…)`. The gate checks the author, every check, the merge state and the head itself and names what failed when it refuses; a refusal hands off as below. Merged: print the PR URL alone on its line, then `merged`, then the lines below after the verdict.
+- `0 ready`, on a PR whose `gh pr view <url> --json author -q .author.login` equals `gh api user -q .login`: read the head with `gh pr view <url> --json headRefOid -q .headRefOid`, then run `gh pr merge <url> --squash --match-head-commit <sha>` with the sha typed literally, alone on the line, no `$(…)`. The gate checks the author, every check, the merge state and the head itself and names what failed when it refuses, then asks the human to confirm. A refusal hands off as below; a declined prompt too, with the verdict `ready, merge declined`. Merged: print the PR URL alone on its line, then `merged`, then the lines below after the verdict.
 - `0 ready` on anyone else's PR, or `ready, awaiting approval`: hand off. Print the PR URL alone on its line, then the verdict, then step 3a's `integrated against local` line when its pull failed, and, when step 1 carried work over, the restore and clean line from step 5.
 - `1 failed`: it lists each failed check with its link. Read why before touching code: `gh run view --job <job-id> --log-failed`, the job id being the number after `/job/` in the link. A review bot's check carries its findings in that log or in `gh pr view <url> --comments`. Then:
-  - A failure this diff did not cause - a runner, network or registry error, or a test the default branch's latest run of that workflow also fails (`gh run list --branch <default> --workflow '<workflow>' --limit 3`): no code change. `gh run rerun <run-id> --failed`, then the next round. The same check failing again in the next round is treated as this diff's.
+  - A failure this diff did not cause - a runner, network or registry error, or a test the default branch's latest run of that workflow also fails (`gh run list --branch <default> --workflow '<workflow>' --limit 3`): no code change. A run still in progress cannot be rerun: `gh run watch <run-id>` in the background first. Then `gh run rerun <run-id> --failed`, and the next round. The same check failing again in the next round is treated as this diff's.
   - Otherwise each failure is a finding: fix it in `"$worktree"` as a class, with its test, as step 4 does. Then rerun Check step 2's commands except the full suite, which CI runs again on the push. In its place decide which tests the fix could break and run those, starting from the tests the failed check reported and the test files the fix touched; print `ci-fix tests: <files> - <why>`. Commit, and rerun step 4's review loop on the new diff.
 - `2 conflict` or `2 behind`: the default branch moved. `git -C <default-checkout> pull --ff-only`, then `git -C <worktree> merge <default>` - the branch is pushed, so never a rebase - then resolve conflicts and test as step 3a does, and run step 4's review loop. `gh pr update-branch` is denied; the merge is local.
 - `3 blocked`: GitHub refuses the merge for a reason CI cannot fix - a required check that never reported, a ruleset condition, squash merge disabled. Hand off: the PR URL alone on its line, then the verdict and the output of `gh pr checks <url> --required`.

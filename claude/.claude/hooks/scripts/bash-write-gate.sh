@@ -39,7 +39,7 @@
 #   gh pr merge --squash
 #     --match-head-commit <sha> of
 #     your own green, CLEAN PR under
-#     /ftl ship --integrate         -> allow (default), deny (.claude-remote-off)
+#     /ftl ship --integrate         -> ask (default), deny (.claude-remote-off)
 #   any other gh pr merge, push to
 #     main/master or the default
 #     branch                        -> deny, always. No marker changes it.
@@ -796,7 +796,7 @@ fi
 
 if echo "$cmd_no_prose" | grep -Eq '\bgh\b[^|;&]*\bpr[[:space:]]+merge\b'; then
   if why=$(merge_refusal); then
-    emit allow "gh pr merge: your PR, every check green, merge state clean, head pinned."
+    emit ask "Squash-merge? Your PR, every check green, merge state clean, head pinned."
   fi
   emit deny "gh pr merge refused: $why.
 Claude merges only under /ftl ship --integrate (or /ftl <task> --ship), a PR the gh user authored, every check passed or skipped, mergeStateStatus CLEAN, as one lone command: gh pr merge <pr> --squash --match-head-commit <full head sha>"
