@@ -21,7 +21,7 @@
 # a repo months ago and forgetting the rest are still set.
 #
 # No toggle enables a push to main/master or the default branch, or a
-# `gh pr merge` outside /ftl ship --integrate. bash-write-gate.sh and the
+# `gh pr merge`. bash-write-gate.sh and the
 # pre-push git hook deny those permanently.
 set -euo pipefail
 

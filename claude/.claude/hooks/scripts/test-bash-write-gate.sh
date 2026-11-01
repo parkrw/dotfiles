@@ -89,6 +89,9 @@ check "pr edit to the fragment line allowed"      "$T/repoE" "gh pr edit 7 --tit
 check "pr edit of the body alone allowed"         "$T/repoE" 'gh pr edit 7 --body-file /tmp/b.md' allow
 check "pr create in a repo without fragments"     "$T/repoB" "gh pr create --title 'anything goes here, at any length at all, really' --body x" allow
 
+check "a pinned squash merge is denied"          "$T/repoB" "gh pr merge 1 --squash --match-head-commit $(printf 'a%.0s' {1..40})" deny
+check "a bare merge is denied"                   "$T/repoB" 'gh pr merge 1'                            deny
+
 echo "---"
 echo "$pass passed, $fail failed"
 exit $((fail > 0))

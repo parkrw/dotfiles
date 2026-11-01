@@ -36,11 +36,7 @@
 #     not the branch's changelog.d
 #     fragment line (≤50), in a repo
 #     with changelog.d/README.md    -> deny (always)
-#   gh pr merge --squash
-#     --match-head-commit <sha> of
-#     your own green, CLEAN PR under
-#     /ftl ship --integrate         -> ask (default), deny (.claude-remote-off)
-#   any other gh pr merge, push to
+#   gh pr merge, push to
 #     main/master or the default
 #     branch                        -> deny, always. No marker changes it.
 #   force-push, push of tags,
@@ -294,54 +290,6 @@ gh_api_dangerous(){ # $1 = args after gh, starting with api
   echo "$cmd_no_prose" | grep -Eq "(^|[[:space:]\"'])/?repos/[^/[:space:]\"']+/[^/[:space:]\"']+/?([\"'[:space:]]|\$)|/transfer\b|/collaborators|/invitations|/keys\b|/hooks\b|/secrets|/variables|/rulesets|/protection|/environments|/actions/permissions" && return 0
   echo "$cmd_no_prose" | grep -Eqi '\bmutation\b' \
     && echo "$cmd_no_prose" | grep -Eq '\b(delete|archive|unarchive|transfer)[A-Z]|updateRepository|DeployKey|Collaborator|BranchProtection|Ruleset'
-}
-
-# Prints why a gh pr merge is refused and fails, or prints nothing. Claude
-# merges only in /ftl's integrate modes, which ftl-mode.sh records per session,
-# and only a PR the gh user authored once every check passed or skipped and
-# GitHub calls the merge CLEAN. --match-head-commit pins the merge to the head
-# checked here, so a push after the check makes GitHub refuse it. Any gh call
-# that fails refuses.
-merge_refusal(){
-  local session mode line sel="" repo="" sha="" squash=0 w view checks me
-  [[ "$remote_off" == 1 ]] && { echo "this repo is opted out (.claude-remote-off)"; return 1; }
-  session=$(echo "$input" | jq -r '.session_id // ""'); session=${session//[^a-zA-Z0-9_-]/}
-  [[ -n "$session" && -f "$HOME/.claude/hooks/state/ftl-mode-$session" ]] \
-    && IFS= read -r mode < "$HOME/.claude/hooks/state/ftl-mode-$session"
-  [[ "${mode:-}" == integrate || "${mode:-}" == task-ship ]] || { echo "this session is not in /ftl ship --integrate"; return 1; }
-  line=$(printf '%s' "$bare" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
-  if [[ "$opaque" == 1 ]] || echo "$line" | grep -Eq '[;&|<>()`$]' \
-     || ! echo "$line" | grep -Eq '^gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
-    echo "it is not one lone gh pr merge command"; return 1
-  fi
-  read -ra w <<<"$(echo "$line" | sed -E 's/^gh[[:space:]]+pr[[:space:]]+merge//')"
-  set -- "${w[@]}"
-  while (($#)); do
-    case $1 in
-      -s|--squash) squash=1 ;;
-      --match-head-commit) sha=${2:-}; shift ;;
-      --match-head-commit=*) sha=${1#*=} ;;
-      -R|--repo) repo=${2:-}; shift ;;
-      --repo=*) repo=${1#*=} ;;
-      -*) echo "flag $1 is not allowed"; return 1 ;;
-      *) [[ -z "$sel" ]] || { echo "one PR at a time"; return 1; }; sel=$1 ;;
-    esac
-    shift
-  done
-  [[ "$squash" == 1 ]] || { echo "--squash is required"; return 1; }
-  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "--match-head-commit needs the full 40-character head sha"; return 1; }
-  [[ -n "$sel" ]] || { echo "name the PR"; return 1; }
-  w=(); [[ -n "$repo" ]] && w=(-R "$repo")
-  me=$(cd "$gitdir" 2>/dev/null && gh api user --jq .login 2>/dev/null) || me=""
-  view=$(cd "$gitdir" 2>/dev/null && gh pr view "$sel" "${w[@]}" --json author,state,isDraft,headRefOid,mergeStateStatus 2>/dev/null) || view=""
-  checks=$(cd "$gitdir" 2>/dev/null && gh pr checks "$sel" "${w[@]}" --json name,bucket 2>/dev/null) || true
-  [[ -n "$me" && -n "$view" ]] || { echo "gh could not read the PR or the gh user"; return 1; }
-  [[ "$(jq -r .author.login <<<"$view")" == "$me" ]] || { echo "the PR is $(jq -r .author.login <<<"$view")'s, not $me's"; return 1; }
-  [[ "$(jq -r '.state + " " + (.isDraft | tostring)' <<<"$view")" == "OPEN false" ]] || { echo "the PR is not open and ready"; return 1; }
-  [[ "$(jq -r .headRefOid <<<"$view")" == "$sha" ]] || { echo "the PR head is $(jq -r .headRefOid <<<"$view"), not $sha"; return 1; }
-  jq -e 'length > 0 and all(.bucket == "pass" or .bucket == "skipping")' <<<"${checks:-null}" >/dev/null 2>&1 \
-    || { echo "not every check has passed or skipped"; return 1; }
-  [[ "$(jq -r .mergeStateStatus <<<"$view")" =~ ^(CLEAN|HAS_HOOKS)$ ]] || { echo "mergeStateStatus is $(jq -r .mergeStateStatus <<<"$view")"; return 1; }
 }
 
 # A gh write is allowed unless it deletes, archives, transfers or renames,
@@ -795,11 +743,7 @@ if echo "$cmd" | grep -Eq '\bgit\b([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:sp
 fi
 
 if echo "$cmd_no_prose" | grep -Eq '\bgh\b[^|;&]*\bpr[[:space:]]+merge\b'; then
-  if why=$(merge_refusal); then
-    emit ask "Squash-merge? Your PR, every check green, merge state clean, head pinned."
-  fi
-  emit deny "gh pr merge refused: $why.
-Claude merges only under /ftl ship --integrate (or /ftl <task> --ship), a PR the gh user authored, every check passed or skipped, mergeStateStatus CLEAN, as one lone command: gh pr merge <pr> --squash --match-head-commit <full head sha>"
+  emit deny "gh pr merge denied: Claude never merges. Print the command for the human instead: gh pr merge <pr> --squash --match-head-commit <full head sha>"
 fi
 echo "$cmd_no_prose" | grep -Eq '\bgh\b[^|;&]*\b(pr[[:space:]]+update-branch|repo[[:space:]]+sync)\b' \
   && emit deny "gh pr update-branch and gh repo sync write to a remote branch on the server — denied permanently. Run it yourself."
