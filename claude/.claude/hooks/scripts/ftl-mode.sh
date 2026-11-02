@@ -35,8 +35,7 @@ args="${args%"${args##*[![:space:]]}"}"
 case "$args" in
   --help|help|-h)   exit 0 ;;
   "")               mode=check ;;
-  ship)             mode=ship ;;
-  "ship --integrate") mode=integrate ;;
+  ship|"ship --integrate") mode=ship ;;
   *" --ship")       mode=task-ship ;;
   *)                mode=orient ;;
 esac

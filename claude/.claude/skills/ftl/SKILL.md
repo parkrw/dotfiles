@@ -1,6 +1,6 @@
 ---
 name: ftl
-description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - for a change, first creates and enters a worktree when on the default branch or a detached HEAD, then indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, commit, then the push and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `claude-review` in a loop until it reports zero findings, then rebases when behind and prints the push and `gh pr create` commands. `/ftl ship --integrate` also runs `pull --ff-only` in the default checkout, the rebase or merge itself, resolves conflicts, then pushes, opens a PR ready for review, and waits until CI is green and GitHub would allow the squash merge, fixing what fails, then prints the squash-merge command for you to run. `/ftl <task> --ship` does all of it in one command - orient, build, then ship --integrate - stopping only for a decision the build cannot make alone. Local git writes run as the write gate allows; push and gh run only in Ship --integrate. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl ship --integrate, /ftl "fix the logout redirect #301" --ship, /ftl --help.
+description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - for a change, first creates and enters a worktree when on the default branch or a detached HEAD, then indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, commit, then the push and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `pull --ff-only` in the default checkout and the rebase or merge itself, resolves conflicts, runs `claude-review` in a loop until it reports zero findings, then pushes, opens a PR ready for review, and waits until CI is green and GitHub would allow the squash merge, fixing what fails, then prints the squash-merge command for you to run. `/ftl <task> --ship` does all of it in one command - orient, build, then ship - stopping only for a decision the build cannot make alone. Local git writes run as the write gate allows; push and gh run only in Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl "fix the logout redirect #301" --ship, /ftl --help.
 ---
 
 ## Help
@@ -12,14 +12,14 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
 
   Derives the conventions from the repo you are in: rules file, docs index,
   CI, the lead's commits. Runs local git writes itself, as the write
-  gate allows. Push and gh pr create run only in --integrate.
+  gate allows. Push and gh pr create run only in ship.
   Claude never merges: a green PR ends with the merge command
   printed for you.
 
   Workflows
     simple task:   /ftl "<task>" --ship          -> PR, CI green, merge command
     steered task:  /ftl "<task>", build together,
-                   then /ftl ship --integrate     -> PR, CI green, merge command
+                   then /ftl ship                 -> PR, CI green, merge command
 
   /ftl <task>     orient: worktree for a change (created on
                    main/detached, then entered), index docs/ by
@@ -31,8 +31,11 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
                    the working tree), commit, then push and gh pr create
                    for the human
   /ftl ship       worktree (created on main/detached), fetch, check,
-                   commit, a Sonnet pre-review of the diff
-                   (past findings, edge cases), then
+                   commit, integrate the default branch (pull
+                   --ff-only, then rebase if unpushed or merge if
+                   pushed), resolve conflicts, run the tests the
+                   integration could break, a Sonnet pre-review of
+                   the diff (past findings, edge cases), then
                    claude-review (opus, high)
                    in a loop - run each runtime proof's test,
                    fix each finding it does not refute as a class,
@@ -40,27 +43,20 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
                    re-review - until zero findings; the full suite
                    runs before round 1, and after the last round
                    only the tests it listed as failed or flaky;
-                   then rebase when behind and print
-                   cd, push and gh pr create
-  /ftl ship --integrate
-                  ship, but integrate the default branch itself
-                   (pull --ff-only, then rebase if unpushed or merge
-                   if pushed), resolve conflicts, run the tests
-                   the integration could break, review, then push
-                   and open a PR ready for review, even if the
-                   default branch moved during the review; then wait
-                   for CI and the merge state, fixing failures,
-                   conflicts and a stale branch, then print the
-                   squash-merge command for you to run
+                   then push and open a PR ready for review, even
+                   if the default branch moved during the review;
+                   then wait for CI and the merge state, fixing
+                   failures, conflicts and a stale branch, then
+                   print the squash-merge command for you to run
   /ftl <task> --ship
-                  orient, build, then ship --integrate; stops only
+                  orient, build, then ship; stops only
                    for a decision the build cannot make alone
   /ftl --help     show this help
 ```
 
 ---
 
-Run from the repo root. Every step prints the line that shows its result, so the next step can rely on what is on screen. `$ARGUMENTS` of exactly `ship` runs Ship, and exactly `ship --integrate` runs Ship with Integrate; empty runs Check; anything else ending in ` --ship` runs Task to PR with the rest as the task; anything else is the task for Orient.
+Run from the repo root. Every step prints the line that shows its result, so the next step can rely on what is on screen. `$ARGUMENTS` of exactly `ship`, or the retired `ship --integrate`, runs Ship; empty runs Check; anything else ending in ` --ship` runs Task to PR with the rest as the task; anything else is the task for Orient.
 
 # Orient - `/ftl <task>`
 
@@ -110,7 +106,7 @@ A memory holds the pointer to the plan and the human's decisions, and changes on
 
 ## 3. The lead's conventions, measured
 
-Find the lead: `git shortlog -sn --no-merges | head -3`. Then, with `--author='<lead>' --no-merges`:
+Find the lead: `git shortlog -sn --no-merges | head -3`, the first name that is not `git config user.name` - the lead is never the human. Then, with `--author='<lead>' --no-merges`:
 
 | Measure | Command | Record |
 | --- | --- | --- |
@@ -140,7 +136,9 @@ Run the chosen local commands. A force push is the human's: print it and wait.
 
 These win over the lead's habits.
 
-- Run local git writes yourself - `fetch`, `switch`, `branch`, `worktree add`, `stash`, `add`, `commit`, `pull --ff-only`, a local `rebase` or `merge` - and let the write gate allow, ask or deny. Never print one for the human to run. `push` and `gh` run only in Ship `--integrate` (`git push -u origin <branch>`, `gh pr create`, and Ship step 6's pushes); everywhere else, and for any force push, print the command for the human.
+- Run local git writes yourself - `fetch`, `switch`, `branch`, `worktree add`, `stash`, `add`, `commit`, `pull --ff-only`, a local `rebase` or `merge` - and let the write gate allow, ask or deny. Never print one for the human to run. `push` and `gh` run only in Ship (`git push -u origin <branch>`, `gh pr create`, and Ship step 6's pushes); everywhere else, and for any force push, print the command for the human.
+- A question you hold a recommendation for is not asked: take the recommendation, carry on, and name it in the hand-off as `took: <choice> - <why>`, so the human can reverse it. Ask only when no option is clearly better, when the choice is an amount the Visual work rules leave to the human, or when the next rule says to.
+- An existing test the change contradicts is edited, loosened or deleted without asking; the hand-off lists each one as `test changed: <path:line> - <why>`. Except a test the lead wrote: before editing it, `git blame -w -M --line-porcelain -L <from>,<to> -- <file> | grep '^author ' | sort -u`, `<from>,<to>` the whole test from its `it(`, `test(`, `def test_` or `func Test` line to its end. When an author line names the lead (Orient step 3), stop before the edit: name the test, what it pins and why the change breaks it, and ask - even with a recommendation. Adding a test never asks.
 - Stage named paths, from `git status --short`. Never `git add -A`, `git add .` or `commit -a`.
 - No `Co-authored-by` and no `Claude-Session` trailer.
 - Repo-tracked Claude config (`.claude/`, `CLAUDE.md`, skills) is the lead's decision. Tooling lives in `~/.claude/` and the untracked `.claude/settings.local.json`.
@@ -152,8 +150,8 @@ These win over the lead's habits.
 For a task that needs no steer. One command from task to a PR whose CI is green.
 
 1. Orient steps 0, 1, 2, 2a, 2b, 3 and 5 for the task. Skip step 4: Ship fetches and integrates, so nothing is printed for the human and nothing waits. Step 0's restore and clean line waits for Ship step 5, which prints it.
-2. Build the task in `worktree` against Orient step 2a's traps. When the task leaves a decision open - scope it does not settle, an amount under the Visual work rules (variants or a slider page), a choice between two behaviors - stop with one question or the variants. After the answer, carry on from here; no second command.
-3. Ship from step 2, with `--integrate`.
+2. Build the task in `worktree` against Orient step 2a's traps. When the task leaves a decision open - scope it does not settle, an amount under the Visual work rules (variants or a slider page), a choice between two behaviors - take the recommendation when you hold one, as Orient step 5 says; otherwise stop with one question or the variants. After the answer, carry on from here; no second command.
+3. Ship from step 2.
 
 # Check - `/ftl`
 
@@ -226,11 +224,11 @@ Then one line per adjacent smell found, and nothing else.
 
 # Ship - `/ftl ship`
 
-Fetch, check, commit, review, fix, repeat, until the reviewer reports no findings. Ship runs every local git write itself, in the worktree resolved in step 1; the write gate allows them without a prompt. Only the push and `gh pr create` are printed for the human at the end.
+Fetch, check, commit, integrate, review, fix, repeat, until the reviewer reports no findings; then push, open the PR and wait for green. Ship runs every local git write itself, in the worktree resolved in step 1; the write gate allows them without a prompt.
 
 The order is fixed: CI's full test suite passes, run through `suite` as Check step 2 says, then `claude-review`, then the push, then the PR. The full suite runs once, before round 1. After the last round, when a fix was committed since round 1, only the tests a full suite run listed as `NEW RED` or `KNOWN RED` run again, on HEAD. An integration or a CI fix never runs it: the session picks and runs the tests the change could break, as steps 3a and 6 say, and CI runs the full suite on the push. A push that skips the review meets it anyway: where the review gate is live, pre-push denies a branch diff without a passing review.
 
-With `--integrate`, Ship also integrates the default branch itself (step 3a), once, before the review, resolves conflicts, then pushes and opens a PR ready for review, since CI may skip a draft. Step 6 then waits for CI and fixes what it reports, then prints the squash-merge command; the human merges.
+Ship integrates the default branch itself (step 3a), once, before the review, resolves conflicts, then pushes and opens a PR ready for review, since CI may skip a draft. Step 6 then waits for CI and fixes what it reports, then prints the squash-merge command; the human merges.
 
 ## 1. Worktree
 
@@ -253,15 +251,7 @@ git -C "$worktree" fetch origin
 git -C "$worktree" log --oneline HEAD..origin/HEAD
 ```
 
-If `origin/HEAD` is unset, apply Orient step 4's `set-head` line first. No output from the log: up to date, go on. Output: the branch is behind. Say by how many commits, then compare `git -C "$worktree" diff --name-only HEAD...origin/HEAD` with `git -C "$worktree" diff --name-only origin/HEAD...HEAD`.
-
-With `--integrate`, skip the rest of this step: step 3a integrates before the first review, so the review judges the integrated code.
-
-Drop from both lists every file where `git -C "$worktree" check-attr merge -- <file>` prints `merge: union`: git merges those line by line and never stops on them.
-
-- No file on both lists: go on. The rebase in step 5 applies cleanly.
-- A file on both lists: a review of this diff would judge code the rebase is about to change. Integrate now, as step 3a does, then go on.
-- `CHANGELOG.md` on this branch's list: the entry belongs in a fragment (Check section 5). Move it there and commit before going on.
+If `origin/HEAD` is unset, apply Orient step 4's `set-head` line first. No output from the log: up to date, go on. Output: the branch is behind; say by how many commits. Step 3a integrates before the first review, so the review judges the integrated code.
 
 ## 3. Check and commit
 
@@ -273,7 +263,7 @@ git -C "$worktree" add <path>... && git -C "$worktree" commit -m '<subject>'
 
 `<path>...` is every path `git -C "$worktree" status --short` lists that belongs to this change, named one by one. The review reads `<base>...HEAD`, so an uncommitted fix is invisible to it. Every round commits before it reviews.
 
-## 3a. Integrate - `--integrate` only
+## 3a. Integrate
 
 Resolve `<default>` and `<default-checkout>` as step 5 does.
 
@@ -310,7 +300,7 @@ Then Check step 2's commands, the full test suite among them with no `NEW RED`, 
 claude-review -C "$worktree" --yes --engine claude --model opus --effort high
 ```
 
-Every round, and every review Ship --integrate runs after a CI fix, uses exactly this command: opus at high, never another model or effort, never `--bump`, never codex.
+Every round, and every review Ship runs after a CI fix, uses exactly this command: opus at high, never another model or effort, never `--bump`, never codex.
 
 Run it in the background and wait for it; a review takes minutes and a foreground timeout would kill it mid-run. It prints the report, then a `review-branch: PASS` or `FAIL` line naming the report file.
 
@@ -334,9 +324,14 @@ However the loop ends, when a fix was committed since round 1, rerun on HEAD onl
 
 ## 5. Hand off
 
-Without `--integrate`, first rerun step 2's `fetch`, then `git -C "$worktree" rev-list --count HEAD..origin/HEAD`, since the review loop can outlast a merge to the default branch. Count above `0` - behind: run `git -C <default-checkout> pull --ff-only`, then `git -C <worktree> rebase <default>`, literal paths; a conflict is resolved, or aborted, as step 3a does. The human pastes the block below into a shell that sits in some other directory and has no `$worktree`, so every path is a literal absolute path and the block opens with `cd`. Print it, placeholders filled, and nothing else - no smell line, no summary.
+Before Ship pushes or prints the block below, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<repo>-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree and outside `.git`; `<branch-slug>` is `<branch>` with each `/` as `-`, so no two branches share one. The body ends with `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. It never mentions conflicts, their resolution, or the rebase or merge: integration is plumbing, not the change. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
 
-Before any block is printed or `--integrate` pushes, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<repo>-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree and outside `.git`; `<branch-slug>` is `<branch>` with each `/` as `-`, so no two branches share one. The body ends with `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. It never mentions conflicts, their resolution, or the rebase or merge: integration is plumbing, not the change. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
+No fetch, no second rebase or merge and no re-review: push the branch as reviewed, even when `<default>` has moved since step 3a.
+
+- `git -C <worktree> push -u origin <branch>`, then `cd <worktree> && gh pr create --title '<title>' --body-file <body-file>`. Literal paths. Single-quote the title; one with an apostrophe goes in double quotes and carries no `$` or backtick. No `--draft`: a draft is the human's call, and CI may run nothing on one.
+- Go on to step 6 with the URL `gh pr create` printed.
+
+Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), a `NEW RED` stands, step 3a stopped, or the gate or pre-push refuses. Print the block below for the human instead, placeholders filled, and nothing else - no smell line, no summary. The human pastes it into a shell that sits in some other directory and has no `$worktree`, so every path is a literal absolute path and the block opens with `cd`.
 
 ```
 cd <worktree>
@@ -344,18 +339,11 @@ git push -u origin <branch>
 gh pr create --title '<title>' --body-file <body-file>
 ```
 
-With `--integrate`, no fetch, no second rebase or merge and no re-review: push the branch as reviewed, even when `<default>` has moved since step 3a. Instead of printing a block:
+When Orient step 2b printed a plan, record this task's status as the last write before printing: `tasklog state <plan> <code> <state> --branch <branch> --head <sha>`, plus `--pr <N>` when Ship opened one. `<state>` is `ready` after its `0`, `merged` or `dropped` after its `4` as GitHub says, `blocked` when the work stopped, and `review` otherwise. Then `tasklog event <plan> <code> handoff -` with the PR URL and step 6's verdict, or why it stopped, on stdin.
 
-- `git -C <worktree> push -u origin <branch>`, then `cd <worktree> && gh pr create --title '<title>' --body-file <body-file>`. Literal paths. Single-quote the title; one with an apostrophe goes in double quotes and carries no `$` or backtick. No `--draft`: a draft is the human's call, and CI may run nothing on one.
-- Go on to step 6 with the URL `gh pr create` printed.
+`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. When step 1 carried uncommitted work over, the block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy; it discards work, so it stays the human's. `<title>` is the line of the `changelog.d` fragment this branch adds, read from the file, never written: `head -n1 <worktree>/changelog.d/<fragment>.md`. A squash merge lands it, so a commit subject is never the title. With no fragment, the subject follows Check step 6. The write gate denies a title that differs from the fragment line or runs past 50 characters. A PR that finishes an issue ends its body with `Closes #N`.
 
-Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), a `NEW RED` stands, step 3a stopped, or the gate or pre-push refuses: print the block for the human, as plain Ship does.
-
-When Orient step 2b printed a plan, record this task's status as the last write before printing: `tasklog state <plan> <code> <state> --branch <branch> --head <sha>`, plus `--pr <N>` when `--integrate` opened one. `<state>` is `ready` after its `0`, `merged` or `dropped` after its `4` as GitHub says, `blocked` when the work stopped, and `review` otherwise. Then `tasklog event <plan> <code> handoff -` with the PR URL and step 6's verdict, or why it stopped, on stdin.
-
-`<default>` is `git symbolic-ref --short refs/remotes/origin/HEAD` with the `origin/` dropped; `<default-checkout>` is the path `git worktree list` shows for it. A branch already under review takes `git merge <default>` in place of `git rebase <default>`. When step 1 carried uncommitted work over, the block's second line is `git -C <original-checkout> restore --staged --worktree . && git -C <original-checkout> clean -fd`, which discards the original copy; it discards work, so it stays the human's. `<title>` is the line of the `changelog.d` fragment this branch adds, read from the file, never written: `head -n1 <worktree>/changelog.d/<fragment>.md`. A squash merge lands it, so a commit subject is never the title. With no fragment, the subject follows Check step 6. The write gate denies a title that differs from the fragment line or runs past 50 characters. A PR that finishes an issue ends its body with `Closes #N`.
-
-## 6. Wait for green - `--integrate` only
+## 6. Wait for green
 
 The PR is green when every check has passed or skipped and GitHub would let it squash-merge. Claude never runs `gh pr merge`: the human merges, from the command the `0 ready` bullet prints.
 

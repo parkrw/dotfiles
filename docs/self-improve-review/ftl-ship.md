@@ -1,4 +1,4 @@
-# ftl ship --integrate
+# ftl ship
 
 Task to a PR ready to squash-merge in one command: worktree, commit, rebase, a review loop until zero findings, push, PR, then CI fixed until green. Git hooks and Claude hooks gate each step.
 
@@ -79,7 +79,7 @@ Always denied: `gh pr merge`, `git pull` (except `--ff-only`), and merging or re
 
 ## Loop
 
-1. Run `/ftl "<task>" --ship`. For a task you want to steer, run `/ftl "<task>"`, build it together, then `/ftl ship --integrate`.
+1. Run `/ftl "<task>" --ship`. For a task you want to steer, run `/ftl "<task>"`, build it together, then `/ftl ship`.
 2. Ship works in a worktree. It fetches, checks, commits, pulls with `--ff-only` and rebases. It then loops `claude-review` (opus, high) until there are zero findings, pushes, and opens a PR ready for review.
 3. It waits on `pr-wait` until every check passes and GitHub would allow the squash merge. A failed check, a conflict or a stale branch gets fixed, reviewed and pushed, up to 5 rounds.
 4. Review the PR and click squash and merge.

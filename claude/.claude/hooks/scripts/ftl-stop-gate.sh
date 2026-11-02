@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ftl-stop-gate.sh — Stop. A turn of /ftl ship, ship --integrate or
-# <task> --ship may end only where the skill lets it: handed off, or at one of
-# its stop-and-wait points — one question, commands printed for the human,
+# ftl-stop-gate.sh — Stop. A turn of /ftl ship or <task> --ship may end
+# only where the skill lets it: handed off, or at one of its stop-and-wait
+# points — one question, commands printed for the human,
 # variants to pick from, open findings listed, or a review or pr-wait still
 # running.
 # Any other stop means a step was skipped.
@@ -35,7 +35,7 @@ session=${session//[^a-zA-Z0-9_-]/}
 mode_file="$HOOKS_DIR/state/ftl-mode-$session"
 [[ -f "$mode_file" ]] || exit 0
 { IFS= read -r mode; IFS= read -r owner; IFS= read -r resume; } < "$mode_file" || true
-case "$mode" in ship|integrate|task-ship) ;; *) exit 0 ;; esac
+case "$mode" in ship|task-ship) ;; *) exit 0 ;; esac
 
 prompt=$(jq -r '.prompt_id // ""' <<<"$INPUT")
 if [[ -n "$prompt" && -n "$owner" && "$prompt" != "$owner" ]]; then
