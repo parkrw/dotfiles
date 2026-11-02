@@ -21,6 +21,7 @@ verbatim and **stop — do not execute the skill**.
   /spawn --fresh "task"          seeded with the task only, no handoff pickup
   /spawn --cwd <dir> "task"      open the window in <dir> instead of $PWD
   /spawn --pane "task"           open a pane in this window instead of a new window
+  /spawn --same "task"           exact model and effort, no tier step down (a replacement)
   /spawn --help                  show this help
 
   See also:
@@ -32,7 +33,7 @@ verbatim and **stop — do not execute the skill**.
 
 # Spawn a sibling Claude Code session
 
-Open a fresh interactive `claude` in a **new window of the current tmux session**, running the exact model id this session runs on (or one tier lower — Fable → Opus → Sonnet → Haiku — never Fable) at this session's effort. If the effort is unknown, omit the `--effort` flag. **Never `--effort max`.** Then confirm the window exists.
+Open a fresh interactive `claude` in a **new window of the current tmux session**, running the exact model id this session runs on (or one tier lower — Fable → Opus → Sonnet → Haiku — never Fable) at this session's effort. Under `--same`, take neither step down: the exact model id and the exact effort, because the new session replaces this one and must not run weaker. Read the effort with `echo "$CLAUDE_EFFORT"`, never from memory; if it is empty, omit the `--effort` flag. **Never `--effort max`:** a `max` effort launches at `xhigh`. Then confirm the window exists.
 
 ## 1. Preconditions
 
@@ -42,7 +43,7 @@ Open a fresh interactive `claude` in a **new window of the current tmux session*
 
 ## 2. Build the seed prompt
 
-Strip the leading flags from `$ARGUMENTS`, in any order, and remember them: `--fresh`, `--pane`, and `--cwd <dir>` (an absolute path, quoted if it holds spaces). Every item below reads the stripped `$ARGUMENTS`.
+Strip the leading flags from `$ARGUMENTS`, in any order, and remember them: `--fresh`, `--pane`, `--same`, and `--cwd <dir>` (an absolute path, quoted if it holds spaces). Every item below reads the stripped `$ARGUMENTS`.
 
 The new session always starts with an initial prompt composed of, in order:
 
@@ -52,12 +53,12 @@ The new session always starts with an initial prompt composed of, in order:
    - else omit this line.
 2. **Context budget** — always include, verbatim:
 
-   > Context budget: when context use reaches 25% of the window, run
+   > Context budget: at 25% of the window, gauge remaining work and wind
+   > down — finish or checkpoint the current sub-task. At 30%, run
    > /newchat --spawn --replace "continue: <the current task>" so a fresh
-   > session takes over and this one ends. NEVER exceed 30% total: treat 25%
-   > as the signal to gauge remaining work and wind down — finish or
-   > checkpoint the current sub-task and leave a concrete next step in the
-   > newchat prompt. Never leave a task or sub-task hanging with no plan there.
+   > session takes over and this one ends; NEVER exceed 30% total. Leave a
+   > concrete next step in the newchat prompt. Never leave a task or sub-task
+   > hanging with no plan there.
    > Hard caps: never more than 6 subagents/workers total, never
    > `--effort max`, and do implementation work yourself rather than
    > delegating it.
@@ -115,4 +116,4 @@ tmux list-windows -t "$session" -F '#{session_name}:#{window_index} #{window_nam
 - The target from step 2 must appear in this list. If it does not, report the
   failure — re-run the launch command in the current pane's shell context to
   surface the error, don't silently retry.
-- Report to the user: window target (e.g. `dotfiles:3`), window name, pane id under `--pane`, `$dir`, and the model launched.
+- Report to the user: window target (e.g. `dotfiles:3`), window name, pane id under `--pane`, `$dir`, and the model and effort launched.
