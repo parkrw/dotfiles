@@ -8,7 +8,8 @@
 #
 #   plan add <slug> [--path PLAN.md] [--title T]
 #   plan list
-#   state <plan> <code> <state> [--pr N --head sha --branch B --worktree W --subject S]
+#   state <plan> <code> <state> [--pr N --head sha --branch B --worktree W --subject S
+#                                --issue N --est S|M|L --owns GLOBS --deps CODES]
 #   event <plan> <code> <kind> [text|-]
 #   decide <plan> <text|-> [--by who --quote Q]
 #   show [plan] [--all] [--json]
@@ -18,6 +19,12 @@
 #   suite-run --started T --exit N [--ended --worktree --branch --head --cmd --wait-ms --log --new --known]
 #
 # suite-run is how `suite` records a run; people read suite_runs with sqlite3.
+#
+# --issue, --est, --owns and --deps are what /fan batches on: the GitHub issue,
+# the size (S <=100 lines, M 100-300, L 300+), the write scope as
+# space-separated globs, and the codes that must merge first, space-separated.
+# An open row missing any of the first three gets a stderr line naming them,
+# so every plan stays ready to fan.
 #
 # A text argument of "-" is read from stdin, so text never passes through the
 # shell, where quotes break it and the write gate reads it as a command.
@@ -46,6 +53,8 @@ NAMES = {
 STATES = ["planned", "building", "review", "draft", "ready", "merged", "dropped", "blocked"]
 CLOSED_SQL = "'merged','dropped'"
 BRIEF_EVENTS = 10
+ESTS = ["S", "M", "L"]
+FAN_FIELDS = ("issue", "est", "owns")
 BUSY_TIMEOUT_S = 5
 
 
@@ -146,6 +155,10 @@ MIGRATIONS = [
        started TEXT NOT NULL, ended TEXT,
        exit INTEGER, wait_ms INTEGER, log TEXT,
        new_reds INTEGER, known_reds INTEGER);""",
+    """ALTER TABLE prs ADD COLUMN issue INTEGER;
+     ALTER TABLE prs ADD COLUMN est TEXT;
+     ALTER TABLE prs ADD COLUMN owns TEXT;
+     ALTER TABLE prs ADD COLUMN deps TEXT;""",
 ]
 
 
@@ -281,29 +294,41 @@ def cmd_plan(db, ctx, argv):
 
 
 def cmd_state(db, ctx, argv):
-    a = args(argv, options=("pr", "head", "branch", "worktree", "subject"), lo=3)
+    a = args(argv, options=("pr", "head", "branch", "worktree", "subject", "issue", "est", "owns", "deps"), lo=3)
     slug, code, state = a.positionals
     if state not in STATES:
         raise Usage(f"state must be one of {'|'.join(STATES)}")
-    if a.pr is not None and not re.fullmatch(r"\d+", a.pr):
-        raise Usage("--pr takes a PR number")
+    for k in ("pr", "issue"):
+        if getattr(a, k) is not None and not re.fullmatch(r"\d+", getattr(a, k)):
+            raise Usage(f"--{k} takes a number")
+    if a.est is not None and a.est not in ESTS:
+        raise Usage(f"--est must be one of {'|'.join(ESTS)}")
     plan = plan_row(db, ctx["repo"], slug)
     ts = now()
     fields = {"branch": a.branch, "worktree": a.worktree, "pr": a.pr and int(a.pr),
-              "head": a.head, "subject": a.subject}
+              "head": a.head, "subject": a.subject, "issue": a.issue and int(a.issue), "est": a.est,
+              "owns": a.owns and " ".join(a.owns.split()), "deps": a.deps and " ".join(a.deps.split())}
     with transaction(db):
         # An option left out keeps the row's earlier value.
         db.execute(
-            """INSERT INTO prs (plan, code, branch, worktree, pr, state, head, subject, updated)
-               VALUES (:plan, :code, :branch, :worktree, :pr, :state, :head, :subject, :ts)
+            """INSERT INTO prs (plan, code, branch, worktree, pr, state, head, subject, issue, est, owns, deps,
+                                updated)
+               VALUES (:plan, :code, :branch, :worktree, :pr, :state, :head, :subject, :issue, :est, :owns, :deps,
+                       :ts)
                ON CONFLICT (plan, code) DO UPDATE SET
                  branch = coalesce(:branch, branch), worktree = coalesce(:worktree, worktree),
                  pr = coalesce(:pr, pr), state = :state, head = coalesce(:head, head),
-                 subject = coalesce(:subject, subject), updated = :ts""",
+                 subject = coalesce(:subject, subject), issue = coalesce(:issue, issue),
+                 est = coalesce(:est, est), owns = coalesce(:owns, owns), deps = coalesce(:deps, deps),
+                 updated = :ts""",
             dict(fields, plan=plan["id"], code=code, state=state, ts=ts))
         detail = [f"{k}={v}" for k, v in fields.items() if v is not None]
         db.execute("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, 'state', ?, ?)",
                    (ts, plan["id"], code, " ".join([state] + detail), ctx["session"]))
+        row = db.execute("SELECT * FROM prs WHERE plan = ? AND code = ?", (plan["id"], code)).fetchone()
+    missing = [k for k in FAN_FIELDS if row[k] is None]
+    if missing and state not in ("merged", "dropped"):
+        sys.stderr.write(f"not fan-ready: {slug} {code} lacks {' '.join('--' + k for k in missing)}\n")
     return f"{slug} {code}: {state}\n"
 
 
@@ -335,7 +360,7 @@ def cmd_show(db, ctx, argv):
         where.append(f"prs.state NOT IN ({CLOSED_SQL})")
     rows = [dict(r) for r in db.execute(
         f"""SELECT plans.slug AS plan, prs.code, prs.state, prs.pr, prs.branch, prs.head, prs.subject,
-                   prs.worktree, prs.updated
+                   prs.worktree, prs.issue, prs.est, prs.owns, prs.deps, prs.updated
             FROM prs JOIN plans ON plans.id = prs.plan
             WHERE {" AND ".join(where)} ORDER BY plans.slug, prs.code""", params)]
     if a.json:
@@ -343,7 +368,7 @@ def cmd_show(db, ctx, argv):
     for r in rows:
         r["head"] = r["head"] and r["head"][:12]
         r["updated"] = r["updated"][:16]
-    return table(rows, ["plan", "code", "state", "pr", "branch", "head", "updated", "subject"])
+    return table(rows, ["plan", "code", "state", "issue", "est", "pr", "branch", "head", "updated", "subject"])
 
 
 def cmd_log(db, ctx, argv):
@@ -411,7 +436,8 @@ def cmd_brief(db, ctx, argv):
     out = [f"# {plan['slug']} {code}{' — ' + plan['title'] if plan['title'] else ''}", ""]
     out += [f"Plan: {plan['path'] or 'none recorded'}", "", "## PR", ""]
     if pr:
-        out += [f"- {k}: {pr[k]}" for k in ("state", "pr", "branch", "worktree", "head", "subject", "updated")
+        out += [f"- {k}: {pr[k]}" for k in ("state", "issue", "est", "owns", "deps", "pr", "branch", "worktree",
+                                              "head", "subject", "updated")
                 if pr[k] is not None]
     else:
         out.append("No row yet.")
