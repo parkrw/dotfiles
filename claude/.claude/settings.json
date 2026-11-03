@@ -167,6 +167,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/scripts/lint-on-edit.py",
+            "timeout": 60
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
