@@ -33,7 +33,7 @@ verbatim and **stop — do not execute the skill**.
 
 # Spawn a sibling Claude Code session
 
-Open a fresh interactive `claude` in a **new window of the current tmux session**, running the exact model id this session runs on (or one tier lower — Fable → Opus → Sonnet → Haiku — never Fable) at this session's effort. Under `--same`, take neither step down: the exact model id and the exact effort, because the new session replaces this one and must not run weaker. Read the effort with `echo "$CLAUDE_EFFORT"`, never from memory; if it is empty, omit the `--effort` flag. **Never `--effort max`:** a `max` effort launches at `xhigh`. Then confirm the window exists.
+Open a fresh interactive `claude` in a **new window of the current tmux session**, running the exact model id this session runs on at this session's effort, never a tier lower; Opus when this session runs Fable. Under `--same`, Fable stays Fable: the exact model id and the exact effort, because the new session replaces this one and must not run weaker. Read the effort with `echo "$CLAUDE_EFFORT"`, never from memory; if it is empty, omit the `--effort` flag. **Never `--effort max`:** a `max` effort launches at `xhigh`. Then confirm the window exists.
 
 ## 1. Preconditions
 

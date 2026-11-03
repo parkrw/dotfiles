@@ -94,10 +94,8 @@ tasklog: fan-<lane>|none
 | Role | Runs as | Model |
 | --- | --- | --- |
 | Head | this session | session model |
-| Worker | `claude` CLI in a tmux pane | `<worker-model>`: one tier below this session's model (Fable → Opus → Sonnet → Haiku) for a `~S` row, this session's model otherwise; never Fable, never below Sonnet. `<worker-effort>`: this session's effort, omit the flag if unknown, never `max`. |
+| Worker | `claude` CLI in a tmux pane | `<worker-model>`: this session's exact model for every row whatever its `est`, never a tier lower; Opus when this session runs Fable. `<worker-effort>`: this session's effort, omit the flag if unknown, never `max`. |
 | Reviewer, lookups | `Agent()` | `model: "sonnet"` |
-
-A batch with mixed models launches each pane with its own `m` (Fan out 5). The `~S` step-down is a trial: at each `--adjust`, compare the `~S` rows' rework rounds (Log) and `blocked` events (`tasklog log <plan>`) against the batch's other rows, and log the comparison; two lanes where `~S` rows need more rework than `~M` rows end the trial, so record that and launch `~S` at this session's model.
 
 Hard cap, all modes: never more than 6 agents and workers live at once, and every worker seed carries the cap. The reviewer runs one at a time and takes one slot, so a batch is at most 5 workers.
 
@@ -168,7 +166,7 @@ The head stays in this checkout and does not implement during a batch.
 5. **Spawn.** Requires `$TMUX`; if unset, stop and say so. One new window in the caller's tmux session per batch, one pane per worker, `claude` launched with no positional prompt and no `--allowedTools`:
 
    ```bash
-   m="claude --model <worker-model> --effort <worker-effort>"   # per row (§ Model tiers); drop --effort if unknown
+   m="claude --model <worker-model> --effort <worker-effort>"   # drop --effort if unknown
    win=$(tmux new-window -P -F '#{window_id}' -n "fan-${CLAUDE_CODE_SESSION_ID%%-*}" -c ../<wt-1> "$m")
    p1=$(tmux list-panes -t "$win" -F '#{pane_id}')
    p2=$(tmux split-window -P -F '#{pane_id}' -t "$win" -c ../<wt-2> "$m")

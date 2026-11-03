@@ -127,7 +127,7 @@ coin flip.
 2. **Branch + spec agent — alone, first.** Propose `git switch -c
    <type>/<slug>` (approval-gated); this is the feature branch, and the spec
    agent's tests become its first commit(s). `<worker-model>` = this session's
-   model, or one tier lower (Fable → Opus → Sonnet → Haiku); never Fable.
+   exact model, never a tier lower; Opus when this session runs Fable.
    `<worker-effort>` = `--effort <this session's effort>`, dropped entirely when
    that effort is unknown. **Never `--effort max`.** Spawn it in the main
    worktree:

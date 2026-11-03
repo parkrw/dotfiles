@@ -26,6 +26,9 @@
 # An open row missing any of the first three gets a stderr line naming them,
 # so every plan stays ready to fan.
 #
+# A row carries no model or effort: every task runs at the launching
+# session's, so an event of kind model is refused and brief hides old ones.
+#
 # A text argument of "-" is read from stdin, so text never passes through the
 # shell, where quotes break it and the write gate reads it as a command.
 #
@@ -334,6 +337,8 @@ def cmd_state(db, ctx, argv):
 
 def cmd_event(db, ctx, argv):
     slug, code, kind, text = args(argv, lo=3, hi=4).positionals
+    if kind == "model":
+        raise Usage("rows carry no model or effort; every task runs at the launching session's")
     plan = plan_row(db, ctx["repo"], slug)
     db.execute("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, ?, ?, ?)",
                (now(), plan["id"], code, kind, None if text is None else text_arg(text), ctx["session"]))
@@ -430,7 +435,8 @@ def cmd_brief(db, ctx, argv):
     pr = db.execute("SELECT * FROM prs WHERE plan = ? AND code = ?", (plan["id"], code)).fetchone()
     decisions = db.execute("SELECT ts, text, said_by, quote FROM decisions WHERE plan = ? ORDER BY ts, id",
                            (plan["id"],)).fetchall()
-    events = db.execute("SELECT ts, kind, text FROM events WHERE plan = ? AND code = ? ORDER BY ts DESC, id DESC LIMIT ?",
+    events = db.execute("SELECT ts, kind, text FROM events WHERE plan = ? AND code = ? AND kind != 'model' "
+                        "ORDER BY ts DESC, id DESC LIMIT ?",
                         (plan["id"], code, BRIEF_EVENTS)).fetchall()[::-1]
     flakes = db.execute("SELECT test_id, note FROM flakes WHERE repo = ? ORDER BY test_id", (ctx["repo"],)).fetchall()
     out = [f"# {plan['slug']} {code}{' — ' + plan['title'] if plan['title'] else ''}", ""]
