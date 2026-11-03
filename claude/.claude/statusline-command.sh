@@ -7,11 +7,12 @@ input=$(cat)
 # --- data from JSON (single jq call for efficiency and null-safety) ---
 # Unit-separator delimited: unlike tab (whitespace IFS), \x1f preserves
 # empty fields, so a missing project_dir or percentage can't shift fields.
-IFS=$'\x1f' read -r cwd project_dir model used session_id <<< "$(
+IFS=$'\x1f' read -r cwd project_dir model effort used session_id <<< "$(
   echo "$input" | jq -r '[
     (.workspace.current_dir // .cwd // ""),
     (.workspace.project_dir // ""),
     (.model.display_name // ""),
+    (.effort.level // ""),
     (if .context_window.used_percentage == null then "" else (.context_window.used_percentage | tostring) end),
     (.session_id // "")
   ] | join("\u001f")'
@@ -61,6 +62,7 @@ done
 # --- shorten model name: strip "Claude " prefix to save space ---
 short_model="${model#Claude }"
 model_part="${CYAN}${short_model}${RESET}"
+[ -n "$effort" ] && model_part="${model_part} ${ORANGE}${effort}${RESET}"
 
 # --- context bar: 10-block visual bar + numeric % (sky blue -> orange -> red) ---
 ctx_part=""
