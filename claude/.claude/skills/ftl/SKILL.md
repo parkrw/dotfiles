@@ -142,6 +142,7 @@ These win over the lead's habits.
 - Stage named paths, from `git status --short`. Never `git add -A`, `git add .` or `commit -a`.
 - No `Co-authored-by` and no `Claude-Session` trailer.
 - Repo-tracked Claude config (`.claude/`, `CLAUDE.md`, skills) is the lead's decision. Tooling lives in `~/.claude/` and the untracked `.claude/settings.local.json`.
+- An expected value for a computed style, DOM default or runtime-specific output comes from a run in the runtime the test uses - jsdom through `node -e`, a browser through a Playwright `evaluate` - never from memory. The hand-off names the run.
 - A runbook is unverified until you have run it. Run a procedure against dev before extending it, and frame the change as "run against dev on <date>, here is what changed".
 - Work lands as a PR. An issue writeup gets absorbed into the lead's commits; a PR gets reviewed and stays attributable.
 
@@ -178,7 +179,7 @@ Run the commands from Orient step 3, from the repo root, each with its pass line
 - Where the repo commits generated output - a manifest, a hash file, a built sheet - rerun its generator after the last edit. `git status --short` then lists nothing new, or the file it rewrote joins this commit.
 - If the rules file demands a spelling, `git diff --cached | grep -nE '^\+.*\b(licence|colour|behaviour|organis|initialis|centre|cancelled|catalogue|analyse|favour|honour)'` prints nothing for US spelling. A mechanical checker rarely covers spelling; this grep is the spot check.
 - If the rules file names a running stack you may restart, restart it and read its log. Paste anything that is not a clean boot.
-- If the repo has end-to-end tests (the directory the e2e command from Orient step 3 runs), grep them for every class, role name, label text, test id and option the diff renames, removes or restyles. Each hit is a spec to update on this branch, though it sits outside the diff.
+- If the repo has end-to-end tests (the directory the e2e command from Orient step 3 runs), grep them for every class, role name, label text, test id and option the diff renames, removes or restyles. Each hit is a spec to update on this branch, though it sits outside the diff. Then, when the diff touches UI source or an API route, run the e2e project CI runs without live vendors, as `suite <command>`, before review round 1; a failure is a `NEW RED`. A grep finds a renamed selector, not a changed status code or a hidden list.
 
 ## 3. Docs
 
