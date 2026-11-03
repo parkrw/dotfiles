@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Claude Code status line
-# Shows: git-branch  model  context-bar
+# Shows: host  cwd  git-branch  model  context-bar
 
 input=$(cat)
 
@@ -31,6 +31,16 @@ RED="\033[38;5;167m"
 RESET="\033[0m"
 
 CTX_BASE="\033[38;5;74m"
+GREEN="\033[38;5;108m"
+BLUE="\033[38;5;110m"
+
+host_part="${GREEN}$(hostname -s)${RESET}"
+
+cwd_part=""
+if [ -n "$cwd" ]; then
+  short_cwd="${cwd/#$HOME/\~}"
+  cwd_part="${BLUE}${short_cwd}${RESET}"
+fi
 
 # --- git branch ---
 # Try each candidate directory in preference order; use HEAD file as
@@ -78,8 +88,10 @@ if [ -n "$used" ]; then
   ctx_part="${bar_color}${bar} ${used_int}%${RESET}"
 fi
 
-# --- assemble: git  model  ctx ---
+# --- assemble: host  cwd  git  model  ctx ---
 parts=()
+[ -n "$host_part"    ] && parts+=("$host_part")
+[ -n "$cwd_part"     ] && parts+=("$cwd_part")
 [ -n "$git_part"     ] && parts+=("$git_part")
 [ -n "$model_part"   ] && parts+=("$model_part")
 [ -n "$ctx_part"     ] && parts+=("$ctx_part")
