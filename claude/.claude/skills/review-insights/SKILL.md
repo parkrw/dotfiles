@@ -1,7 +1,7 @@
 ---
 name: review-insights
 description: The claude-review ledger as one HTML artifact — verdicts, spend, rounds per branch, findings by area and cause, what is still listed, hotspots, and every finding searchable — led by 3-5 recommendations written from that evidence on what to change so the findings stop recurring. Republishes to the same artifact each run. e.g. /review-insights, /review-insights --since 2026-10-01, /review-insights --repo ~/Developments/work/ck/programmin/core.
-allowed-tools: Bash(claude-review-stats --json:*), Bash(node ~/.claude/skills/review-insights/render.mjs:*)
+allowed-tools: Bash(claude-review-stats --categorize --yes:*), Bash(claude-review-stats --json:*), Bash(node ~/.claude/skills/review-insights/render.mjs:*)
 ---
 
 # review-insights
@@ -13,10 +13,11 @@ allowed-tools: Bash(claude-review-stats --json:*), Bash(node ~/.claude/skills/re
 ## 1. Data
 
 ```
+claude-review-stats --categorize --yes > /dev/null
 claude-review-stats --json $ARGUMENTS > <dir>/review-ledger.json
 ```
 
-Like every run of `claude-review-stats`, it first imports new reviewer transcripts into `~/.claude/review-ledger/`. `no reviews match`: say so and stop.
+Like every run of `claude-review-stats`, the first imports new reviewer transcripts into `~/.claude/review-ledger/`; it then files every uncategorized finding under an area and cause with haiku, which costs cents. When it fails, carry on: the digest's `categorized through` line says how far the causes reach. `no reviews match`: say so and stop.
 
 ## 2. Render and read the digest
 
@@ -67,4 +68,4 @@ Rerun step 2's command with `--notes <dir>/review-insights-notes.json`. The dige
 
 ## 6. Reply
 
-The link, then each recommendation's title, one per line. When the digest counts uncategorized findings, one more line: `claude-review-stats --categorize` files them under an area and cause, and asks before it spends. Never run it unasked.
+The link, then each recommendation's title, one per line. When the digest still counts uncategorized findings, one more line naming how many and why step 1 left them.
