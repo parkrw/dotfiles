@@ -9,7 +9,8 @@
 #   plan add <slug> [--path PLAN.md] [--title T]
 #   plan list
 #   state <plan> <code> <state> [--pr N --head sha --branch B --worktree W --subject S
-#                                --issue N --est S|M|L --owns GLOBS --deps CODES]
+#                                --issue N --est S|M|L --owns GLOBS --deps CODES
+#                                --model opus|fable --effort high|xhigh]
 #   event <plan> <code> <kind> [text|-]
 #   decide <plan> <text|-> [--by who --quote Q]
 #   show [plan] [--all] [--json]
@@ -26,8 +27,11 @@
 # An open row missing any of the first three gets a stderr line naming them,
 # so every plan stays ready to fan.
 #
-# A row carries no model or effort: every task runs at the launching
-# session's, so an event of kind model is refused and brief hides old ones.
+# Every row carries the model and effort its task launches at, filled on
+# each write from its size, correctness first: S runs opus at high, M, L and
+# an unsized row opus at xhigh. --model and --effort override, never below
+# opus at high. An event of kind model is refused and brief hides old ones,
+# so the row is the only place a session reads them from.
 #
 # A text argument of "-" is read from stdin, so text never passes through the
 # shell, where quotes break it and the write gate reads it as a command.
@@ -57,6 +61,9 @@ STATES = ["planned", "building", "review", "draft", "ready", "merged", "dropped"
 CLOSED_SQL = "'merged','dropped'"
 BRIEF_EVENTS = 10
 ESTS = ["S", "M", "L"]
+MODELS = ["opus", "fable"]
+EFFORTS = ["high", "xhigh"]
+RUN_BY_EST = {"S": ("opus", "high"), "M": ("opus", "xhigh"), "L": ("opus", "xhigh"), None: ("opus", "xhigh")}
 FAN_FIELDS = ("issue", "est", "owns")
 BUSY_TIMEOUT_S = 5
 
@@ -162,6 +169,9 @@ MIGRATIONS = [
      ALTER TABLE prs ADD COLUMN est TEXT;
      ALTER TABLE prs ADD COLUMN owns TEXT;
      ALTER TABLE prs ADD COLUMN deps TEXT;""",
+    """ALTER TABLE prs ADD COLUMN model TEXT;
+     ALTER TABLE prs ADD COLUMN effort TEXT;
+     UPDATE prs SET model = 'opus', effort = CASE est WHEN 'S' THEN 'high' ELSE 'xhigh' END;""",
 ]
 
 
@@ -297,7 +307,8 @@ def cmd_plan(db, ctx, argv):
 
 
 def cmd_state(db, ctx, argv):
-    a = args(argv, options=("pr", "head", "branch", "worktree", "subject", "issue", "est", "owns", "deps"), lo=3)
+    a = args(argv, options=("pr", "head", "branch", "worktree", "subject", "issue", "est", "owns", "deps",
+                                   "model", "effort"), lo=3)
     slug, code, state = a.positionals
     if state not in STATES:
         raise Usage(f"state must be one of {'|'.join(STATES)}")
@@ -306,24 +317,32 @@ def cmd_state(db, ctx, argv):
             raise Usage(f"--{k} takes a number")
     if a.est is not None and a.est not in ESTS:
         raise Usage(f"--est must be one of {'|'.join(ESTS)}")
+    if a.model is not None and a.model not in MODELS:
+        raise Usage(f"--model must be one of {'|'.join(MODELS)}; code runs at opus or above")
+    if a.effort is not None and a.effort not in EFFORTS:
+        raise Usage(f"--effort must be one of {'|'.join(EFFORTS)}; code runs at high or above")
     plan = plan_row(db, ctx["repo"], slug)
     ts = now()
     fields = {"branch": a.branch, "worktree": a.worktree, "pr": a.pr and int(a.pr),
               "head": a.head, "subject": a.subject, "issue": a.issue and int(a.issue), "est": a.est,
-              "owns": a.owns and " ".join(a.owns.split()), "deps": a.deps and " ".join(a.deps.split())}
+              "owns": a.owns and " ".join(a.owns.split()), "deps": a.deps and " ".join(a.deps.split()),
+              "model": None, "effort": None}
     with transaction(db):
+        old = db.execute("SELECT est, model, effort FROM prs WHERE plan = ? AND code = ?",
+                         (plan["id"], code)).fetchone()
+        fields["model"], fields["effort"] = pick_run(old, a)
         # An option left out keeps the row's earlier value.
         db.execute(
             """INSERT INTO prs (plan, code, branch, worktree, pr, state, head, subject, issue, est, owns, deps,
-                                updated)
+                                model, effort, updated)
                VALUES (:plan, :code, :branch, :worktree, :pr, :state, :head, :subject, :issue, :est, :owns, :deps,
-                       :ts)
+                       :model, :effort, :ts)
                ON CONFLICT (plan, code) DO UPDATE SET
                  branch = coalesce(:branch, branch), worktree = coalesce(:worktree, worktree),
                  pr = coalesce(:pr, pr), state = :state, head = coalesce(:head, head),
                  subject = coalesce(:subject, subject), issue = coalesce(:issue, issue),
                  est = coalesce(:est, est), owns = coalesce(:owns, owns), deps = coalesce(:deps, deps),
-                 updated = :ts""",
+                 model = :model, effort = :effort, updated = :ts""",
             dict(fields, plan=plan["id"], code=code, state=state, ts=ts))
         detail = [f"{k}={v}" for k, v in fields.items() if v is not None]
         db.execute("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, 'state', ?, ?)",
@@ -335,10 +354,21 @@ def cmd_state(db, ctx, argv):
     return f"{slug} {code}: {state}\n"
 
 
+# A run the row's size picked follows the size when it changes; a run set with
+# --model or --effort stays until one of them is passed again.
+def pick_run(old, a):
+    est = a.est or (old and old["est"])
+    if old is None or old["model"] is None or (old["model"], old["effort"]) == RUN_BY_EST[old["est"]]:
+        model, effort = RUN_BY_EST[est]
+    else:
+        model, effort = old["model"], old["effort"]
+    return a.model or model, a.effort or effort
+
+
 def cmd_event(db, ctx, argv):
     slug, code, kind, text = args(argv, lo=3, hi=4).positionals
     if kind == "model":
-        raise Usage("rows carry no model or effort; every task runs at the launching session's")
+        raise Usage("a row's model and effort are columns: state <plan> <code> <state> --model M --effort E")
     plan = plan_row(db, ctx["repo"], slug)
     db.execute("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, ?, ?, ?)",
                (now(), plan["id"], code, kind, None if text is None else text_arg(text), ctx["session"]))
@@ -365,7 +395,7 @@ def cmd_show(db, ctx, argv):
         where.append(f"prs.state NOT IN ({CLOSED_SQL})")
     rows = [dict(r) for r in db.execute(
         f"""SELECT plans.slug AS plan, prs.code, prs.state, prs.pr, prs.branch, prs.head, prs.subject,
-                   prs.worktree, prs.issue, prs.est, prs.owns, prs.deps, prs.updated
+                   prs.worktree, prs.issue, prs.est, prs.owns, prs.deps, prs.model, prs.effort, prs.updated
             FROM prs JOIN plans ON plans.id = prs.plan
             WHERE {" AND ".join(where)} ORDER BY plans.slug, prs.code""", params)]
     if a.json:
@@ -373,7 +403,8 @@ def cmd_show(db, ctx, argv):
     for r in rows:
         r["head"] = r["head"] and r["head"][:12]
         r["updated"] = r["updated"][:16]
-    return table(rows, ["plan", "code", "state", "issue", "est", "pr", "branch", "head", "updated", "subject"])
+        r["run"] = r["model"] and f"{r['model']}/{r['effort']}"
+    return table(rows, ["plan", "code", "state", "issue", "est", "run", "pr", "branch", "head", "updated", "subject"])
 
 
 def cmd_log(db, ctx, argv):
@@ -442,7 +473,7 @@ def cmd_brief(db, ctx, argv):
     out = [f"# {plan['slug']} {code}{' — ' + plan['title'] if plan['title'] else ''}", ""]
     out += [f"Plan: {plan['path'] or 'none recorded'}", "", "## PR", ""]
     if pr:
-        out += [f"- {k}: {pr[k]}" for k in ("state", "issue", "est", "owns", "deps", "pr", "branch", "worktree",
+        out += [f"- {k}: {pr[k]}" for k in ("state", "model", "effort", "issue", "est", "owns", "deps", "pr", "branch", "worktree",
                                               "head", "subject", "updated")
                 if pr[k] is not None]
     else:

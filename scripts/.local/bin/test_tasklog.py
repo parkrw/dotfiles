@@ -116,7 +116,7 @@ class Names(Case):
         got = self.sql("SELECT (SELECT user_version FROM pragma_user_version) || ' ' || "
                        "(SELECT journal_mode FROM pragma_journal_mode) || ' ' || "
                        "(SELECT group_concat(name) FROM (SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name))")
-        self.assertEqual(got, "2 wal decisions,events,flakes,plans,prs,suite_runs")
+        self.assertEqual(got, "3 wal decisions,events,flakes,plans,prs,suite_runs")
 
     def test_an_empty_tasklog_dir_uses_the_default_dir(self):
         home = os.path.join(self.dir, "home")
@@ -143,8 +143,8 @@ class State(Case):
     def test_show_prints_a_table(self):
         self.seed()
         out = self.ok("show", "platform-overview")
-        self.assertRegex(out, r"(?m)^plan +code +state +issue +est +pr +branch +head +updated +subject$")
-        self.assertRegex(out, r"(?m)^platform-overview +P5 +ready +412 +overview-p5 +abc123def456 +"
+        self.assertRegex(out, r"(?m)^plan +code +state +issue +est +run +pr +branch +head +updated +subject$")
+        self.assertRegex(out, r"(?m)^platform-overview +P5 +ready +opus/xhigh +412 +overview-p5 +abc123def456 +"
                               r"\d{4}-\d\d-\d\dT\d\d:\d\d +web: glance row$")
 
     def test_every_clone_of_core_sees_the_same_plan(self):
