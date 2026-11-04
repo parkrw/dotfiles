@@ -21,11 +21,11 @@
 #
 # suite-run is how `suite` records a run; people read suite_runs with sqlite3.
 #
-# --issue, --est, --owns and --deps are what /fan batches on: the GitHub issue,
-# the size (S <=100 lines, M 100-300, L 300+), the write scope as
-# space-separated globs, and the codes that must merge first, space-separated.
-# An open row missing any of the first three gets a stderr line naming them,
-# so every plan stays ready to fan.
+# --est, --owns and --deps are what /fan batches on: the size (S <=100 lines,
+# M 100-300, L 300+), the write scope as space-separated globs, and the codes
+# that must merge first, space-separated. --issue is the GitHub issue, when
+# the plan uses issues at all. An open row missing est or owns gets a stderr
+# line naming them, so every plan stays ready to fan.
 #
 # Every row carries the model and effort its task launches at, filled on
 # each write from its size, correctness first: S runs opus at high, M, L and
@@ -64,7 +64,7 @@ ESTS = ["S", "M", "L"]
 MODELS = ["opus", "fable"]
 EFFORTS = ["high", "xhigh"]
 RUN_BY_EST = {"S": ("opus", "high"), "M": ("opus", "xhigh"), "L": ("opus", "xhigh"), None: ("opus", "xhigh")}
-FAN_FIELDS = ("issue", "est", "owns")
+FAN_FIELDS = ("est", "owns")
 BUSY_TIMEOUT_S = 5
 
 
