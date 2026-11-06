@@ -285,21 +285,52 @@ class Brief(Case):
                      "- `chart-math > pointGrid` — load-sensitive"]:
             self.assertIn(want, out)
 
-    def test_brief_keeps_the_last_10_events_of_its_code_oldest_first(self):
+    def test_brief_keeps_the_last_20_events_of_its_code_oldest_first(self):
         self.seed()
-        for i in range(1, 13):
+        for i in range(1, 23):
             self.ok("event", "platform-overview", "P7", "tick", f"e{i:02d}")
         self.ok("event", "platform-overview", "P8", "tick", "other code")
         out = self.ok("brief", "platform-overview", "P7")
-        self.assertEqual(re.findall(r"tick: (e\d+)", out), [f"e{i:02d}" for i in range(3, 13)])
-        section = out.split("## Last 10 events")[1].split("## Known flakes")[0]
-        self.assertEqual(len(re.findall(r"(?m)^- ", section)), 10)
+        self.assertEqual(re.findall(r"tick: (e\d+)", out), [f"e{i:02d}" for i in range(3, 23)])
+        section = out.split("## Last 20 events")[1].split("## Known flakes")[0]
+        self.assertEqual(len(re.findall(r"(?m)^- ", section)), 20)
+
+    def test_brief_events_sets_how_many(self):
+        self.seed()
+        for i in range(1, 6):
+            self.ok("event", "platform-overview", "P7", "tick", f"e{i:02d}")
+        out = self.ok("brief", "platform-overview", "P7", "--events", "2")
+        self.assertIn("## Last 2 events", out)
+        self.assertEqual(re.findall(r"tick: (e\d+)", out), ["e04", "e05"])
+        self.assertIn("--events", self.fails(1, "brief", "platform-overview", "P7", "--events", "0"))
+
+    def test_a_write_to_adhoc_creates_the_plan_once_per_repo(self):
+        self.ok("event", "adhoc", "fix-login", "trap", "the two token blocks differ on purpose")
+        self.ok("decide", "adhoc", "no palette changes", "--by", "user")
+        self.ok("event", "adhoc", "fix-login", "next", "wire the callback", repo="core-ssh")
+        self.assertEqual(self.db().execute("SELECT count(*) FROM plans WHERE slug = 'adhoc'").fetchone()[0], 1)
+        out = self.ok("brief", "adhoc", "fix-login")
+        self.assertIn("trap: the two token blocks differ on purpose", out)
+        self.assertIn("next: wire the callback", out)
+        self.assertIn("no palette changes (user)", out)
+        self.assertIn("adhoc", self.ok("plan", "list"))
+
+    def test_a_read_of_adhoc_creates_nothing(self):
+        self.assertIn("no plan adhoc", self.fails(1, "brief", "adhoc", "fix-login"))
+        self.assertIn("no plan adhoc", self.fails(1, "log", "adhoc"))
+        self.assertEqual(self.db().execute("SELECT count(*) FROM plans").fetchone()[0], 0)
+
+    def test_adhoc_belongs_to_its_repo(self):
+        self.ok("event", "adhoc", "x", "note", "core")
+        self.ok("event", "adhoc", "x", "note", "web", repo="web")
+        self.assertEqual(self.db().execute("SELECT count(*) FROM plans WHERE slug = 'adhoc'").fetchone()[0], 2)
+        self.assertNotIn("note: core", self.ok("brief", "adhoc", "x", repo="web"))
 
     def test_brief_of_a_bare_plan_says_what_is_missing(self):
         self.ok("plan", "add", "bare")
         out = self.ok("brief", "bare", "B1")
         self.assertTrue(out.startswith("# bare B1\n\nPlan: none recorded\n"), out)
-        for want in ["No row yet.", "## Decisions\n\nNone recorded.", "## Last 10 events\n\nNone recorded.",
+        for want in ["No row yet.", "## Decisions\n\nNone recorded.", "## Last 20 events\n\nNone recorded.",
                      "## Known flakes\n\nNone recorded."]:
             self.assertIn(want, out)
 
