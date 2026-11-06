@@ -1,6 +1,6 @@
 ---
 name: ftl
-description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - for a change, first creates and enters a worktree when on the default branch or a detached HEAD, then indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, commit, then the push and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `pull --ff-only` in the default checkout and the rebase or merge itself, resolves conflicts, runs `claude-review` in a loop until it reports zero findings, then pushes, opens a PR ready for review, and waits until CI is green and GitHub would allow the squash merge, fixing what fails, then prints the squash-merge command for you to run. `/ftl <task> --ship` does all of it in one command - orient, build, then ship - stopping only for a decision the build cannot make alone. Local git writes run as the write gate allows; push and gh run only in Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl "fix the logout redirect #301" --ship, /ftl --help.
+description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - for a change, first creates and enters a worktree when on the default branch or a detached HEAD, then indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, commit, then the push and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `pull --ff-only` in the default checkout and the rebase or merge itself, resolves conflicts, runs `claude-review` in a loop until it passes, then pushes, opens a PR ready for review, and waits until CI is green and GitHub would allow the squash merge, fixing what fails, then prints the squash-merge command for you to run. `/ftl <task> --ship` does all of it in one command - orient, build, then ship - stopping only for a decision the build cannot make alone. Local git writes run as the write gate allows; push and gh run only in Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl "fix the logout redirect #301" --ship, /ftl --help.
 ---
 
 ## Help
@@ -40,7 +40,7 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
                    in a loop - run each runtime proof's test,
                    fix each finding it does not refute as a class,
                    rerun the checks except the suite, commit,
-                   re-review - until zero findings; the full suite
+                   re-review - until a PASS; the full suite
                    runs before round 1, and after the last round
                    only the tests it listed as failed or flaky;
                    then push and open a PR ready for review, even
@@ -225,7 +225,7 @@ Then one line per adjacent smell found, and nothing else.
 
 # Ship - `/ftl ship`
 
-Fetch, check, commit, integrate, review, fix, repeat, until the reviewer reports no findings; then push, open the PR and wait for green. Ship runs every local git write itself, in the worktree resolved in step 1; the write gate allows them without a prompt.
+Fetch, check, commit, integrate, review, fix, repeat, until the reviewer passes the diff; then push, open the PR and wait for green. Ship runs every local git write itself, in the worktree resolved in step 1; the write gate allows them without a prompt.
 
 The order is fixed: CI's full test suite passes, run through `suite` as Check step 2 says, then `claude-review`, then the push, then the PR. The full suite runs once, before round 1. After the last round, when a fix was committed since round 1, only the tests a full suite run listed as `NEW RED` or `KNOWN RED` run again, on HEAD. An integration or a CI fix never runs it: the session picks and runs the tests the change could break, as steps 3a and 6 say, and CI runs the full suite on the push. A push that skips the review meets it anyway: where the review gate is live, pre-push denies a branch diff without a passing review.
 
@@ -305,8 +305,8 @@ Every round, and every review Ship runs after a CI fix, uses exactly this comman
 
 Run it in the background and wait for it; a review takes minutes and a foreground timeout would kill it mid-run. It prints the report, then a `review-branch: PASS` or `FAIL` line naming the report file.
 
-- `## Findings` is exactly `none`: the loop is done. `VERDICT: PASS` alone is not enough, since PASS can carry minors. `## Adjacent smells` never counts: it is advisory, outside the diff, and not this PR's to fix.
-- `already approved`: this exact diff passed earlier. Read the report file (`~/.claude/hooks/state/review-branch-<key>.md`); if its `diff sha256` matches the one printed and its findings are `none`, done. Otherwise fix those findings; the next commit changes the hash and the next round reviews afresh.
+- `VERDICT: PASS`: the loop is done. Do not fix the findings it lists: a fix changes the diff, and the approval the push needs is keyed to its hash. List them in the PR body's `Open minor findings` section. `## Adjacent smells` never counts: it is advisory, outside the diff, and not this PR's to fix.
+- `already approved`: this exact diff passed earlier. Read the report file (`~/.claude/hooks/state/review-branch-<key>.md`); its `diff sha256` matches the one printed: treat it as this round's `VERDICT: PASS`.
 - Anything else: print `round N: <count> findings`. The reviewer writes a runtime finding's test but never runs it, so run it before fixing anything. For each `Proof: runtime` finding, paste its test into the test file its neighbors use and run that file at HEAD. Adapt only the harness - imports, fixtures, render helpers - never the input or the expected value. Print `proof <path:line>: confirmed|disputed|unrun`:
   - The assertion on the proof's expected value fails: confirmed. Keep the test; it is the finding's regression test.
   - The test passes: disputed. Remove the test and treat the finding as wrong, with the reason `proof test passes`.
@@ -325,7 +325,7 @@ However the loop ends, when a fix was committed since round 1, rerun on HEAD onl
 
 ## 5. Hand off
 
-Before Ship pushes or prints the block below, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<repo>-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree and outside `.git`; `<branch-slug>` is `<branch>` with each `/` as `-`, so no two branches share one. The body ends with `Disputed findings` when step 4 judged any wrong, and `Closes #N` when it finishes an issue. It never mentions conflicts, their resolution, or the rebase or merge: integration is plumbing, not the change. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
+Before Ship pushes or prints the block below, write the PR body with the Write tool to `<body-file>`: `ftl-pr-body-<repo>-<branch-slug>.md` in the session's scratchpad directory, or in `$TMPDIR` when the session has none. It sits outside the tree and outside `.git`; `<branch-slug>` is `<branch>` with each `/` as `-`, so no two branches share one. The body ends with `Disputed findings` when step 4 judged any wrong, `Open minor findings` when its PASS listed any, and `Closes #N` when it finishes an issue. It never mentions conflicts, their resolution, or the rebase or merge: integration is plumbing, not the change. Every `gh pr create` reads it with `--body-file`: finding text carries apostrophes and backticks that a quoted `--body` breaks on.
 
 No fetch, no second rebase or merge and no re-review: push the branch as reviewed, even when `<default>` has moved since step 3a.
 

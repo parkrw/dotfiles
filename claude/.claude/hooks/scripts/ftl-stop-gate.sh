@@ -165,7 +165,7 @@ else
       failed+=("a commit on $branch has a body or trailer; Check step 6 allows a subject only")
     sentinel=$("$HOOKS_DIR/scripts/review-branch.sh" "$wt" --dry-run 2>/dev/null | sed -n 's/^sentinel=//p' || true)
     [[ -n "$sentinel" && -f "$sentinel" ]] ||
-      failed+=("no passing claude-review for this diff; Ship step 4 loops until Findings is none")
+      failed+=("no passing claude-review for this diff; Ship step 4 loops until VERDICT: PASS")
     body_written ||
       failed+=("no ftl-pr-body-<repo>-${branch//\//-}.md written; Ship step 5 writes the PR body first")
     read -r tasks states <<<"$(tasklog_counts)"
