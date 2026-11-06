@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+# owed — what the human still has to do, across every repo: merges, approvals,
+# manual steps a session printed and then moved on from. One global store, a
+# repo tag per row, so one command shows everything owed instead of a scroll
+# back through every pane.
+#
+#   owed                         open items, oldest first
+#   owed add <text|->            one item, tagged with the cwd's repo
+#   owed done <id>...            mark items done
+#   owed list [--all]            --all includes done items
+#
+# A text argument of "-" is read from stdin, so text never passes through the
+# shell. The tag is the origin's owner/name, else the cwd's basename. Rows live
+# in memory.db beside tasklog's DBs, under ${TASKLOG_DIR:-~/.local/state/claude/tasks}.
+#
+# Python 3.9 stdlib only, as tasklog.
+import importlib.machinery
+import importlib.util
+import os
+import re
+import sys
+
+BIN = os.path.dirname(os.path.realpath(__file__))
+DB_NAME = "memory.db"
+
+
+def load_tasklog():
+    loader = importlib.machinery.SourceFileLoader("tasklog", os.path.join(BIN, "tasklog"))
+    spec = importlib.util.spec_from_loader("tasklog", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+tl = load_tasklog()
+
+MIGRATIONS = [
+    """CREATE TABLE owed (
+       id INTEGER PRIMARY KEY,
+       created TEXT NOT NULL,
+       done TEXT,
+       repo TEXT NOT NULL,
+       text TEXT NOT NULL,
+       session TEXT);
+     CREATE INDEX owed_open ON owed (done, created);""",
+]
+
+
+def repo_tag(cwd):
+    origin = tl.origin_of(cwd)
+    if origin:
+        return re.sub(r"^github\.com/", "", origin)
+    return os.path.basename(cwd)
+
+
+def cmd_add(db, ctx, argv):
+    (text,) = tl.args(argv, lo=1).positionals
+    text = tl.text_arg(text).strip()
+    if not text:
+        raise tl.Usage("text must not be blank")
+    cur = db.execute("INSERT INTO owed (created, repo, text, session) VALUES (?, ?, ?, ?)",
+                     (tl.now(), ctx["repo"], text, ctx["session"]))
+    return f"owed {cur.lastrowid}: {text}\n"
+
+
+def cmd_done(db, ctx, argv):
+    ids = tl.args(argv, lo=1, hi=64).positionals
+    ids = [i for i in ids if i is not None]
+    if not all(re.fullmatch(r"\d+", i) for i in ids):
+        raise tl.Usage("done takes ids")
+    out = []
+    with tl.transaction(db):
+        for i in ids:
+            row = db.execute("SELECT text, done FROM owed WHERE id = ?", (int(i),)).fetchone()
+            if row is None:
+                raise tl.Usage(f"no item {i}")
+            if row["done"] is None:
+                db.execute("UPDATE owed SET done = ? WHERE id = ?", (tl.now(), int(i)))
+            out.append(f"done {i}: {row['text']}\n")
+    return "".join(out)
+
+
+def cmd_list(db, ctx, argv):
+    a = tl.args(argv, flags=("all",))
+    where = "" if a.all else "WHERE done IS NULL"
+    rows = [dict(r) for r in db.execute(f"SELECT id, created, done, repo, text FROM owed {where} ORDER BY created, id")]
+    for r in rows:
+        r["since"] = r["created"][:10]
+        r["done"] = r["done"] and r["done"][:10]
+    return tl.table(rows, ["id", "since", "repo", "text"] + (["done"] if a.all else []))
+
+
+COMMANDS = {"add": cmd_add, "done": cmd_done, "list": cmd_list}
+READS = {"list"}
+
+
+def main():
+    command, argv = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("list", [])
+    try:
+        if command not in COMMANDS:
+            raise tl.Usage(f"commands: {', '.join(COMMANDS)}")
+        cwd = os.getcwd()
+        file = os.path.join(os.environ.get("TASKLOG_DIR") or os.path.expanduser("~/.local/state/claude/tasks"),
+                            DB_NAME)
+        db = open_db(file, read_only=command in READS)
+        ctx = {"repo": repo_tag(cwd), "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None}
+        try:
+            sys.stdout.write(COMMANDS[command](db, ctx, argv))
+        finally:
+            db.close()
+    except (tl.Usage, tl.sqlite3.Error) as e:
+        sys.stderr.write(f"owed: {e}\n")
+        return 1
+    return 0
+
+
+def open_db(file, read_only):
+    saved = tl.MIGRATIONS
+    tl.MIGRATIONS = MIGRATIONS
+    try:
+        return tl.open_reader(file) if read_only else tl.open_writer(file)
+    finally:
+        tl.MIGRATIONS = saved
+
+
+if __name__ == "__main__":
+    sys.exit(main())
