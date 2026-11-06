@@ -1,5 +1,13 @@
 # Global Agent Instructions
 
+## Decided
+
+One dated line per decision, newest first, each with its why. A line here beats every rule below and every skill. When I say "from now on" or "never again", or settle a question for good, add a line the same turn: edit `~/dotfiles/codex/.codex/AGENTS.md` on a branch and open the PR. Never edit an old line; add a newer one that supersedes it.
+
+- 2026-11-06 Rules stay in this file, not in job skills: Codex reads this file and never loads `~/.claude/skills`.
+- 2026-11-06 A hand-off writes what it learned to tasklog rows before its prompt file: the file is read once, the rows reach every later successor.
+- 2026-11-06 What I still owe (a merge, an approval, a manual step) goes in `owed`, one global store tagged by repo, never a per-project file.
+
 ## Subagents
 
 - Default model for all Agent tool calls: `claude-sonnet-4-6[1m]`. Always pass `model: "sonnet"` unless a specific task demands a stronger model and I approve the upgrade.
@@ -21,6 +29,8 @@
 - When citing repo files, include relative file paths with exact line numbers whenever possible. Prefer `path/to/file.ext:123` and use line ranges only when they add clarity.
 - **Repo rules win.** When a project's CLAUDE.md/AGENTS.md conflicts with this file, follow the repo.
 - When blocked, hand back one command block to run or one yes/no question — not a menu.
+- Anything only I can do — a merge, an approval, a manual step — goes to `owed add -` the moment you print it, and `owed done <id>` when I say it is done. `owed` lists what I owe across every repo.
+- A hand-off (`/newchat`, `/handoff`) writes what it learned to tasklog before its file: decisions with `tasklog decide`, traps, facts and the next step as events, on the plan's row, or on `adhoc <branch>` when the work has no plan.
 
 ## Visual work
 

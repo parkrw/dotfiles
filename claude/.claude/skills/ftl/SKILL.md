@@ -212,7 +212,7 @@ A repo with `CHANGELOG.md` and no fragment tooling gets it set up first, as its 
 
 ## 7. Hand off
 
-Run the local half yourself: `git switch -c <branch>` when on the default branch, named as measured in Orient step 3, then `git add <path>... && git commit -m '<subject>'`. A subject with an apostrophe goes in double quotes and carries no `$` or backtick. Write the PR body to `<body-file>` and take `<title>`, as Ship step 5 does, then print the remote half for the human, placeholders filled in:
+Run the local half yourself: `git switch -c <branch>` when on the default branch, named as measured in Orient step 3, then `git add <path>... && git commit -m '<subject>'`. A subject with an apostrophe goes in double quotes and carries no `$` or backtick. Write the PR body to `<body-file>` and take `<title>`, as Ship step 5 does, then `owed add -` with the remote half and print it for the human, placeholders filled in:
 
 ```
 git push -u origin <branch>
@@ -332,7 +332,7 @@ No fetch, no second rebase or merge and no re-review: push the branch as reviewe
 - `git -C <worktree> push -u origin <branch>`, then `cd <worktree> && gh pr create --title '<title>' --body-file <body-file>`. Literal paths. Single-quote the title; one with an apostrophe goes in double quotes and carries no `$` or backtick. No `--draft`: a draft is the human's call, and CI may run nothing on one.
 - Go on to step 6 with the URL `gh pr create` printed.
 
-Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), a `NEW RED` stands, step 3a stopped, or the gate or pre-push refuses. Print the block below for the human instead, placeholders filled, and nothing else - no smell line, no summary. The human pastes it into a shell that sits in some other directory and has no `$worktree`, so every path is a literal absolute path and the block opens with `cd`.
+Do not push when the loop stopped with findings open (round 10, or every finding judged wrong), a `NEW RED` stands, step 3a stopped, or the gate or pre-push refuses. Print the block below for the human instead, placeholders filled, and nothing else - no smell line, no summary - after `owed add -` with the same block. The human pastes it into a shell that sits in some other directory and has no `$worktree`, so every path is a literal absolute path and the block opens with `cd`.
 
 ```
 cd <worktree>
@@ -356,7 +356,7 @@ Round 1 of at most 5. Run `pr-wait <url>` in the background and wait for it; CI 
   gh pr merge <url> --squash --match-head-commit <sha>
   ```
 
-  Then step 3a's `integrated against local` line when its pull failed, and, when step 1 carried work over, the restore and clean line from step 5. Once the human says it merged, `tasklog state <plan> <code> merged --pr <N>`.
+  Then step 3a's `integrated against local` line when its pull failed, and, when step 1 carried work over, the restore and clean line from step 5. Before printing, `owed add -` with the merge command and, when printed, the restore and clean line, so the hand-off shows in `owed` after this pane is gone. Once the human says it merged, `owed done <id>` and `tasklog state <plan> <code> merged --pr <N>`.
 - `0 ready` on anyone else's PR, or `ready, awaiting approval`: hand off as the bullet above does, without the merge command.
 - `1 failed`: it lists each failed check with its link. Read why before touching code: `gh run view --job <job-id> --log-failed`, the job id being the number after `/job/` in the link. A review bot's check carries its findings in that log or in `gh pr view <url> --comments`. Then:
   - A failure this diff did not cause - a runner, network or registry error, or a test the default branch's latest run of that workflow also fails (`gh run list --branch <default> --workflow '<workflow>' --limit 3`): no code change. A run still in progress cannot be rerun: `gh run watch <run-id>` in the background first. Then `gh run rerun <run-id> --failed`, and the next round. The same check failing again in the next round is treated as this diff's.
