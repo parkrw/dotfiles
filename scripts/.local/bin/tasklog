@@ -16,10 +16,14 @@
 #   show [plan] [--all] [--json]
 #   log <plan> [code] [--since date]
 #   flake add <test_id> [note] | list | rm <test_id> | match
-#   brief <plan> <code>
+#   brief <plan> <code> [--events N]
 #   suite-run --started T --exit N [--ended --worktree --branch --head --cmd --wait-ms --log --new --known]
 #
 # suite-run is how `suite` records a run; people read suite_runs with sqlite3.
+#
+# The plan slug adhoc names work with no plan: a write creates it in the
+# cwd's repo on first use, and its codes are branch names, so a hand-off from
+# a session that planned nothing still has rows for its successor to brief.
 #
 # --est, --owns and --deps are what /fan batches on: the size (S <=100 lines,
 # M 100-300, L 300+), the write scope as space-separated globs, and the codes
@@ -59,7 +63,8 @@ NAMES = {
 }
 STATES = ["planned", "building", "review", "draft", "ready", "merged", "dropped", "blocked"]
 CLOSED_SQL = "'merged','dropped'"
-BRIEF_EVENTS = 10
+BRIEF_EVENTS = 20
+ADHOC = "adhoc"
 ESTS = ["S", "M", "L"]
 MODELS = ["opus", "fable"]
 EFFORTS = ["high", "xhigh"]
@@ -268,8 +273,12 @@ def args(argv, options=(), flags=(), lo=0, hi=None):
     return parsed
 
 
-def plan_row(db, repo, slug):
+def plan_row(db, repo, slug, create=False):
     row = db.execute("SELECT * FROM plans WHERE repo = ? AND slug = ?", (repo, slug)).fetchone()
+    if row is None and create and slug == ADHOC:
+        db.execute("INSERT OR IGNORE INTO plans (repo, slug, path, title, created) VALUES (?, ?, NULL, ?, ?)",
+                   (repo, ADHOC, "ad hoc work, one code per branch", now()))
+        row = db.execute("SELECT * FROM plans WHERE repo = ? AND slug = ?", (repo, slug)).fetchone()
     if row is None:
         raise Usage(f"no plan {slug} in {repo}; add it with: plan add {slug}")
     return row
@@ -321,7 +330,7 @@ def cmd_state(db, ctx, argv):
         raise Usage(f"--model must be one of {'|'.join(MODELS)}; code runs at opus or above")
     if a.effort is not None and a.effort not in EFFORTS:
         raise Usage(f"--effort must be one of {'|'.join(EFFORTS)}; code runs at high or above")
-    plan = plan_row(db, ctx["repo"], slug)
+    plan = plan_row(db, ctx["repo"], slug, create=True)
     ts = now()
     fields = {"branch": a.branch, "worktree": a.worktree, "pr": a.pr and int(a.pr),
               "head": a.head, "subject": a.subject, "issue": a.issue and int(a.issue), "est": a.est,
@@ -369,7 +378,7 @@ def cmd_event(db, ctx, argv):
     slug, code, kind, text = args(argv, lo=3, hi=4).positionals
     if kind == "model":
         raise Usage("a row's model and effort are columns: state <plan> <code> <state> --model M --effort E")
-    plan = plan_row(db, ctx["repo"], slug)
+    plan = plan_row(db, ctx["repo"], slug, create=True)
     db.execute("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, ?, ?, ?)",
                (now(), plan["id"], code, kind, None if text is None else text_arg(text), ctx["session"]))
     return ""
@@ -378,7 +387,7 @@ def cmd_event(db, ctx, argv):
 def cmd_decide(db, ctx, argv):
     a = args(argv, options=("by", "quote"), lo=2)
     slug, text = a.positionals
-    plan = plan_row(db, ctx["repo"], slug)
+    plan = plan_row(db, ctx["repo"], slug, create=True)
     db.execute("INSERT INTO decisions (plan, ts, text, said_by, quote) VALUES (?, ?, ?, ?, ?)",
                (plan["id"], now(), text_arg(text), a.by, a.quote))
     return ""
@@ -461,14 +470,18 @@ def cmd_flake(db, ctx, argv):
 
 
 def cmd_brief(db, ctx, argv):
-    slug, code = args(argv, lo=2).positionals
+    a = args(argv, options=("events",), lo=2)
+    slug, code = a.positionals
+    if a.events is not None and not re.fullmatch(r"[1-9]\d*", a.events):
+        raise Usage("--events takes a whole number above zero")
+    limit = int(a.events) if a.events else BRIEF_EVENTS
     plan = plan_row(db, ctx["repo"], slug)
     pr = db.execute("SELECT * FROM prs WHERE plan = ? AND code = ?", (plan["id"], code)).fetchone()
     decisions = db.execute("SELECT ts, text, said_by, quote FROM decisions WHERE plan = ? ORDER BY ts, id",
                            (plan["id"],)).fetchall()
     events = db.execute("SELECT ts, kind, text FROM events WHERE plan = ? AND code = ? AND kind != 'model' "
                         "ORDER BY ts DESC, id DESC LIMIT ?",
-                        (plan["id"], code, BRIEF_EVENTS)).fetchall()[::-1]
+                        (plan["id"], code, limit)).fetchall()[::-1]
     flakes = db.execute("SELECT test_id, note FROM flakes WHERE repo = ? ORDER BY test_id", (ctx["repo"],)).fetchall()
     out = [f"# {plan['slug']} {code}{' — ' + plan['title'] if plan['title'] else ''}", ""]
     out += [f"Plan: {plan['path'] or 'none recorded'}", "", "## PR", ""]
@@ -486,7 +499,7 @@ def cmd_brief(db, ctx, argv):
         out.append(f"- {d['ts'][:10]} {d['text']}{by}")
         if d["quote"]:
             out.append("  > " + d["quote"].replace("\n", "\n  > "))
-    out += ["", f"## Last {BRIEF_EVENTS} events", ""]
+    out += ["", f"## Last {limit} events", ""]
     if not events:
         out.append("None recorded.")
     out += [f"- {e['ts'][:16]} {e['kind']}{': ' + e['text'] if e['text'] else ''}" for e in events]

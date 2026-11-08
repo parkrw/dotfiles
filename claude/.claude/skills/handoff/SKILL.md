@@ -83,7 +83,7 @@ Status rules:
 - **IN PROGRESS** — stopped mid-task. Name the sub-task number to resume at.
 - **NEEDS REVISIT** — shipped but something must be re-examined. Say **what**
   and **why** in one line each; a bare flag is useless.
-- **BLOCKED** — cannot proceed. Name the blocker and who or what unblocks it.
+- **BLOCKED** — cannot proceed. Name the blocker and who or what unblocks it. When the user is who unblocks it, also `owed add -` with that one action, so it shows in `owed` without opening the task file.
 
 Pruning rules, applied every time:
 
