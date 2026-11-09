@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+# brief-outcomes — do row briefs pay off? Joins tasklog rows to the branch
+# reviews claude-review recorded and compares rows by what their builder got:
+# a brief event, only a terse scope or seed note, or nothing.
+#
+#   brief-outcomes [--stats FILE] [--since YYYY-MM-DD]
+#
+# --stats reads a saved `claude-review-stats --json` instead of running it.
+# A row joins a review by branch name within the same repo name. Rows with
+# no review run are left out: they have no outcome to compare.
+#
+# Python 3.9 stdlib only, like tasklog.
+import argparse
+import glob
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+from urllib.request import pathname2url
+
+SERIOUS = ("blocker", "major")
+
+
+def rows(db_dir):
+    out = []
+    for file in sorted(glob.glob(os.path.join(db_dir, "*.db"))):
+        db = sqlite3.connect(f"file:{pathname2url(file)}?mode=ro", uri=True)
+        db.row_factory = sqlite3.Row
+        try:
+            out += db.execute(
+                """SELECT plans.repo, plans.slug, prs.code, prs.branch, prs.est,
+                          (SELECT group_concat(DISTINCT kind) FROM events
+                            WHERE events.plan = prs.plan AND events.code = prs.code
+                              AND kind IN ('brief', 'scope', 'seed')) AS kinds
+                   FROM prs JOIN plans ON plans.id = prs.plan WHERE prs.branch IS NOT NULL""").fetchall()
+        finally:
+            db.close()
+    return out
+
+
+def group(kinds):
+    kinds = (kinds or "").split(",")
+    return "brief" if "brief" in kinds else "scope/seed only" if kinds != [""] else "none"
+
+
+def main():
+    p = argparse.ArgumentParser(description="Review outcomes of tasklog rows, by how they were briefed.")
+    p.add_argument("--stats", help="saved claude-review-stats --json output")
+    p.add_argument("--since", help="only reviews on or after this date")
+    a = p.parse_args()
+    if a.stats:
+        with open(a.stats) as f:
+            stats = json.load(f)
+    else:
+        stats = json.loads(subprocess.run(["claude-review-stats", "--json"], check=True, capture_output=True,
+                                          text=True).stdout)
+    runs = {}
+    for r in stats["runs"]:
+        if a.since and r["ts"][:10] < a.since:
+            continue
+        runs.setdefault((os.path.basename(r["repo"].rstrip("/")).lower(), r["branch"]), []).append(r)
+    serious = {}
+    for f in stats["findings"]:
+        if f["severity"] in SERIOUS:
+            serious[f["run"]] = serious.get(f["run"], 0) + 1
+
+    db_dir = os.environ.get("TASKLOG_DIR") or os.path.expanduser("~/.local/state/claude/tasks")
+    groups = {}
+    for row in rows(db_dir):
+        reviews = sorted(runs.get((row["repo"].rstrip("/").split("/")[-1], row["branch"]), []), key=lambda r: r["ts"])
+        if not reviews:
+            continue
+        g = groups.setdefault(group(row["kinds"]), [])
+        g.append({
+            "rounds": len(reviews),
+            "pass1": reviews[0]["verdict"] == "PASS",
+            "serious1": serious.get(reviews[0]["id"], 0),
+            "serious": sum(serious.get(r["id"], 0) for r in reviews),
+        })
+
+    if not groups:
+        sys.stdout.write("no tasklog row has a recorded review\n")
+        return 0
+    print(f"{'rows briefed by':<16} {'rows':>5} {'rounds':>7} {'pass r1':>8} {'serious r1':>11} {'serious':>8}")
+    for name in ("brief", "scope/seed only", "none"):
+        g = groups.get(name)
+        if not g:
+            continue
+        n = len(g)
+        print(f"{name:<16} {n:>5} {sum(x['rounds'] for x in g) / n:>7.1f} {sum(x['pass1'] for x in g) / n:>8.0%} "
+              f"{sum(x['serious1'] for x in g) / n:>11.1f} {sum(x['serious'] for x in g) / n:>8.1f}")
+    print("rounds, serious: mean per row; serious = blocker or major findings; r1 = first review round")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

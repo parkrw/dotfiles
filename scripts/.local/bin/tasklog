@@ -6,6 +6,8 @@
 #   vanlog <command>   vanillin work, in van.db
 #   tasklog <command>  the name whose origins match the cwd's repo
 #
+# --help prints the command lines below; <command> --help prints that one's.
+#
 #   plan add <slug> [--path PLAN.md] [--title T]
 #   plan list
 #   state <plan> <code> <state> [--pr N --head sha --branch B --worktree W --subject S
@@ -32,6 +34,11 @@
 # an unsized row opus at xhigh. --model and --effort override, never below
 # opus at high. An event of kind model is refused and brief hides old ones,
 # so the row is the only place a session reads them from.
+#
+# An event of kind brief is the row's hand-off to the session that builds it:
+# what a fresh read of the repo will not give it. brief prints the latest one
+# whole, ahead of the events, so later events never push it out. A planned
+# row without one gets a stderr line, as a row missing est or owns does.
 #
 # A text argument of "-" is read from stdin, so text never passes through the
 # shell, where quotes break it and the write gate reads it as a command.
@@ -351,6 +358,9 @@ def cmd_state(db, ctx, argv):
     missing = [k for k in FAN_FIELDS if row[k] is None]
     if missing and state not in ("merged", "dropped"):
         sys.stderr.write(f"not fan-ready: {slug} {code} lacks {' '.join('--' + k for k in missing)}\n")
+    if state == "planned" and not db.execute("SELECT 1 FROM events WHERE plan = ? AND code = ? AND kind = 'brief'",
+                                             (plan["id"], code)).fetchone():
+        sys.stderr.write(f"no brief: {slug} {code}; write one with event {slug} {code} brief -\n")
     return f"{slug} {code}: {state}\n"
 
 
@@ -466,7 +476,10 @@ def cmd_brief(db, ctx, argv):
     pr = db.execute("SELECT * FROM prs WHERE plan = ? AND code = ?", (plan["id"], code)).fetchone()
     decisions = db.execute("SELECT ts, text, said_by, quote FROM decisions WHERE plan = ? ORDER BY ts, id",
                            (plan["id"],)).fetchall()
-    events = db.execute("SELECT ts, kind, text FROM events WHERE plan = ? AND code = ? AND kind != 'model' "
+    task = db.execute("SELECT text FROM events WHERE plan = ? AND code = ? AND kind = 'brief' "
+                      "ORDER BY ts DESC, id DESC LIMIT 1", (plan["id"], code)).fetchone()
+    events = db.execute("SELECT ts, kind, text FROM events WHERE plan = ? AND code = ? "
+                        "AND kind NOT IN ('model', 'brief') "
                         "ORDER BY ts DESC, id DESC LIMIT ?",
                         (plan["id"], code, BRIEF_EVENTS)).fetchall()[::-1]
     flakes = db.execute("SELECT test_id, note FROM flakes WHERE repo = ? ORDER BY test_id", (ctx["repo"],)).fetchall()
@@ -478,6 +491,7 @@ def cmd_brief(db, ctx, argv):
                 if pr[k] is not None]
     else:
         out.append("No row yet.")
+    out += ["", "## Brief", "", task["text"] if task and task["text"] else "None recorded."]
     out += ["", "## Decisions", ""]
     if not decisions:
         out.append("None recorded.")
@@ -524,9 +538,35 @@ COMMANDS = {
 READS = {("show",), ("log",), ("brief",), ("plan", "list"), ("flake", "list")}
 
 
+# The header comment is the only copy of the usage, so help cannot drift from it.
+def usage(invoked, command=None):
+    out, keep = [], False
+    with open(__file__) as f:
+        for line in f:
+            if not line.startswith("#"):
+                break
+            text = line[4:].rstrip() if line.startswith("#   ") else ""
+            if text and not text[0].isspace():
+                keep = text.split()[0] in COMMANDS and command in (None, text.split()[0])
+                if keep:
+                    out.append(f"{invoked} {text}")
+            elif text and keep:
+                out.append(" " * (len(invoked) + 1) + text)
+            else:
+                keep = False
+    return "\n".join(out) + "\n"
+
+
 def main():
     invoked = os.path.basename(sys.argv[0])
     command, argv = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else (None, [])
+    # Before resolving the name: help must work outside any owned repo and open no DB.
+    if command in (None, "--help", "help"):
+        sys.stdout.write(usage(invoked))
+        return 0
+    if command in COMMANDS and "--help" in argv:
+        sys.stdout.write(usage(invoked, command))
+        return 0
     try:
         if command not in COMMANDS:
             raise Usage(f"commands: {', '.join(COMMANDS)}")

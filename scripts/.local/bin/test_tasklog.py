@@ -299,9 +299,32 @@ class Brief(Case):
         self.ok("plan", "add", "bare")
         out = self.ok("brief", "bare", "B1")
         self.assertTrue(out.startswith("# bare B1\n\nPlan: none recorded\n"), out)
-        for want in ["No row yet.", "## Decisions\n\nNone recorded.", "## Last 10 events\n\nNone recorded.",
+        for want in ["No row yet.", "## Brief\n\nNone recorded.", "## Decisions\n\nNone recorded.", "## Last 10 events\n\nNone recorded.",
                      "## Known flakes\n\nNone recorded."]:
             self.assertIn(want, out)
+
+    def test_brief_prints_the_latest_task_brief_whole_and_outside_the_events(self):
+        self.seed()
+        self.ok("event", "platform-overview", "P5", "brief", "-", stdin="old brief\n")
+        self.ok("event", "platform-overview", "P5", "brief", "-", stdin="Goal: glance row\n\nTrap: `a.js:12`\n")
+        for i in range(12):
+            self.ok("event", "platform-overview", "P5", "tick", f"e{i:02d}")
+        out = self.ok("brief", "platform-overview", "P5")
+        self.assertIn("## Brief\n\nGoal: glance row\n\nTrap: `a.js:12`\n\n## Decisions", out)
+        self.assertNotIn("old brief", out)
+        self.assertNotIn("brief:", out.split("## Last 10 events")[1])
+        self.assertIn("## Brief\n\nNone recorded.", self.ok("brief", "platform-overview", "P6"))
+
+    def test_a_planned_row_without_a_brief_says_so(self):
+        self.ok("plan", "add", "bare")
+        p = self.run_cli("state", "bare", "B1", "planned", "--est", "S", "--owns", "src/**")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("no brief: bare B1", p.stderr)
+        self.ok("event", "bare", "B2", "brief", "-", stdin="Goal: x\n")
+        p = self.run_cli("state", "bare", "B2", "planned", "--est", "S", "--owns", "src/**")
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        p = self.run_cli("state", "bare", "B1", "building", "--branch", "b1")
+        self.assertNotIn("no brief", p.stderr)
 
     def test_a_multi_line_quote_stays_in_the_blockquote(self):
         self.ok("plan", "add", "bare")
@@ -361,6 +384,36 @@ class Usage(Case):
         self.ok("plan", "add", "platform-overview")
         self.fails(1, "event", "platform-overview", "P5", "note", "hello", "world")
         self.fails(1, "state", "platform-overview", "P5")
+
+
+class Help(Case):
+    def test_top_level_help_lists_every_command(self):
+        for argv in ([], ["--help"], ["help"]):
+            starts = [line.split()[1] for line in self.ok(*argv).splitlines() if line.startswith("cklog ")]
+            self.assertEqual(starts, ["plan", "plan", "state", "event", "decide", "show", "log", "flake", "brief",
+                                      "suite-run"], argv)
+
+    def test_command_help_prints_only_its_lines(self):
+        out = self.ok("state", "--help", tool="vanlog")
+        self.assertTrue(out.startswith("vanlog state <plan> <code> <state> [--pr N"), out)
+        self.assertIn("--model opus|fable --effort high|xhigh]", out)
+        self.assertEqual(len(out.splitlines()), 3, out)
+        self.assertEqual(self.ok("plan", "--help").splitlines(),
+                         ["cklog plan add <slug> [--path PLAN.md] [--title T]", "cklog plan list"])
+
+    def test_help_needs_no_owned_repo_and_opens_no_db(self):
+        for tool, repo in (("cklog", "noorigin"), ("cklog", "van"), ("vanlog", "core")):
+            self.assertIn(f"{tool} brief <plan> <code>", self.ok("--help", tool=tool, repo=repo))
+            self.assertIn(f"{tool} show [plan]", self.ok("show", "--help", tool=tool, repo=repo))
+        self.assertFalse(os.path.exists(self.env["TASKLOG_DIR"]))
+
+    def test_bad_arguments_still_fail_on_stderr(self):
+        p = self.run_cli("show", "--frob")
+        self.assertEqual((p.returncode, p.stdout), (1, ""))
+        self.assertIn("unrecognized arguments: --frob", p.stderr)
+        p = self.run_cli("frob")
+        self.assertEqual((p.returncode, p.stdout), (1, ""))
+        self.assertIn("commands: plan, state", p.stderr)
 
 
 if __name__ == "__main__":
