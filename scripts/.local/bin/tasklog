@@ -37,7 +37,8 @@
 #
 # An event of kind brief is the row's hand-off to the session that builds it:
 # what a fresh read of the repo will not give it. brief prints the latest one
-# whole, ahead of the events, so later events never push it out.
+# whole, ahead of the events, so later events never push it out. A planned
+# row without one gets a stderr line, as a row missing est or owns does.
 #
 # A text argument of "-" is read from stdin, so text never passes through the
 # shell, where quotes break it and the write gate reads it as a command.
@@ -357,6 +358,9 @@ def cmd_state(db, ctx, argv):
     missing = [k for k in FAN_FIELDS if row[k] is None]
     if missing and state not in ("merged", "dropped"):
         sys.stderr.write(f"not fan-ready: {slug} {code} lacks {' '.join('--' + k for k in missing)}\n")
+    if state == "planned" and not db.execute("SELECT 1 FROM events WHERE plan = ? AND code = ? AND kind = 'brief'",
+                                             (plan["id"], code)).fetchone():
+        sys.stderr.write(f"no brief: {slug} {code}; write one with event {slug} {code} brief -\n")
     return f"{slug} {code}: {state}\n"
 
 

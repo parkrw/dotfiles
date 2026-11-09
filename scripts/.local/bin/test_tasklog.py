@@ -315,6 +315,17 @@ class Brief(Case):
         self.assertNotIn("brief:", out.split("## Last 10 events")[1])
         self.assertIn("## Brief\n\nNone recorded.", self.ok("brief", "platform-overview", "P6"))
 
+    def test_a_planned_row_without_a_brief_says_so(self):
+        self.ok("plan", "add", "bare")
+        p = self.run_cli("state", "bare", "B1", "planned", "--est", "S", "--owns", "src/**")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("no brief: bare B1", p.stderr)
+        self.ok("event", "bare", "B2", "brief", "-", stdin="Goal: x\n")
+        p = self.run_cli("state", "bare", "B2", "planned", "--est", "S", "--owns", "src/**")
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        p = self.run_cli("state", "bare", "B1", "building", "--branch", "b1")
+        self.assertNotIn("no brief", p.stderr)
+
     def test_a_multi_line_quote_stays_in_the_blockquote(self):
         self.ok("plan", "add", "bare")
         self.ok("decide", "bare", "-", "--quote", "line one\nline two", stdin="ship it\n")
