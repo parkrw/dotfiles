@@ -363,5 +363,35 @@ class Usage(Case):
         self.fails(1, "state", "platform-overview", "P5")
 
 
+class Help(Case):
+    def test_top_level_help_lists_every_command(self):
+        for argv in ([], ["--help"], ["help"]):
+            starts = [line.split()[1] for line in self.ok(*argv).splitlines() if line.startswith("cklog ")]
+            self.assertEqual(starts, ["plan", "plan", "state", "event", "decide", "show", "log", "flake", "brief",
+                                      "suite-run"], argv)
+
+    def test_command_help_prints_only_its_lines(self):
+        out = self.ok("state", "--help", tool="vanlog")
+        self.assertTrue(out.startswith("vanlog state <plan> <code> <state> [--pr N"), out)
+        self.assertIn("--model opus|fable --effort high|xhigh]", out)
+        self.assertEqual(len(out.splitlines()), 3, out)
+        self.assertEqual(self.ok("plan", "--help").splitlines(),
+                         ["cklog plan add <slug> [--path PLAN.md] [--title T]", "cklog plan list"])
+
+    def test_help_needs_no_owned_repo_and_opens_no_db(self):
+        for tool, repo in (("cklog", "noorigin"), ("cklog", "van"), ("vanlog", "core")):
+            self.assertIn(f"{tool} brief <plan> <code>", self.ok("--help", tool=tool, repo=repo))
+            self.assertIn(f"{tool} show [plan]", self.ok("show", "--help", tool=tool, repo=repo))
+        self.assertFalse(os.path.exists(self.env["TASKLOG_DIR"]))
+
+    def test_bad_arguments_still_fail_on_stderr(self):
+        p = self.run_cli("show", "--frob")
+        self.assertEqual((p.returncode, p.stdout), (1, ""))
+        self.assertIn("unrecognized arguments: --frob", p.stderr)
+        p = self.run_cli("frob")
+        self.assertEqual((p.returncode, p.stdout), (1, ""))
+        self.assertIn("commands: plan, state", p.stderr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1 if "-q" in sys.argv else 2)

@@ -6,6 +6,8 @@
 #   vanlog <command>   vanillin work, in van.db
 #   tasklog <command>  the name whose origins match the cwd's repo
 #
+# --help prints the command lines below; <command> --help prints that one's.
+#
 #   plan add <slug> [--path PLAN.md] [--title T]
 #   plan list
 #   state <plan> <code> <state> [--pr N --head sha --branch B --worktree W --subject S
@@ -524,9 +526,35 @@ COMMANDS = {
 READS = {("show",), ("log",), ("brief",), ("plan", "list"), ("flake", "list")}
 
 
+# The header comment is the only copy of the usage, so help cannot drift from it.
+def usage(invoked, command=None):
+    out, keep = [], False
+    with open(__file__) as f:
+        for line in f:
+            if not line.startswith("#"):
+                break
+            text = line[4:].rstrip() if line.startswith("#   ") else ""
+            if text and not text[0].isspace():
+                keep = text.split()[0] in COMMANDS and command in (None, text.split()[0])
+                if keep:
+                    out.append(f"{invoked} {text}")
+            elif text and keep:
+                out.append(" " * (len(invoked) + 1) + text)
+            else:
+                keep = False
+    return "\n".join(out) + "\n"
+
+
 def main():
     invoked = os.path.basename(sys.argv[0])
     command, argv = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else (None, [])
+    # Before resolving the name: help must work outside any owned repo and open no DB.
+    if command in (None, "--help", "help"):
+        sys.stdout.write(usage(invoked))
+        return 0
+    if command in COMMANDS and "--help" in argv:
+        sys.stdout.write(usage(invoked, command))
+        return 0
     try:
         if command not in COMMANDS:
             raise Usage(f"commands: {', '.join(COMMANDS)}")
