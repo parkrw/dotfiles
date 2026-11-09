@@ -299,9 +299,21 @@ class Brief(Case):
         self.ok("plan", "add", "bare")
         out = self.ok("brief", "bare", "B1")
         self.assertTrue(out.startswith("# bare B1\n\nPlan: none recorded\n"), out)
-        for want in ["No row yet.", "## Decisions\n\nNone recorded.", "## Last 10 events\n\nNone recorded.",
+        for want in ["No row yet.", "## Brief\n\nNone recorded.", "## Decisions\n\nNone recorded.", "## Last 10 events\n\nNone recorded.",
                      "## Known flakes\n\nNone recorded."]:
             self.assertIn(want, out)
+
+    def test_brief_prints_the_latest_task_brief_whole_and_outside_the_events(self):
+        self.seed()
+        self.ok("event", "platform-overview", "P5", "brief", "-", stdin="old brief\n")
+        self.ok("event", "platform-overview", "P5", "brief", "-", stdin="Goal: glance row\n\nTrap: `a.js:12`\n")
+        for i in range(12):
+            self.ok("event", "platform-overview", "P5", "tick", f"e{i:02d}")
+        out = self.ok("brief", "platform-overview", "P5")
+        self.assertIn("## Brief\n\nGoal: glance row\n\nTrap: `a.js:12`\n\n## Decisions", out)
+        self.assertNotIn("old brief", out)
+        self.assertNotIn("brief:", out.split("## Last 10 events")[1])
+        self.assertIn("## Brief\n\nNone recorded.", self.ok("brief", "platform-overview", "P6"))
 
     def test_a_multi_line_quote_stays_in_the_blockquote(self):
         self.ok("plan", "add", "bare")
