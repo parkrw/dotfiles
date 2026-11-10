@@ -8,20 +8,38 @@
 #
 # --help prints the command lines below; <command> --help prints that one's.
 #
-#   plan add <slug> [--path PLAN.md] [--title T]
+#   plan add <slug> --path PLAN.md [--title T]
+#   plan set <slug> [--path PLAN.md] [--title T]
 #   plan list
-#   state <plan> <code> <state> [--pr N --head sha --branch B --worktree W --subject S
-#                                --issue N --est S|M|L --owns GLOBS --deps CODES
+#   state <plan> <code> <state> [--ref HEADING --pr N --head sha --branch B --worktree W
+#                                --subject S --issue N --est S|M|L --owns GLOBS --deps CODES
 #                                --model opus|fable --effort high|xhigh]
 #   event <plan> <code> <kind> [text|-]
+#         kinds: brief progress handoff report newchat note scope seed blocked review proof
+#                finding checkpoint
 #   decide <plan> <text|-> [--by who --quote Q]
 #   show [plan] [--all] [--json]
 #   log <plan> [code] [--since date]
 #   flake add <test_id> [note] | list | rm <test_id> | match
 #   brief <plan> <code>
+#   gaps [plan]
 #   suite-run --started T --exit N [--ended --worktree --branch --head --cmd --wait-ms --log --new --known]
 #
 # suite-run is how `suite` records a run; people read suite_runs with sqlite3.
+#
+# Every row is planned before it exists. Its plan has a plan file (plan add
+# and plan set refuse a path that is not a file), the row names its section
+# in that file with --ref, text that matches exactly one of its headings, and
+# the row has a brief event. state refuses to create a row, or move one to an
+# open state, without all three; merged and dropped stay open to every row,
+# so old rows can close. brief prints the plan section whole, and gaps lists
+# every plan and open row that still lacks one. These refusals exit 1, never
+# 2, which callers read as "no log owns this repo" and skip.
+#
+# An event of kind progress is a handoff's state of play: what is done, what
+# is next, where it stopped, what is open. brief prints the latest whole, as
+# it prints the brief. Kinds outside the list are refused, so text passed
+# where the kind goes fails instead of becoming a kind.
 #
 # --est, --owns and --deps are what /fan batches on: the size (S <=100 lines,
 # M 100-300, L 300+), the write scope as space-separated globs, and the codes
@@ -72,6 +90,13 @@ MODELS = ["opus", "fable"]
 EFFORTS = ["high", "xhigh"]
 RUN_BY_EST = {"S": ("opus", "high"), "M": ("opus", "xhigh"), "L": ("opus", "xhigh"), None: ("opus", "xhigh")}
 FAN_FIELDS = ("est", "owns")
+OPEN_STATES = [s for s in STATES if s not in ("merged", "dropped")]
+# Kept in step with the header's kinds line, which help prints.
+KINDS = ["brief", "progress", "handoff", "report", "newchat", "note", "scope", "seed", "blocked", "review",
+         "proof", "finding", "checkpoint"]
+WHOLE_KINDS = ("model", "brief", "progress")
+HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+FENCE = re.compile(r"^\s*(```|~~~)")
 BUSY_TIMEOUT_S = 5
 
 
@@ -179,6 +204,7 @@ MIGRATIONS = [
     """ALTER TABLE prs ADD COLUMN model TEXT;
      ALTER TABLE prs ADD COLUMN effort TEXT;
      UPDATE prs SET model = 'opus', effort = CASE est WHEN 'S' THEN 'high' ELSE 'xhigh' END;""",
+    """ALTER TABLE prs ADD COLUMN ref TEXT;""",
 ]
 
 
@@ -202,11 +228,17 @@ def open_writer(file):
     return db
 
 
+# A reader of a DB an older tasklog left behind migrates it first, so reads
+# never meet a column that is not there yet.
 def open_reader(file):
     if not os.path.exists(file):
         open_writer(file).close()
     db = sqlite3.connect(f"file:{pathname2url(file)}?mode=ro", uri=True,
                          timeout=BUSY_TIMEOUT_S, isolation_level=None)
+    if db.execute("PRAGMA user_version").fetchone()[0] < len(MIGRATIONS):
+        db.close()
+        open_writer(file).close()
+        return open_reader(file)
     db.row_factory = sqlite3.Row
     return db
 
@@ -294,15 +326,88 @@ def table(rows, cols):
     return "\n".join([line(cols)] + [line(r) for r in cells]) + "\n"
 
 
+def plan_file(ctx, path):
+    file = os.path.normpath(os.path.join(ctx["cwd"], os.path.expanduser(path)))
+    if not os.path.isfile(file):
+        raise Usage(f"--path: no plan file at {file}")
+    return file
+
+
+def read_plan(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read().split("\n")
+    except OSError:
+        return None
+
+
+# Headings outside fenced code, as (line index, level, text): a "# comment"
+# inside a shell block is not a section.
+def headings(lines):
+    out, fence = [], None
+    for i, line in enumerate(lines):
+        m = FENCE.match(line)
+        if m:
+            fence = None if fence == m.group(1) else (fence or m.group(1))
+            continue
+        m = None if fence else HEADING.match(line)
+        if m:
+            out.append((i, len(m.group(1)), m.group(2)))
+    return out
+
+
+# The headings ref names: it matches as whole words, case-insensitively, so
+# T1 never matches T10.
+def ref_matches(lines, ref):
+    pattern = re.compile(r"(?<!\w)" + re.escape(ref.strip()) + r"(?!\w)", re.I)
+    return [h for h in headings(lines) if pattern.search(h[2])]
+
+
+# The section from ref's heading to the next heading at its level or above.
+def section(lines, ref):
+    found = ref_matches(lines, ref)
+    if len(found) != 1:
+        return None
+    start, level, _ = found[0]
+    end = next((i for i, lv, _ in headings(lines) if i > start and lv <= level), len(lines))
+    return "\n".join(lines[start:end]).strip()
+
+
+def check_ref(plan, ref):
+    lines = read_plan(plan["path"])
+    if lines is None:
+        raise Usage(f"plan {plan['slug']}'s file is gone: {plan['path']}; point it at the plan with "
+                    f"plan set {plan['slug']} --path P")
+    found = ref_matches(lines, ref)
+    if len(found) != 1:
+        names = "; ".join(h[2] for h in found[:5])
+        raise Usage(f"--ref {ref!r} matches {len(found)} headings in {plan['path']}"
+                    + (f" ({names}); quote more of one" if found else "; it must name the row's section"))
+
+
+def has_brief(db, plan, code):
+    return db.execute("SELECT 1 FROM events WHERE plan = ? AND code = ? AND kind = 'brief'",
+                      (plan["id"], code)).fetchone() is not None
+
+
 def cmd_plan(db, ctx, argv):
     sub, rest = (argv[0], argv[1:]) if argv else (None, [])
     if sub == "add":
         a = args(rest, options=("path", "title"), lo=1)
         slug = a.positionals[0]
-        file = a.path and os.path.normpath(os.path.join(ctx["cwd"], a.path))
+        if a.path is None:
+            raise Usage("plan add needs --path: the plan file its rows name sections of")
         db.execute("INSERT INTO plans (repo, slug, path, title, created) VALUES (?, ?, ?, ?, ?)",
-                   (ctx["repo"], slug, file, a.title, now()))
+                   (ctx["repo"], slug, plan_file(ctx, a.path), a.title, now()))
         return f"plan {slug} added\n"
+    if sub == "set":
+        a = args(rest, options=("path", "title"), lo=1)
+        plan = plan_row(db, ctx["repo"], a.positionals[0])
+        if a.path is None and a.title is None:
+            raise Usage("plan set needs --path or --title")
+        db.execute("UPDATE plans SET path = coalesce(?, path), title = coalesce(?, title) WHERE id = ?",
+                   (a.path and plan_file(ctx, a.path), a.title, plan["id"]))
+        return ""
     if sub == "list":
         args(rest)
         rows = db.execute(
@@ -310,11 +415,11 @@ def cmd_plan(db, ctx, argv):
                   (SELECT count(*) FROM prs WHERE prs.plan = plans.id AND state NOT IN ({CLOSED_SQL})) AS open
                 FROM plans WHERE repo = ? ORDER BY slug""", (ctx["repo"],)).fetchall()
         return table(rows, ["slug", "open", "title", "path"])
-    raise Usage("plan add <slug> | plan list")
+    raise Usage("plan add <slug> --path P | plan set <slug> | plan list")
 
 
 def cmd_state(db, ctx, argv):
-    a = args(argv, options=("pr", "head", "branch", "worktree", "subject", "issue", "est", "owns", "deps",
+    a = args(argv, options=("ref", "pr", "head", "branch", "worktree", "subject", "issue", "est", "owns", "deps",
                                    "model", "effort"), lo=3)
     slug, code, state = a.positionals
     if state not in STATES:
@@ -328,24 +433,30 @@ def cmd_state(db, ctx, argv):
         raise Usage(f"--model must be one of {'|'.join(MODELS)}; code runs at opus or above")
     if a.effort is not None and a.effort not in EFFORTS:
         raise Usage(f"--effort must be one of {'|'.join(EFFORTS)}; code runs at high or above")
+    if a.ref is not None and not a.ref.strip():
+        raise Usage("--ref must not be blank")
     plan = plan_row(db, ctx["repo"], slug)
+    if a.ref is not None:
+        check_ref(plan, a.ref)
     ts = now()
-    fields = {"branch": a.branch, "worktree": a.worktree, "pr": a.pr and int(a.pr),
+    fields = {"ref": a.ref and a.ref.strip(), "branch": a.branch, "worktree": a.worktree, "pr": a.pr and int(a.pr),
               "head": a.head, "subject": a.subject, "issue": a.issue and int(a.issue), "est": a.est,
               "owns": a.owns and " ".join(a.owns.split()), "deps": a.deps and " ".join(a.deps.split()),
               "model": None, "effort": None}
     with transaction(db):
-        old = db.execute("SELECT est, model, effort FROM prs WHERE plan = ? AND code = ?",
+        old = db.execute("SELECT est, model, effort, ref FROM prs WHERE plan = ? AND code = ?",
                          (plan["id"], code)).fetchone()
+        if old is None or state in OPEN_STATES:
+            refuse_unplanned(db, plan, code, fields["ref"] or (old and old["ref"]), state, old is None)
         fields["model"], fields["effort"] = pick_run(old, a)
         # An option left out keeps the row's earlier value.
         db.execute(
-            """INSERT INTO prs (plan, code, branch, worktree, pr, state, head, subject, issue, est, owns, deps,
+            """INSERT INTO prs (plan, code, ref, branch, worktree, pr, state, head, subject, issue, est, owns, deps,
                                 model, effort, updated)
-               VALUES (:plan, :code, :branch, :worktree, :pr, :state, :head, :subject, :issue, :est, :owns, :deps,
-                       :model, :effort, :ts)
+               VALUES (:plan, :code, :ref, :branch, :worktree, :pr, :state, :head, :subject, :issue, :est, :owns,
+                       :deps, :model, :effort, :ts)
                ON CONFLICT (plan, code) DO UPDATE SET
-                 branch = coalesce(:branch, branch), worktree = coalesce(:worktree, worktree),
+                 ref = coalesce(:ref, ref), branch = coalesce(:branch, branch), worktree = coalesce(:worktree, worktree),
                  pr = coalesce(:pr, pr), state = :state, head = coalesce(:head, head),
                  subject = coalesce(:subject, subject), issue = coalesce(:issue, issue),
                  est = coalesce(:est, est), owns = coalesce(:owns, owns), deps = coalesce(:deps, deps),
@@ -358,10 +469,24 @@ def cmd_state(db, ctx, argv):
     missing = [k for k in FAN_FIELDS if row[k] is None]
     if missing and state not in ("merged", "dropped"):
         sys.stderr.write(f"not fan-ready: {slug} {code} lacks {' '.join('--' + k for k in missing)}\n")
-    if state == "planned" and not db.execute("SELECT 1 FROM events WHERE plan = ? AND code = ? AND kind = 'brief'",
-                                             (plan["id"], code)).fetchone():
-        sys.stderr.write(f"no brief: {slug} {code}; write one with event {slug} {code} brief -\n")
     return f"{slug} {code}: {state}\n"
+
+
+# A row is planned before it exists or works: its plan has a file, it names
+# its section there, and it has a brief. All of what is missing in one line.
+def refuse_unplanned(db, plan, code, ref, state, new):
+    slug, missing = plan["slug"], []
+    if not plan["path"]:
+        missing.append(f"a plan file (plan set {slug} --path P)")
+    elif read_plan(plan["path"]) is None:
+        missing.append(f"its plan file, gone from {plan['path']} (plan set {slug} --path P)")
+    if not ref:
+        missing.append("its section in the plan (--ref HEADING)")
+    if not has_brief(db, plan, code):
+        missing.append(f"a brief (event {slug} {code} brief -, text on stdin)")
+    if missing:
+        what = "create" if new else f"move to {state}"
+        raise Usage(f"refused: {slug} {code} cannot {what} without {', '.join(missing)}")
 
 
 # A run the row's size picked follows the size when it changes; a run set with
@@ -379,6 +504,12 @@ def cmd_event(db, ctx, argv):
     slug, code, kind, text = args(argv, lo=3, hi=4).positionals
     if kind == "model":
         raise Usage("a row's model and effort are columns: state <plan> <code> <state> --model M --effort E")
+    if kind == "state":
+        raise Usage("state events are written by: state <plan> <code> <state>")
+    if kind == "decision":
+        raise Usage("decisions are the plan's: decide <plan> <text|->")
+    if kind not in KINDS:
+        raise Usage(f"kind must be one of {' '.join(KINDS)}; text goes after it, or on stdin as -")
     plan = plan_row(db, ctx["repo"], slug)
     db.execute("INSERT INTO events (ts, plan, code, kind, text, session) VALUES (?, ?, ?, ?, ?, ?)",
                (now(), plan["id"], code, kind, None if text is None else text_arg(text), ctx["session"]))
@@ -404,7 +535,7 @@ def cmd_show(db, ctx, argv):
     if not a.all:
         where.append(f"prs.state NOT IN ({CLOSED_SQL})")
     rows = [dict(r) for r in db.execute(
-        f"""SELECT plans.slug AS plan, prs.code, prs.state, prs.pr, prs.branch, prs.head, prs.subject,
+        f"""SELECT plans.slug AS plan, prs.code, prs.ref, prs.state, prs.pr, prs.branch, prs.head, prs.subject,
                    prs.worktree, prs.issue, prs.est, prs.owns, prs.deps, prs.model, prs.effort, prs.updated
             FROM prs JOIN plans ON plans.id = prs.plan
             WHERE {" AND ".join(where)} ORDER BY plans.slug, prs.code""", params)]
@@ -476,15 +607,27 @@ def cmd_brief(db, ctx, argv):
     pr = db.execute("SELECT * FROM prs WHERE plan = ? AND code = ?", (plan["id"], code)).fetchone()
     decisions = db.execute("SELECT ts, text, said_by, quote FROM decisions WHERE plan = ? ORDER BY ts, id",
                            (plan["id"],)).fetchall()
-    task = db.execute("SELECT text FROM events WHERE plan = ? AND code = ? AND kind = 'brief' "
-                      "ORDER BY ts DESC, id DESC LIMIT 1", (plan["id"], code)).fetchone()
-    events = db.execute("SELECT ts, kind, text FROM events WHERE plan = ? AND code = ? "
-                        "AND kind NOT IN ('model', 'brief') "
-                        "ORDER BY ts DESC, id DESC LIMIT ?",
-                        (plan["id"], code, BRIEF_EVENTS)).fetchall()[::-1]
+    def latest(kind):
+        return db.execute("SELECT ts, text FROM events WHERE plan = ? AND code = ? AND kind = ? "
+                          "ORDER BY ts DESC, id DESC LIMIT 1", (plan["id"], code, kind)).fetchone()
+
+    task, progress = latest("brief"), latest("progress")
+    events = db.execute(f"SELECT ts, kind, text FROM events WHERE plan = ? AND code = ? "
+                        f"AND kind NOT IN ({','.join('?' * len(WHOLE_KINDS))}) "
+                        f"ORDER BY ts DESC, id DESC LIMIT ?",
+                        (plan["id"], code, *WHOLE_KINDS, BRIEF_EVENTS)).fetchall()[::-1]
     flakes = db.execute("SELECT test_id, note FROM flakes WHERE repo = ? ORDER BY test_id", (ctx["repo"],)).fetchall()
     out = [f"# {plan['slug']} {code}{' — ' + plan['title'] if plan['title'] else ''}", ""]
-    out += [f"Plan: {plan['path'] or 'none recorded'}", "", "## PR", ""]
+    ref = pr and pr["ref"]
+    out += [f"Plan: {plan['path'] or 'none recorded'}", f"Ref: {ref or 'none recorded'}", "", "## Plan section", ""]
+    lines = plan["path"] and read_plan(plan["path"])
+    if not plan["path"] or not ref:
+        out.append("None recorded.")
+    elif lines is None:
+        out.append(f"Plan file gone: {plan['path']}")
+    else:
+        out.append(section(lines, ref) or f"No single heading in the plan matches {ref!r} now.")
+    out += ["", "## PR", ""]
     if pr:
         out += [f"- {k}: {pr[k]}" for k in ("state", "model", "effort", "issue", "est", "owns", "deps", "pr", "branch", "worktree",
                                               "head", "subject", "updated")
@@ -492,6 +635,8 @@ def cmd_brief(db, ctx, argv):
     else:
         out.append("No row yet.")
     out += ["", "## Brief", "", task["text"] if task and task["text"] else "None recorded."]
+    out += ["", "## Progress", ""]
+    out.append(f"{progress['ts'][:16]}\n\n{progress['text']}" if progress and progress["text"] else "None recorded.")
     out += ["", "## Decisions", ""]
     if not decisions:
         out.append("None recorded.")
@@ -509,6 +654,32 @@ def cmd_brief(db, ctx, argv):
         out.append("None recorded.")
     out += [f"- `{f['test_id']}`{' — ' + f['note'] if f['note'] else ''}" for f in flakes]
     return "\n".join(out) + "\n"
+
+
+def cmd_gaps(db, ctx, argv):
+    slug = args(argv, lo=0, hi=1).positionals[0]
+    plans = [plan_row(db, ctx["repo"], slug)] if slug else \
+        db.execute("SELECT * FROM plans WHERE repo = ? ORDER BY slug", (ctx["repo"],)).fetchall()
+    out = []
+    for plan in plans:
+        lines = plan["path"] and read_plan(plan["path"])
+        rows = db.execute(f"SELECT * FROM prs WHERE plan = ? AND state NOT IN ({CLOSED_SQL}) ORDER BY code",
+                          (plan["id"],)).fetchall()
+        if not plan["path"] or lines is None:
+            out.append({"plan": plan["slug"], "code": "", "state": "",
+                        "missing": "plan file" + (f" (gone: {plan['path']})" if plan["path"] else "")})
+        for r in rows:
+            missing = []
+            if not r["ref"]:
+                missing.append("ref")
+            elif lines is not None and len(ref_matches(lines, r["ref"])) != 1:
+                missing.append("ref (no single heading)")
+            if not has_brief(db, plan, r["code"]):
+                missing.append("brief")
+            missing += [k for k in FAN_FIELDS if r[k] is None]
+            if missing:
+                out.append({"plan": plan["slug"], "code": r["code"], "state": r["state"], "missing": " ".join(missing)})
+    return table(out, ["plan", "code", "state", "missing"])
 
 
 def cmd_suite_run(db, ctx, argv):
@@ -533,9 +704,9 @@ def cmd_suite_run(db, ctx, argv):
 
 COMMANDS = {
     "plan": cmd_plan, "state": cmd_state, "event": cmd_event, "decide": cmd_decide, "show": cmd_show,
-    "log": cmd_log, "flake": cmd_flake, "brief": cmd_brief, "suite-run": cmd_suite_run,
+    "log": cmd_log, "flake": cmd_flake, "brief": cmd_brief, "gaps": cmd_gaps, "suite-run": cmd_suite_run,
 }
-READS = {("show",), ("log",), ("brief",), ("plan", "list"), ("flake", "list")}
+READS = {("show",), ("log",), ("brief",), ("gaps",), ("plan", "list"), ("flake", "list")}
 
 
 # The header comment is the only copy of the usage, so help cannot drift from it.

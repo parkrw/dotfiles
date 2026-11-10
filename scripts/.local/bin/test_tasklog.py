@@ -16,6 +16,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 
 BIN = os.path.dirname(os.path.abspath(__file__))
+CODES = ["P2", "P3", "P4", "P5", "P6", "P7", "P8", "B1", "B2", "T1", "R1"]
 TODAY = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
@@ -83,10 +84,21 @@ class Case(unittest.TestCase):
     def sql(self, query, name="ck.db"):
         return self.db(name).execute(query).fetchone()[0]
 
+    # A plan file with a section per code the tests use, and the plan on it.
+    def plan(self, slug, *flags, repo="core"):
+        with open(os.path.join(self.repos[repo], "PLAN.md"), "w") as f:
+            f.write("# Plan\n\n" + "".join(f"## {c} task\n\nbody {c}\n\n" for c in CODES))
+        self.ok("plan", "add", slug, "--path", "PLAN.md", *flags, repo=repo)
+
+    # A row as every row is made: its brief first, then state naming its section.
+    def row(self, slug, code, state, *flags):
+        self.ok("event", slug, code, "brief", "-", stdin=f"Goal: {code}\n")
+        self.ok("state", slug, code, state, "--ref", code, *flags)
+
     def seed(self):
-        self.ok("plan", "add", "platform-overview", "--path", "PLAN.md", "--title", "Platform overview")
-        self.ok("state", "platform-overview", "P5", "building", "--branch", "overview-p5", "--head",
-                "abc123def456789", "--subject", "web: glance row", "--worktree", "/wt/core-p5")
+        self.plan("platform-overview", "--title", "Platform overview")
+        self.row("platform-overview", "P5", "building", "--branch", "overview-p5", "--head",
+                 "abc123def456789", "--subject", "web: glance row", "--worktree", "/wt/core-p5")
         self.ok("state", "platform-overview", "P5", "ready", "--pr", "412")
 
 
@@ -116,7 +128,7 @@ class Names(Case):
         got = self.sql("SELECT (SELECT user_version FROM pragma_user_version) || ' ' || "
                        "(SELECT journal_mode FROM pragma_journal_mode) || ' ' || "
                        "(SELECT group_concat(name) FROM (SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name))")
-        self.assertEqual(got, "3 wal decisions,events,flakes,plans,prs,suite_runs")
+        self.assertEqual(got, "4 wal decisions,events,flakes,plans,prs,suite_runs")
 
     def test_an_empty_tasklog_dir_uses_the_default_dir(self):
         home = os.path.join(self.dir, "home")
@@ -126,8 +138,8 @@ class Names(Case):
 
 class State(Case):
     def test_bad_input_fails(self):
-        self.ok("plan", "add", "platform-overview")
-        for argv in [("plan", "add", "platform-overview"), ("state", "nope", "P1", "building"),
+        self.plan("platform-overview")
+        for argv in [("plan", "add", "platform-overview", "--path", "PLAN.md"), ("state", "nope", "P1", "building"),
                      ("plan", "add", ""), ("event", "platform-overview", " ", "note"),
                      ("state", "platform-overview", "P1", "done"),
                      ("state", "platform-overview", "P5", "ready", "--pr", "abc")]:
@@ -156,14 +168,14 @@ class State(Case):
     def test_state_writes_state_events(self):
         self.seed()
         out = self.ok("log", "platform-overview", "P5")
-        self.assertIn("state  building branch=overview-p5 worktree=/wt/core-p5 head=abc123def456789 "
+        self.assertIn("state  building ref=P5 branch=overview-p5 worktree=/wt/core-p5 head=abc123def456789 "
                       "subject=web: glance row", out)
         self.assertIn("state  ready pr=412", out)
 
     def test_show_hides_closed_rows_unless_all(self):
         self.seed()
         for code, state in [("P4", "merged"), ("P3", "dropped"), ("P2", "blocked")]:
-            self.ok("state", "platform-overview", code, state)
+            self.row("platform-overview", code, state)
         out = self.ok("show")
         self.assertNotIn("P4", out)
         self.assertNotIn("P3", out)
@@ -195,9 +207,9 @@ class Text(Case):
 
     def test_an_event_with_no_text_logs_its_kind_alone(self):
         self.seed()
-        self.ok("event", "platform-overview", "P6", "started")
+        self.ok("event", "platform-overview", "P6", "checkpoint")
         out = self.ok("log", "platform-overview", "P6")
-        self.assertRegex(out, r"^[^\n]*  P6  started\n$")
+        self.assertRegex(out, r"^[^\n]*  P6  checkpoint\n$")
 
     def test_the_session_id_is_stored(self):
         self.seed()
@@ -209,19 +221,19 @@ class Concurrency(Case):
     # As in core, the first open sets WAL with no lock around it, so these
     # race against a DB that exists, which is every run after the first.
     def race(self, argvs):
-        self.ok("plan", "add", "race")
+        self.plan("race")
         with ThreadPoolExecutor(len(argvs)) as pool:
             return list(pool.map(lambda argv: self.run_cli(*argv), argvs))
 
     def test_20_concurrent_plan_adds_all_land(self):
-        runs = self.race([("plan", "add", f"race-{i}") for i in range(20)])
+        runs = self.race([("plan", "add", f"race-{i}", "--path", "PLAN.md") for i in range(20)])
         self.assertEqual([p.stderr for p in runs if p.returncode], [])
         self.assertEqual(len(re.findall(r"(?m)^race-", self.ok("plan", "list"))), 20)
 
     def test_20_concurrent_events_all_land(self):
-        runs = self.race([("event", "race", "R1", "tick", f"writer {i}") for i in range(20)])
+        runs = self.race([("event", "race", "R1", "note", f"writer {i}") for i in range(20)])
         self.assertEqual([p.stderr for p in runs if p.returncode], [])
-        self.assertEqual(self.ok("log", "race").count("tick  writer"), 20)
+        self.assertEqual(self.ok("log", "race").count("note  writer"), 20)
 
     def test_a_read_runs_while_another_session_holds_the_write_lock(self):
         self.seed()
@@ -288,17 +300,17 @@ class Brief(Case):
     def test_brief_keeps_the_last_10_events_of_its_code_oldest_first(self):
         self.seed()
         for i in range(1, 13):
-            self.ok("event", "platform-overview", "P7", "tick", f"e{i:02d}")
-        self.ok("event", "platform-overview", "P8", "tick", "other code")
+            self.ok("event", "platform-overview", "P7", "note", f"e{i:02d}")
+        self.ok("event", "platform-overview", "P8", "note", "other code")
         out = self.ok("brief", "platform-overview", "P7")
-        self.assertEqual(re.findall(r"tick: (e\d+)", out), [f"e{i:02d}" for i in range(3, 13)])
+        self.assertEqual(re.findall(r"note: (e\d+)", out), [f"e{i:02d}" for i in range(3, 13)])
         section = out.split("## Last 10 events")[1].split("## Known flakes")[0]
         self.assertEqual(len(re.findall(r"(?m)^- ", section)), 10)
 
     def test_brief_of_a_bare_plan_says_what_is_missing(self):
-        self.ok("plan", "add", "bare")
+        self.plan("bare")
         out = self.ok("brief", "bare", "B1")
-        self.assertTrue(out.startswith("# bare B1\n\nPlan: none recorded\n"), out)
+        self.assertTrue(out.startswith(f"# bare B1\n\nPlan: {self.repos['core']}/PLAN.md\nRef: none recorded\n"), out)
         for want in ["No row yet.", "## Brief\n\nNone recorded.", "## Decisions\n\nNone recorded.", "## Last 10 events\n\nNone recorded.",
                      "## Known flakes\n\nNone recorded."]:
             self.assertIn(want, out)
@@ -308,26 +320,24 @@ class Brief(Case):
         self.ok("event", "platform-overview", "P5", "brief", "-", stdin="old brief\n")
         self.ok("event", "platform-overview", "P5", "brief", "-", stdin="Goal: glance row\n\nTrap: `a.js:12`\n")
         for i in range(12):
-            self.ok("event", "platform-overview", "P5", "tick", f"e{i:02d}")
+            self.ok("event", "platform-overview", "P5", "note", f"e{i:02d}")
         out = self.ok("brief", "platform-overview", "P5")
-        self.assertIn("## Brief\n\nGoal: glance row\n\nTrap: `a.js:12`\n\n## Decisions", out)
+        self.assertIn("## Brief\n\nGoal: glance row\n\nTrap: `a.js:12`\n\n## Progress", out)
         self.assertNotIn("old brief", out)
         self.assertNotIn("brief:", out.split("## Last 10 events")[1])
         self.assertIn("## Brief\n\nNone recorded.", self.ok("brief", "platform-overview", "P6"))
 
-    def test_a_planned_row_without_a_brief_says_so(self):
-        self.ok("plan", "add", "bare")
-        p = self.run_cli("state", "bare", "B1", "planned", "--est", "S", "--owns", "src/**")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("no brief: bare B1", p.stderr)
+    def test_a_row_without_a_brief_or_ref_is_refused(self):
+        self.plan("bare")
+        self.assertIn("without its section in the plan (--ref HEADING), a brief",
+                      self.fails(1, "state", "bare", "B1", "planned", "--est", "S", "--owns", "src/**"))
         self.ok("event", "bare", "B2", "brief", "-", stdin="Goal: x\n")
-        p = self.run_cli("state", "bare", "B2", "planned", "--est", "S", "--owns", "src/**")
+        p = self.run_cli("state", "bare", "B2", "planned", "--ref", "B2", "--est", "S", "--owns", "src/**")
         self.assertEqual((p.returncode, p.stderr), (0, ""))
-        p = self.run_cli("state", "bare", "B1", "building", "--branch", "b1")
-        self.assertNotIn("no brief", p.stderr)
+        self.assertEqual(self.sql("SELECT count(*) FROM prs WHERE code = 'B1'"), 0)
 
     def test_a_multi_line_quote_stays_in_the_blockquote(self):
-        self.ok("plan", "add", "bare")
+        self.plan("bare")
         self.ok("decide", "bare", "-", "--quote", "line one\nline two", stdin="ship it\n")
         out = self.ok("brief", "bare", "B1")
         self.assertIn(f"- {TODAY} ship it\n", out)
@@ -337,8 +347,8 @@ class Brief(Case):
 class Transactions(Case):
     def setUp(self):
         super().setUp()
-        self.ok("plan", "add", "tx")
-        self.ok("state", "tx", "T1", "building")
+        self.plan("tx")
+        self.row("tx", "T1", "building")
         self.ok("flake", "add", "one")
         self.ok("flake", "add", "two")
 
@@ -376,12 +386,12 @@ class Usage(Case):
     def test_bad_commands_fail_with_usage(self):
         self.fails(1, "frob")
         self.fails(1, "toString")
-        self.assertIn("plan add <slug> | plan list", self.fails(1, "plan", "frob"))
+        self.assertIn("plan add <slug> --path P | plan set <slug> | plan list", self.fails(1, "plan", "frob"))
         self.assertIn("flake add <test_id> [note] | list | rm <test_id> | match", self.fails(1, "flake", "frob"))
         self.fails(1, "show", "--frob")
 
     def test_argument_counts_are_exact(self):
-        self.ok("plan", "add", "platform-overview")
+        self.plan("platform-overview")
         self.fails(1, "event", "platform-overview", "P5", "note", "hello", "world")
         self.fails(1, "state", "platform-overview", "P5")
 
@@ -390,16 +400,17 @@ class Help(Case):
     def test_top_level_help_lists_every_command(self):
         for argv in ([], ["--help"], ["help"]):
             starts = [line.split()[1] for line in self.ok(*argv).splitlines() if line.startswith("cklog ")]
-            self.assertEqual(starts, ["plan", "plan", "state", "event", "decide", "show", "log", "flake", "brief",
-                                      "suite-run"], argv)
+            self.assertEqual(starts, ["plan", "plan", "plan", "state", "event", "decide", "show", "log", "flake",
+                                      "brief", "gaps", "suite-run"], argv)
 
     def test_command_help_prints_only_its_lines(self):
         out = self.ok("state", "--help", tool="vanlog")
-        self.assertTrue(out.startswith("vanlog state <plan> <code> <state> [--pr N"), out)
+        self.assertTrue(out.startswith("vanlog state <plan> <code> <state> [--ref HEADING --pr N"), out)
         self.assertIn("--model opus|fable --effort high|xhigh]", out)
         self.assertEqual(len(out.splitlines()), 3, out)
         self.assertEqual(self.ok("plan", "--help").splitlines(),
-                         ["cklog plan add <slug> [--path PLAN.md] [--title T]", "cklog plan list"])
+                         ["cklog plan add <slug> --path PLAN.md [--title T]",
+                          "cklog plan set <slug> [--path PLAN.md] [--title T]", "cklog plan list"])
 
     def test_help_needs_no_owned_repo_and_opens_no_db(self):
         for tool, repo in (("cklog", "noorigin"), ("cklog", "van"), ("vanlog", "core")):
