@@ -32,7 +32,7 @@ Take it in this order. Each step works without the ones after it.
 `claude-review` calls `review-branch.sh`, which runs the review as a separate, non-interactive Claude Code process:
 
 ```
-cd <worktree> && claude -p "<review prompt>" --model opus --effort <level> \
+cd <worktree> && CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1 claude -p "<review prompt>" --model opus --effort <level> \
   --allowedTools Read Grep Glob "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(git status:*)"
 ```
 

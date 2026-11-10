@@ -318,8 +318,14 @@ review_fallback=""
 # stdin. Left open (as under Claude's Bash tool, where fd0 is a non-EOF pipe)
 # the child blocks on a stdin read forever — codex even announces "Reading
 # additional input from stdin..." and then hangs with no further output.
+#
+# CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS drops the git status snapshot from the
+# system prompt. Each fix round adds a commit, which changes the snapshot and
+# invalidates the prompt cache behind it, so every re-review re-wrote ~16k
+# tokens; without it a re-review within the cache TTL reuses the whole prefix.
+# The reviewer runs git diff/log/status itself and needs neither.
 run_review_claude() {
-  cd "$worktree" && claude -p "$prompt" \
+  cd "$worktree" && CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1 claude -p "$prompt" \
     ${review_model:+--model "$review_model"} \
     ${review_effort:+--effort "$review_effort"} \
     ${review_fallback:+--fallback-model "$review_fallback"} \
