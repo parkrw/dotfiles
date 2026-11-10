@@ -93,7 +93,7 @@ Claude Code can't open another interactive Claude session by itself. Inside tmux
 
 That is how `/spawn` starts a successor, how `/fan` runs one worker per issue side by side, and how the context handoff replaces a full session with a fresh one. As a bonus, sessions survive a closed terminal or a dropped SSH connection.
 
-Without tmux, everything else still works. `/newchat` prints the handoff prompt and you paste it into a new session yourself.
+Without tmux, everything else still works. `/newchat` writes the handoff prompt to a file and prints `@<path>` for you to send in a new session yourself.
 
 ## Why there's a context handoff
 

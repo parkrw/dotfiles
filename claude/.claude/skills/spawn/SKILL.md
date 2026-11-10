@@ -45,7 +45,7 @@ Open a fresh interactive `claude` in a **new window of the current tmux session*
 
 Strip the leading flags from `$ARGUMENTS`, in any order, and remember them: `--fresh`, `--pane`, `--same`, and `--cwd <dir>` (an absolute path, quoted if it holds spaces). Every item below reads the stripped `$ARGUMENTS`.
 
-The new session always starts with an initial prompt composed of, in order:
+The seed lives in a file, and the new session gets one line pointing at it, never the text. Write it with the Write tool to `$HOME/.local/state/claude/spawn/<repo>-<YYYYMMDD-HHMMSS>.md` (`mkdir -p` the directory; `<repo>` is `basename` of `$dir`'s repo top level, or of `$dir`), plain markdown, composed of, in order:
 
 1. **Handoff pickup** — omit under `--fresh`: the task arrives complete, and an older handoff would compete with it. Otherwise resolve where the handoff lives, in this order:
    - `$dir/TODO/README.md` exists → `Read TODO/README.md, follow its Resume pointer to the task file, and continue from that file's Handoff section.`
@@ -79,10 +79,10 @@ read -r pane target <<<"$(tmux new-window -P -F '#{pane_id} #{session_name}:#{wi
   -n cc -c "$dir" "claude --model '<model-id>' --effort <effort>")"   # per the rule above; drop --effort if unknown
 ```
 
-Then deliver the seed by tmux buffer, which has no quoting surface:
+Then deliver the pointer by tmux buffer, which has no quoting surface:
 
 ```bash
-printf '%s' "$seed" > "$SP/seed.txt"          # single line, no embedded newlines
+printf 'Read %s and follow it.' "<seed file>" > "$SP/seed.txt"   # one line
 tmux load-buffer -b spawnseed "$SP/seed.txt"
 tmux paste-buffer -b spawnseed -t "$pane"
 tmux delete-buffer -b spawnseed
@@ -98,9 +98,9 @@ read -r pane target <<<"$(tmux split-window -P -F '#{pane_id} #{session_name}:#{
 
 - Like `prefix + c`, this switches focus to the new window or pane — that is
   expected; do not add `-d`.
-- The seed must be **one line**: a multi-line paste submits at the first newline
-  and strands the rest in an empty prompt. Join step 2's parts with spaces
-  before writing the file.
+- The pasted pointer must be **one line**: a multi-line paste submits at the
+  first newline and strands the rest in an empty prompt. The seed file itself
+  is free to span lines.
 
 ## 4. Confirm
 
@@ -116,4 +116,4 @@ tmux list-windows -t "$session" -F '#{session_name}:#{window_index} #{window_nam
 - The target from step 2 must appear in this list. If it does not, report the
   failure — re-run the launch command in the current pane's shell context to
   surface the error, don't silently retry.
-- Report to the user: window target (e.g. `dotfiles:3`), window name, pane id under `--pane`, `$dir`, and the model and effort launched.
+- Report to the user: window target (e.g. `dotfiles:3`), window name, pane id under `--pane`, `$dir`, the model and effort launched, and the seed file path.
