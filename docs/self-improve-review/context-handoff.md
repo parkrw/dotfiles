@@ -19,7 +19,7 @@ tmux new -s work         # then start claude inside it
    - **In tmux:** it blocks the stop, and its message becomes Claude's next instruction: finish or checkpoint the current sub-task, wait for any background review, build or test run, then run `/newchat --spawn --replace "continue: <task>"`.
    - **Outside tmux:** it shows a warning and does nothing else.
    - **Mid-rebase or mid-merge:** it stays quiet and checks again at the next turn.
-3. **`/newchat --spawn`:** writes the handoff prompt to `~/.local/state/claude/newchat/<repo>-<timestamp>.md`, naming the feature branch and checkout the work is on, then `/spawn --cwd <checkout> --fresh` opens a new window in that checkout, so the tmux status line shows it, running the same model and effort, seeded with that file.
+3. **`/newchat --spawn`:** writes the handoff prompt to `~/.local/state/claude/newchat/<repo>-<timestamp>.md`, naming the feature branch and checkout the work is on, then `/spawn --cwd <checkout> --fresh` opens a new window in that checkout, so the tmux status line shows it, running the same model and effort, seeded with one line that points at that file.
 4. **`--replace`:** passes `--pane --same` to `/spawn`, so the successor opens as a new pane in the same window on the exact model and effort of the session it replaces, with no tier step down; once it is confirmed alive, it kills the old pane and the new one fills the window. If the spawn failed, the old session stays open.
 
 Sessions opened by `/spawn` are also told the rule directly: wind down at 25%, hand off at 30%, never go past it. A `/fan` lead and its workers use the same budget.
@@ -61,4 +61,4 @@ session_id=$(jq -r '.session_id // empty' <<<"$input")
 
 - `CTX_NUDGE_USED=40`: changes the threshold. Set it in the shell that launches `claude`.
 - `touch ~/.claude/hooks/.no-ctx-handoff-nudge`: turns this hook off.
-- `/newchat` with no `--spawn` prints the handoff prompt for you to paste anywhere. Outside tmux, `--spawn` saves the file and prints `@<path>` to send after `/clear`.
+- `/newchat` with no `--spawn`, or outside tmux, writes the same file and prints `@<path>` for you to send in any new session or after `/clear`. The prompt itself is never printed.
