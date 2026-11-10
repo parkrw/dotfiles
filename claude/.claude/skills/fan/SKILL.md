@@ -1,6 +1,6 @@
 ---
 name: fan
-description: Fan tasks out to concurrent Claude sessions, one task per git worktree, one tmux pane per worker, batched by disjoint write scopes. Tasks are tasklog (cklog) rows by default; GitHub issues only after the user says yes. Built for shared repos - the plan, briefs, and reports live outside the repo, and GitHub sees only ordinary branches and PRs (and issues, when approved) in the repo's own measured conventions. Works the list to the end: each worker ships through /ftl ship to a green PR, and the head watches open PRs with pr-wait, re-ships stale ones, and fans the next batch as merges unblock it. e.g. /fan "goal" (plan, write tasklog rows, first batch), /fan --plan <slug> (fan a tasklog plan), /fan (fan out the ready batch; adopts the repo's open tasklog plan when this lane has none), /fan NN (one task inline), /fan NN MM (exactly these, in worktrees), /fan --adjust (reconcile and replan), /fan --help.
+description: Fan tasks out to concurrent Claude sessions, one task per git worktree, one tmux pane per worker, batched by disjoint write scopes. Tasks are tasklog (cklog) rows, each with its section in the plan file and a brief; GitHub issues only after the user says yes. Built for shared repos - the plan file and the rows live outside the repo, and GitHub sees only ordinary branches and PRs (and issues, when approved) in the repo's own measured conventions. Works the list to the end: each worker is one /ftl --row <plan> <code> --ship, to a green PR, and the head watches open PRs with pr-wait, re-ships stale ones, and fans the next batch as merges unblock it. e.g. /fan "goal" (plan, write tasklog rows, first batch), /fan --plan <slug> (fan a tasklog plan), /fan (fan out the ready batch; adopts the repo's open tasklog plan when this lane has none), /fan NN (one task inline), /fan NN MM (exactly these, in worktrees), /fan --adjust (reconcile and replan), /fan --help.
 ---
 
 ## Help
@@ -10,13 +10,14 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
 ```
 /fan - fan tasks out to worktrees, in the repo's own voice
 
-  Plans in tasklog (cklog) and a private state dir - GitHub issues only
-  after you say yes - writes PRs the way the repo's lead does, and runs
-  one Claude session per task in a sibling worktree:
+  Plans in tasklog (cklog), every row with its plan-file section and a
+  brief - GitHub issues only after you say yes - and runs one Claude
+  session per task in a sibling worktree, started with one line,
+  /ftl --row <plan> <code> --ship:
   one tmux window per batch, one pane per worker, in this tmux session.
   Nothing on GitHub or in the repo tree marks the work as tool-driven.
   State is one lane per head, so two sessions can fan the same repo at once.
-  Works the list to the end: workers ship with /ftl ship (review loop, PR,
+  Works the list to the end: workers ship with ftl (review loop, PR,
   CI green), the head watches open PRs with pr-wait, re-ships stale ones,
   queues merge commands for you, and fans the next batch as merges land.
 
@@ -40,12 +41,12 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
 
 # Fan (`/fan`)
 
-Concurrent task-driven work in a repo other people read. The head (this session) plans, writes tasklog rows, cuts worktrees, spawns one worker per task, reviews each worker's diff before it is pushed, and reconciles. Workers implement.
+Concurrent task-driven work in a repo other people read. The head (this session) plans, writes tasklog rows, cuts worktrees, starts one worker per task as `/ftl --row <plan> <code> --ship`, checks each PR it opens, and reconciles. Workers implement and ship.
 
 Two invariants hold in every mode:
 
-- **Nothing private touches the repo or GitHub.** The plan, briefs, and reports live in `$FAN` (below). The repo tree gets only the change itself - no `TODO/`, `HANDOFF.md`, reports, or markers. Worktrees are siblings of the checkout, never inside it.
-- **Tasks live in tasklog, not GitHub issues.** `tasklog` (`cklog` in CloudKey repos) is the task store by default. GitHub issues - creating, reading, searching, linking - are used only after the user says yes to one question, `Use GitHub issues for <repo>'s tasks in this lane?`, recorded on Refs' `issues:` line (§ Issues).
+- **Nothing private touches the repo or GitHub.** The plan file lives in `$FAN` (below); rows, briefs and reports live in tasklog. The repo tree gets only the change itself - no `TODO/`, `HANDOFF.md`, reports, or markers. Worktrees are siblings of the checkout, never inside it.
+- **Every task is a planned tasklog row.** `tasklog` (`cklog` in CloudKey repos) is the task store, in every plan, and every row has its section in the plan's file (`ref`) and a row brief; `tasklog state` refuses a row without them. A repo no log owns (`tasklog` exits 2) is not fanned. A row that lacks one is never filled in after the fact: it stays out of every batch. GitHub issues - creating, reading, searching, linking - are used only after the user says yes to one question, `Use GitHub issues for <repo>'s tasks in this lane?`, recorded on Refs' `issues:` line (§ Issues).
 - **Everything public is in the repo's voice.** Issue titles and bodies, labels, branch names, commit subjects, PR titles and bodies follow what is measured from the lead's own work (§ Voice), not this skill's vocabulary. A reader of the repo sees a teammate at work.
 
 All repo rules and the user's git gates apply. This skill sequences them and never relaxes them. `$SP` below is this session's scratchpad directory.
@@ -55,7 +56,7 @@ All repo rules and the user's git gates apply. This skill sequences them and nev
 ```bash
 repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)   # owner/name
 LANES=~/.local/state/claude/fan/${repo/\//-}                   # one lane per head
-FAN=$LANES/${FAN_LANE:-${CLAUDE_CODE_SESSION_ID:?}}; mkdir -p "$FAN"/{briefs,reports}
+FAN=$LANES/${FAN_LANE:-${CLAUDE_CODE_SESSION_ID:?}}; mkdir -p "$FAN"
 others() {   # live rows this lane does not run, any plan, any session: plan, code, issue, owns, state
   mine=$(awk -F'|' 'NR > 2 && $2 ~ /[^ ]/ { gsub(/ /, "", $2); print $2 }' <(sed -n '/^| code |/,/^$/p' "$FAN/plan.md" 2>/dev/null))
   tasklog show --json | jq -r --arg me "$PLAN" --arg mine "$mine" \
@@ -65,16 +66,15 @@ others() {   # live rows this lane does not run, any plan, any session: plan, co
 }
 ```
 
-`$PLAN` is Refs' `tasklog` plan; `mine` is the codes in `plan.md`'s table. In a repo no log owns (`tasklog` exits 2, Refs `tasklog: none`), `others` greps the other lanes' `plan.md` tables for `inflight`, `review` and `shipped` rows instead.
+`$PLAN` is Refs' `tasklog` plan; `mine` is the codes in `plan.md`'s table.
 
 Two heads on one repo share nothing in `$LANES`: neither renames the other's markers or completes a batch on the other's rows. They do share the tree, so a pick is checked against `others` (Fan out 1) the same way it is checked against its own batch, and `others` is printed with every guard and pick. A lane outlives its session: `--adjust` adopts one, and the `newchat` prompt at the context ceiling carries `$FAN` so the next head adopts this one.
 
 | File | Holds |
 | --- | --- |
 | `tasklog` plan `$PLAN` | the task table: one row per task, with its state, issue, est, owns, deps, model, effort, branch, worktree, PR |
-| `$FAN/plan.md` | goal, Voice block, Refs, each row's slug and pane, an append-only log |
-| `$FAN/briefs/NN.md` | the worker's full brief for row `NN` - everything an issue body, when there is one, must not say |
-| `$FAN/reports/NN.md` + markers | the worker's report; `NN.done` means "reported", `NN.shipped` means "PR open" |
+| `$FAN/plan.md` | goal, Voice block, Refs, a `### <code> <slug>` section per row (the rows' `ref`), each row's slug and pane, an append-only log; the plan file of a plan fan made |
+| `tasklog event`s on the row | its brief, its worker's `blocked` stops and `handoff`s (PR URL and verdict), progress at a context ceiling |
 
 `plan.md`:
 
@@ -86,7 +86,7 @@ Two heads on one repo share nothing in `$LANES`: neither renames the other's mar
 
 ## Refs
 install: <cmd>  test: <cmd>  lint/build: <cmd>  merge style: squash|merge|rebase
-tasklog: <plan>|none
+tasklog: <plan>
 issues: no|yes
 
 | code | issue | slug | pane |
@@ -97,22 +97,20 @@ issues: no|yes
 - 2026-09-12 seeded from "<goal>"
 ```
 
-The task table lives in `tasklog` by default; `plan.md` holds only what tasklog has no column for. Read it with `tasklog show $PLAN --all --json`, and write every change to a row with `tasklog state $PLAN <code> <state> [flags]`, so a dead head, another lane, `/ftl` and `/newchat` all see the same rows. `code` is the row's code: `T1`, `T2`, … in a plan fan made (the issue number instead when `issues: yes`), the plan's own code (`L4`, `P5`) in one it adopted. `NN` below is that code. `est` is `--est S|M|L` (`~S` ≤100 lines, `~M` 100-300, `~L` 300+); `owns`, the write scope, is `--owns '<globs>'`: the globs the worker may touch, and a file outside them is a rework trigger even when the code is right; `deps` is `--deps '<codes>'`; globs and codes are space-separated; `ref` is `--ref '<heading>'`, text matching exactly one heading of the plan file, the row's section there. Write a row's sizing the moment it is sized: `tasklog state $PLAN <code> planned --ref '<heading>' --est S --owns '<globs>' [--deps '<codes>'] [--issue N]`, `--issue` only when `issues: yes`, the row's current state in place of `planned` once it has one. `tasklog state` refuses (exit 1) to create a row, or move one to an open state, while its plan has no file, the row has no `ref`, or it has no row brief; `tasklog gaps $PLAN` lists every row that lacks one. `tasklog state` prints `not fan-ready` for an open row missing est or owns: size it before it can batch. It also sets the row's `model` and `effort` from `est` (§ Model tiers).
+The task table lives in `tasklog`; `plan.md` holds only what tasklog has no column for. Read it with `tasklog show $PLAN --all --json`, and write every change to a row with `tasklog state $PLAN <code> <state> [flags]`, so a dead head, another lane, `/ftl` and `/newchat` all see the same rows. `code` is the row's code: `T1`, `T2`, … in a plan fan made (the issue number instead when `issues: yes`), the plan's own code (`L4`, `P5`) in one it adopted. `NN` below is that code. `est` is `--est S|M|L` (`~S` ≤100 lines, `~M` 100-300, `~L` 300+); `owns`, the write scope, is `--owns '<globs>'`: the globs the worker may touch, and a file outside them is a rework trigger even when the code is right; `deps` is `--deps '<codes>'`; globs and codes are space-separated; `ref` is `--ref '<heading>'`, text matching exactly one heading of the plan file, the row's section there. Write a row's sizing the moment it is sized: `tasklog state $PLAN <code> planned --ref '<heading>' --est S --owns '<globs>' [--deps '<codes>'] [--issue N]`, `--issue` only when `issues: yes`, the row's current state in place of `planned` once it has one. `tasklog state` refuses (exit 1) to create a row, or move one to an open state, while its plan has no file, the row has no `ref` or one that no longer matches exactly one heading, or it has no row brief; `tasklog gaps $PLAN` lists every row that lacks one. `tasklog state` prints `not fan-ready` for an open row missing est or owns: size it before it can batch. It also sets the row's `model` and `effort` from `est` (§ Model tiers).
 
-Every row also gets a row brief, written before the `state` that creates it, which refuses a row without one: `tasklog event $PLAN <code> brief -`, text on stdin, so whichever session builds it (a worker, `/ftl`, a `/newchat` successor, another lane after the head dies) reads it in `tasklog brief $PLAN <code>`. Write it as `newchat`'s step 3 writes a prompt, for a zero-context reader, and only what a fresh read of the repo will not give: the goal and why in one line each; `file:line` anchors where the work starts, grep-verified; decisions settled in planning, stated as settled; traps (looks like X, is Y; an ordering, a guard, an exit code the change must keep); invariants nobody wrote down; the edge cases the change meets (empty, one, many, the boundary, the error path, records written before the change, every consumer of what it renames or removes), each with its expected outcome; the exact gate commands that define done, with the tests they need, by observable outcome. No Voice block, no restated issue, no "see plan.md". A replan that changes the task writes a new brief event; the latest one wins.
+Every row also gets a row brief, written before the `state` that creates it, which refuses a row without one: `tasklog event $PLAN <code> brief -`, text on stdin, so whichever session builds it (a worker, `/ftl`, a `/newchat` successor, another lane after the head dies) reads it in `tasklog brief $PLAN <code>`. With the row's plan section, it is all a worker gets: `/ftl --row` prints both, and nothing else is pasted or written for it. Write it as `newchat`'s step 3 writes a prompt, for a zero-context reader, and only what a fresh read of the repo will not give: the goal and why in one line each; `file:line` anchors where the work starts, grep-verified; decisions settled in planning, stated as settled; traps (looks like X, is Y; an ordering, a guard, an exit code the change must keep); invariants nobody wrote down; sub-tasks as behaviors, each with the test that proves it; the edge cases the change meets (empty, one, many, the boundary, the error path, records written before the change - imported, legacy, missing the new field - what the change reads back on its next run, every consumer of what it renames or removes, and for UI both color schemes and RTL), each with its expected outcome or a line saying why it cannot occur; the exact gate commands that define done, with the tests they need, by observable outcome. No Voice block, no restated issue, no "see plan.md". A replan that changes the task writes a new brief event; the latest one wins.
 
 A row's status below is its tasklog state:
 
 | status | tasklog state | written by |
 | --- | --- | --- |
 | `ready` | `planned` | head, when sized |
-| `inflight`, `review` | `building` (`review` is only the head reviewing a report) | worker on start and rework; head with `--worktree` at Record |
-| `blocked` | `blocked` | worker |
-| `shipped` (PR open) | `review` with `--pr`, `ready` once CI is green | worker's `ftl ship` |
+| `inflight` | `building` | head with `--worktree` at Record; worker's `ftl` on start and when it resumes |
+| `blocked` | `blocked`, with a `blocked` event saying why | worker's `ftl`, at every stop |
+| `shipped` (PR open) | `review` with `--pr`, `ready` once CI is green, with a `handoff` event | worker's `ftl` Ship |
 | `landed` (PR merged) | `merged` | head at `--adjust` |
 | `dropped` | `dropped` | head |
-
-With `tasklog: none`, `plan.md` carries the whole table instead, `| code | issue | slug | est | owns | deps | status | branch | worktree | pane |`, and the status words are written there.
 
 ## Issues
 
@@ -125,10 +123,10 @@ Ask before the first use, once per lane, as one yes/no question: `Use GitHub iss
 | Role | Runs as | Model |
 | --- | --- | --- |
 | Head | this session | session model |
-| Worker | `claude` CLI in a tmux pane | The row's `model` and `effort` from tasklog, which `tasklog state` sets from `est`: `S` opus at high; `M`, `L` and unsized opus at xhigh; never below opus at high. A user-set `--model`/`--effort` on the row wins. With `tasklog: none`: this session's exact model and effort, Opus when this session runs Fable. Never `max`. |
+| Worker | `claude` CLI in a tmux pane | The row's `model` and `effort` from tasklog, which `tasklog state` sets from `est`: `S` opus at high; `M`, `L` and unsized opus at xhigh; never below opus at high. A user-set `--model`/`--effort` on the row wins. Never `max`. |
 | Lookups | `Agent()` | `model: "sonnet"` |
 
-Hard cap, all modes: never more than 6 agents and workers live at once, and every worker seed carries the cap. The head keeps one slot for its lookups, so a batch is at most 5 workers.
+Hard cap, all modes: never more than 6 agents and workers live at once. The head keeps one slot for its lookups, so a batch is at most 5 workers.
 
 ## Voice - measure once per repo
 
@@ -144,7 +142,7 @@ Read-only. Record the result as the `## Voice` block. Re-measure when the block 
 | commits | `git log --author=<lead> --no-merges --format='%s%n%b%n---' -30` | subject case, length, prefix; body prose or bullets; issue reference form |
 | done | the rules file's commands, plus every command a pull-request job in `.github/workflows/*.yml` runs - read the files, since one `run: \|` block holds several - minus deploys and publishes; with neither, `Makefile` / `package.json` scripts | the install, test, and lint commands for Refs |
 
-Everything the skill writes publicly is checked against this block before the command is shown. Words that never appear in public text: the names of this skill, its files, its sections, and its roles - `fan`, `batch`, `worker`, `supervisor`, `brief`, `owns`, `sub-task`, `verify`, `done when`, `tracker`. No `Co-authored-by`, no `Claude-Session`, no generated-by line. Workers inherit all of this through the seed.
+Everything the skill writes publicly is checked against this block before the command is shown. Words that never appear in public text: the names of this skill, its files, its sections, and its roles - `fan`, `batch`, `worker`, `supervisor`, `brief`, `owns`, `sub-task`, `verify`, `done when`, `tracker`. No `Co-authored-by`, no `Claude-Session`, no generated-by line. Workers' `ftl` measures the same lead and keeps the same rules; the head checks each PR against this block (On each event 3).
 
 ## Never
 
@@ -153,7 +151,8 @@ Everything the skill writes publicly is checked against this block before the co
 - Comment on an issue or PR for progress, status, or reports. The only comment is the one a teammate would leave: a one-line reason when closing an issue without a PR.
 - Close an issue that has a PR. The PR closes it, in the measured form, when the lead merges. Never `gh pr merge`.
 - Put `Owns`, `Deps`, `Tracker`, `Branch`, `Verify`, or `Done when` lines in an issue body. They live in the brief.
-- Send `/ftl ship` before the head has checked scope and Voice (On each report 2 and 4). A PR appears once, finished: `ftl ship` reviews it before the push.
+- Paste a seed or a brief into a worker's pane. A worker starts from one line, `/ftl --row $PLAN <code> --ship`; what it needs is on the row.
+- Write a missing plan file, `ref` or brief for a row that already exists. `tasklog gaps` lists it; it stays out of every batch.
 - Spell the default branch's name in a git or gh command. Use `origin/HEAD` and defaults. If `origin/HEAD` is unset, `git remote set-head origin -a` first.
 
 ## Plan - `/fan "goal"`
@@ -170,7 +169,7 @@ Guard: a `$FAN/plan.md` whose plan has any row not `landed`/`dropped` → stop a
    gh issue create --title "<title in voice>" --body-file "$SP/issue-NN.md" [--label <measured>]
    ```
 
-6. Write `plan.md` first, with `fan-<lane>` on Refs' `tasklog` line, the `issues:` line, and a `## Tasks` section holding one `### <code> <slug>` heading per row, its goal and why in a line each under it: each row's `ref` is its `<code> <slug>`. Then `tasklog plan add fan-<lane> --path $FAN/plan.md --title "<goal>"` unless `tasklog plan list` already lists `fan-<lane>`, a lane's earlier goal, which this one reuses; `<lane>` is `${FAN##*/}`, whole, so no two lanes share a plan. Write each row into it, briefed, then sized with its `--ref` (§ State), code `T1`, `T2`, … (the issue number when `issues: yes`). `tasklog` exits 2 when no log owns this repo's origin: write `none` and the full table into `plan.md`. Fall through to Fan out.
+6. Write `plan.md` first, with `fan-<lane>` on Refs' `tasklog` line, the `issues:` line, and a `## Tasks` section holding one `### <code> <slug>` heading per row, its goal and why in a line each under it: each row's `ref` is its `<code> <slug>`. Then `tasklog plan add fan-<lane> --path $FAN/plan.md --title "<goal>"` unless `tasklog plan list` already lists `fan-<lane>`, a lane's earlier goal, which this one reuses; `<lane>` is `${FAN##*/}`, whole, so no two lanes share a plan. Write each row into it, briefed, then sized with its `--ref` (§ State), code `T1`, `T2`, … (the issue number when `issues: yes`). `tasklog` exits 2 when no log owns this repo's origin: stop and say so; fan runs only on tasklog rows. Fall through to Fan out.
 
 ## Adopt - `/fan --plan <slug>`, or `/fan` with no `$FAN/plan.md`
 
@@ -179,15 +178,15 @@ A plan another session wrote into `tasklog` (`/ftl`, a plan file, a seed) become
 0. `/fan` with no `$FAN/plan.md`: `tasklog plan list`, and take the plans whose `open` is above 0 and that no other lane's `plan.md` names on its `tasklog` line. One → adopt it. Several → ask which, one question. None → stop: `/fan "goal"` plans new work. `tasklog` exits 2 → stop the same way.
 1. `tasklog show <slug> --json`; no row → stop and say so. Measure Voice if the block is missing.
 2. `planned` rows are this lane's `ready` work. Rows in `building` or `review` are another session's work in flight: list them and leave them to it; `others` already carries them. `blocked` rows stay out until the user says the block is cleared, then the head writes them back to `planned`. A dep is satisfied when its row is `merged` or `dropped`.
-3. `tasklog gaps <slug>`, and fill every gap it lists for a `planned` row before Fan out, since `tasklog state` refuses to move a row to `building` without them. No plan file: find the plan the rows came from and `tasklog plan set <slug> --path <file>`; with none, write one in `$FAN/` with a heading per row. A row missing `ref`: the heading of its section in that file. A row missing `brief`: a row brief (§ State), from the plan section, the code and the row's events. A row missing `est` or `owns`: size it from `tasklog brief <slug> <code>` and the code. Write them back (§ State). *(issues: yes)* A row missing `issue`: Plan steps 3 and 5 for it — reuse or create the issue in Voice, approval-gated — then write `--issue` back. Rows that already carry `issue` are the cue to ask (§ Issues); `no` leaves the numbers in tasklog untouched and unused.
+3. `tasklog gaps <slug>`. A row it lists as missing the plan file, `ref` or `brief` is out: list it with what it lacks and leave it; nothing here writes them for a row that exists, and `tasklog state` refuses to move it to `building`. No row left → stop and say so. A row missing only `est` or `owns`: size it from `tasklog brief <slug> <code>` and the code. Write them back (§ State). *(issues: yes)* A row missing `issue`: Plan steps 3 and 5 for it — reuse or create the issue in Voice, approval-gated — then write `--issue` back. Rows that already carry `issue` are the cue to ask (§ Issues); `no` leaves the numbers in tasklog untouched and unused.
 4. Checkpoint: show the table (`tasklog show <slug>`), one OK. Write `plan.md` with Refs' `tasklog` line set to `<slug>` and the `issues:` line, so workers log to the rows that already exist. Fall through to Fan out.
 
 ## Fan out - `/fan`, `/fan NN MM [..]`
 
 The head stays in this checkout and does not implement during a batch.
 
-1. **Size.** No `$FAN/plan.md` → Adopt first. Refs with no `tasklog` line gets one first, as Plan step 6 writes it. An explicit argument that is no row's code: with `issues: no`, stop and say so, or ask (§ Issues) when the user is plainly naming issues; *(issues: yes)* it is an issue number and gets a row first: read the issue, set `est` and `owns` from it and the code, write the row (§ State), measure Voice if the block is missing. Ready rows: `tasklog show $PLAN --json` rows in `planned`, sized, every dep `merged`/`dropped`, or *(issues: yes)* its issue closed (`gh issue view N --json state -q .state`). Batch = ready rows with pairwise-disjoint `owns`; compare the globs, and containment is overlap (`src/api/**` contains `src/api/auth/**`, so those two serialize). `N = min(disjoint ready, 4)`, 2 when any row is `~L`. Explicit numbers override the pick up to 5, never the disjointness rule. Then across plans: a row whose `owns` overlaps a `building` row in `others`, or one whose `owns` is `?`, defers the same way, because that file is under another session's hands right now; a `review` row there is an open PR, so it is a rebase for whoever merges second, not a block, exactly as within a lane. One ready row → Inline below, not a batch. Report the pick (`Fanning 3: T1 T3 T5; deferred T2 (dep T1), T4 (owns overlaps T3), T6 (owns overlaps chat-parts L4)`) with `others` under it, one OK.
-2. **Brief.** Write `$FAN/briefs/NN.md` per row, for a zero-context reader, starting from the row brief in `tasklog brief $PLAN NN`: goal; the `owns` globs; sub-tasks as behaviors, each with the test it proves, the files, and its edge cases - records written before the change (imported, legacy, missing the new field), what the change reads back on its next run, every consumer of what it renames or removes, and for UI both color schemes and RTL - each paired with a test, or a line saying why it cannot occur; done-when; Refs' `tasklog` plan and the row's `code`; the row's issue number *(issues: yes)*, else none; the Voice block verbatim; grep-verified names, never assumed ones.
+1. **Size.** No `$FAN/plan.md` → Adopt first. Refs with no `tasklog` line gets one first, as Plan step 6 writes it. An explicit argument that is no row's code: with `issues: no`, stop and say so, or ask (§ Issues) when the user is plainly naming issues; *(issues: yes)* it is an issue number and gets a row first: read the issue, set `est` and `owns` from it and the code, write the row (§ State), measure Voice if the block is missing. Ready rows: `tasklog show $PLAN --json` rows in `planned`, sized, not listed by `tasklog gaps $PLAN`, every dep `merged`/`dropped`, or *(issues: yes)* its issue closed (`gh issue view N --json state -q .state`). Batch = ready rows with pairwise-disjoint `owns`; compare the globs, and containment is overlap (`src/api/**` contains `src/api/auth/**`, so those two serialize). `N = min(disjoint ready, 4)`, 2 when any row is `~L`. Explicit numbers override the pick up to 5, never the disjointness rule. Then across plans: a row whose `owns` overlaps a `building` row in `others`, or one whose `owns` is `?`, defers the same way, because that file is under another session's hands right now; a `review` row there is an open PR, so it is a rebase for whoever merges second, not a block, exactly as within a lane. One ready row → Inline below, not a batch. Report the pick (`Fanning 3: T1 T3 T5; deferred T2 (dep T1), T4 (owns overlaps T3), T6 (owns overlaps chat-parts L4)`) with `others` under it, one OK.
+2. **Brief.** `tasklog brief $PLAN NN` per row: it is the worker's whole hand-off. A brief that would leave a zero-context reader guessing - no done-when, an unverified name, an edge case with no outcome - gets a new brief event now (§ State); the latest wins.
 3. **Claim.** Branch `<code>-<slug>` (`<issue>-<slug>` when `issues: yes`) unless Voice measured another shape; lowercase the code if the lead's branches are lowercase. Per row: `git ls-remote --exit-code --heads origin <branch>` exits 2, `gh pr list --head <branch> --state open` is empty, and *(issues: yes)* `gh pr list --search <issue> --state open` is empty. The gate re-checks both at worktree creation; doing it here keeps the prompts in one pane.
 4. **Worktrees.** `git pull --ff-only` in this checkout (allowed outright; it fetches everything, and the fast-forward applies only to the current branch). Then per row, approval-gated:
 
@@ -196,7 +195,8 @@ The head stays in this checkout and does not implement during a batch.
    ```
 
    A fresh worktree has no dependencies. Run Refs' install command in each before spawning, or the worker's first act is diagnosing a test failure that is not its own.
-5. **Spawn.** Requires `$TMUX`; if unset, stop and say so. One new window in the caller's tmux session per batch, one pane per worker, `claude` launched with no positional prompt and no `--allowedTools`:
+5. **Record.** Per row, `tasklog state $PLAN <code> building --branch <branch> --worktree <abs worktree>`. Tasklog is the safety net if the head dies mid-batch; `--adjust` rebuilds from it.
+6. **Spawn.** Requires `$TMUX`; if unset, stop and say so. One new window in the caller's tmux session per batch, one pane per worker, `claude` launched with no positional prompt and no `--allowedTools`:
 
    ```bash
    m="claude --model <row model> --effort <row effort>"   # per pane, from the row (§ Model tiers)
@@ -207,52 +207,47 @@ The head stays in this checkout and does not implement during a batch.
    [ "$w" -ge $((80 * N)) ] && tmux select-layout -t "$win" even-horizontal || tmux select-layout -t "$win" even-vertical
    ```
 
-   Seed each pane once its prompt is up, by buffer. A file plus a buffer has no quoting surface, and a seed passed as a command argument is silently swallowed by tmux:
+   Start each worker once its prompt is up, with one line and nothing else:
 
    ```bash
-   printf '%s' "$seed" > "$SP/seed-NN.txt"     # ONE line: a multi-line paste submits at the first newline
-   tmux load-buffer -b sNN "$SP/seed-NN.txt"; tmux paste-buffer -b sNN -t "$pane"; tmux delete-buffer -b sNN
-   sleep 1 && tmux send-keys -t "$pane" Enter
+   tmux send-keys -t "$pane" -l "/ftl --row $PLAN NN --ship"; sleep 1; tmux send-keys -t "$pane" Enter
    ```
 
-   The seed, with `<FAN>`, `NN`, `<row>` (the row's `code`), and `<branch>` substituted and joined into one line:
+   `ftl --row` reads the row's plan section, brief and latest progress from tasklog, works in the pane's worktree on the row's branch, writes only inside its `owns`, measures the lead's voice itself, logs every stop to the row as `blocked` with a `blocked` event, and ships: review loop, PR, CI green, then `handoff` with the PR URL and verdict.
 
-   > Read `<FAN>/briefs/NN.md`, and when it names an issue, `gh issue view` that number. Write only inside the brief's owns globs; a change needed outside them goes in the report, not the tree. Commit per sub-task, approval-gated, subjects in the brief's Voice. Do not push, open a PR, or touch the issue until the head sends `/ftl ship`. When the brief names a `tasklog` plan other than `none`, log to it as code `<row>`: `tasklog state <plan> <row> building --branch <branch>` now, `tasklog event <plan> <row> report -` with the report's line 1 on stdin each time you report, plus `tasklog state <plan> <row> blocked` when it is blocked and `tasklog state <plan> <row> building` when rework starts; text goes on stdin, never as an argument. Never comment on, edit, label, or close an issue; never write anything into the repo tree but the change; no `Co-authored-by` or `Claude-Session` trailers, no generated-by line anywhere. Run no full suite and no review before `/ftl ship`: it runs both. Then write `<FAN>/reports/NN.md`: line 1 exactly `STATUS: green|blocked - <8 words or fewer>` (green: every sub-task built and committed), then branch, commits, files touched, surprises. Then `touch <FAN>/reports/NN.done` whatever the status: it means "I have reported", not "I succeeded", and withholding it on failure hangs the batch in silence. Rework arrives in this pane; address it, overwrite the report, touch `NN.done` again. When `/ftl ship` arrives, its tasklog plan is the brief's plan and its code `<row>`; it integrates, reviews, opens the PR in the repo's voice, linking the brief's issue the way Voice says when it names one and naming no issue otherwise, and waits for CI. When it hands off, append to the report `PR: <url>`, `VERDICT: <its last pr-wait verdict, or why it stopped>`, and the merge command it printed, if any, then `touch <FAN>/reports/NN.shipped`. Another `/ftl ship` later means the PR went stale: report it the same way. Context budget: wind down at 25%, hand off at 30%, never exceed 30%. Hard caps: never more than 6 subagents/workers total, never `--effort max`, do the implementation yourself.
-
-   The seed names no git or gh write command literally. The gate reads the `printf` that writes the seed file, and a `git push` inside that text is denied before the file exists.
-
-   Name panes for the human only (`tmux select-pane -t <pane> -T NN-<slug>`); Claude Code overwrites its pane title within seconds, so nothing keys off it. Confirm with `tmux list-panes -t "$win" -F '#{pane_id} #{pane_dead} #{pane_current_path}'`: N panes, right worktrees, `pane_dead` 0. Report the code → pane → worktree → branch mapping to the user, with `prefix + z` to zoom a pane.
-6. **Record.** Per row, `tasklog state $PLAN <code> building --branch <branch> --worktree <abs worktree>`, and its pane in `plan.md`. Tasklog is the safety net if the head dies mid-batch; `--adjust` rebuilds from it.
-7. **Supervise.** Empty `$FAN/reports` first. Then one persistent `Monitor`: a line per report and per pane that dies silent, keyed off `pane_id`:
+   Name panes for the human only (`tmux select-pane -t <pane> -T NN-<slug>`); Claude Code overwrites its pane title within seconds, so nothing keys off it. Confirm with `tmux list-panes -t "$win" -F '#{pane_id} #{pane_dead} #{pane_current_path}'`: N panes, right worktrees, `pane_dead` 0. Write each row's pane in `plan.md`. Report the code → pane → worktree → branch mapping to the user, with `prefix + z` to zoom a pane.
+7. **Supervise.** One persistent `Monitor` over the rows' tasklog events: a line per new `handoff` or `blocked` event, and per pane that dies, keyed off `pane_id`:
 
    ```bash
-   cd "$FAN/reports"; panes="12:%12 15:%13 18:%14"
-   while true; do
-     for f in *.done *.shipped; do [ -e "$f" ] || continue; mv "$f" "$f.seen"; echo "REPORT ${f%.*} ${f##*.}"; done
-     if live=$(tmux list-panes -t "$win" -F '#{pane_id} #{pane_dead}' 2>/dev/null); then
-       for tp in $panes; do t=${tp%%:*}; id=${tp#*:}
-         [ -e "$t.shipped.seen" ] || [ -e "$t.gone" ] && continue
-         case "$live" in *"$id 0"*) continue ;; esac
-         touch "$t.gone"; echo "PANE GONE $t"; done
-     fi
-     [ "$(ls *.shipped.seen *.gone 2>/dev/null | wc -l)" -ge N ] && { echo "BATCH COMPLETE"; break; }
+   cd "$FAN"; rm -rf batch; mkdir batch; rows="T1:%12 T3:%13 T5:%14"   # code:pane
+   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+   while :; do
+     live=$(tmux list-panes -t "$win" -F '#{pane_id} #{pane_dead}' 2>/dev/null) || live=
+     for rp in $rows; do c=${rp%%:*}; id=${rp#*:}
+       [ -e "batch/$c.closed" ] && continue
+       out=$(tasklog log "$PLAN" "$c" --since "$since") || continue
+       n=$(printf '%s\n' "$out" | grep -cE "^[^ ]+  $c  (handoff|blocked)( |\$)")
+       [ "$n" = "$(cat "batch/$c" 2>/dev/null || echo 0)" ] || { echo "$n" > "batch/$c"; echo "ROW $c"; continue; }
+       [ -n "$live" ] || continue
+       case "$live" in *"$id 0"*) ;; *) touch "batch/$c.closed"; echo "PANE GONE $c" ;; esac
+     done
+     [ "$(ls batch/*.closed 2>/dev/null | wc -l)" -ge N ] && { echo "BATCH COMPLETE"; break; }
      sleep 20
    done
    ```
 
-   A tmux failure skips the liveness sweep rather than reading as N dead workers. Stay resident until `BATCH COMPLETE`; each event re-invokes the head.
+   A tasklog or tmux failure skips that sweep rather than reading as an event or N dead workers. The head touches `batch/<code>.closed` when it is done with a row (On each event). Stay resident until `BATCH COMPLETE`; each line re-invokes the head.
 
-### On each report
+### On each event
 
-1. `head -1 "$FAN/reports/NN.md"`. `blocked` → read the whole report, then rework, re-scope, or take the row back. A `shipped` marker → step 5. `green` → continue.
-2. **Scope.** `git -C <wt> diff --name-only origin/HEAD...HEAD` against `owns`. A file outside is rework even when correct: it voids the disjointness the batch was sized on.
-3. **Tests and review** are `ftl ship`'s: its full suite, pre-review and `claude-review` loop run in the worker before the push. The head runs neither.
-4. **Voice.** `git -C <wt> log --format=%s origin/HEAD..HEAD` against the Voice block and the never-list. Off → rework now; a local reword is cheap, and after a push it needs the human's force-push.
-5. Rework: log it, then one line via `tmux send-keys -t <pane> '<what and why>' Enter`. Pass: `tmux send-keys -t <pane> '/ftl ship'`, `sleep 1`, `tmux send-keys -t <pane> Enter`. On `shipped`: `tail -4` of the report for `PR:` and `VERDICT:`, `gh pr view <url> --json title,body` against Voice, `gh pr edit` (approval-gated) if off. `ready` → its merge command joins the merge queue (§ Run) and the pane closes (`tmux kill-pane -t <pane>`), freeing its slot. Any other verdict, or none → read the report and hand that row to the human; the rest of the run goes on. Landing is the human's; the row turns `merged` at the next reconcile.
+1. `tasklog brief $PLAN NN`: its state and its last events. `PANE GONE` with the row still `building` → read the events, then re-open the pane as Spawn does, or hand the row to the human.
+2. **Blocked.** The `blocked` event says why. Answer it in the pane, one line: `tmux send-keys -t <pane> -l '<answer>'`, `sleep 1`, `tmux send-keys -t <pane> Enter`. Or re-scope (a new brief event, then the answer), or take the row back: `tmux kill-pane -t <pane>`, `tasklog state $PLAN NN planned`, touch `batch/NN.closed`. `context ceiling` → kill the pane and open a fresh one in the row's worktree as Spawn does, same line; it resumes from the row's `progress` event.
+3. **Handoff.** The event holds the PR URL and verdict. Scope: `git -C <wt> diff --name-only origin/HEAD...HEAD` against `owns`; a file outside is rework even when correct, since it voids the disjointness the batch was sized on. Voice: `gh pr view <url> --json title,body` against the Voice block and the never-list, `gh pr edit` (approval-gated) if off. Rework: one line in the pane, `<what and why>, then /ftl ship`.
+4. **Verdict.** `ready` → `gh pr merge <url> --squash --match-head-commit <sha>` (sha from `gh pr view <url> --json headRefOid -q .headRefOid`) joins the merge queue (§ Run), the pane closes (`tmux kill-pane -t <pane>`), freeing its slot, and `batch/NN.closed`. Any other verdict → hand that row to the human and touch `batch/NN.closed`; the rest of the run goes on. Landing is the human's; the row turns `merged` at the next reconcile.
 
 ## Inline - `/fan NN`
 
-One task, no worktree. Brief it (Fan out 2), claim it (3), `git switch -c <branch>` here (approval-gated), implement against the brief yourself, logging to Refs' `tasklog` plan as the seed tells a worker to, self-check with On each report 2 and 4, then invoke the `ftl` skill with `ship`, naming the plan and code, as a worker's does. Its merge command joins the merge queue; then § Run.
+One task, in this session. Check its brief (Fan out 2) and claim it (3), then invoke the `ftl` skill with `--row $PLAN NN --ship`; ftl makes the worktree, and its stops are this session's to answer. Then On each event 3 and 4 for its PR; then § Run.
 
 ## Run - after every batch, until the list is done
 
@@ -260,12 +255,16 @@ One task, no worktree. Brief it (Fan out 2), claim it (3), `git switch -c <branc
 
 1. **Reconcile**: `--adjust` step 1. A merged row's pane, if still open, closes.
 2. **Fan**: ready rows exist → Fan out from step 1, without its OK: the user approved the run at the first pick. Print the pick and `others` anyway.
-3. **Wait**: no row to fan, but rows are `review` or `ready` → their PRs gate what is left. Print the merge queue for the human: one `gh pr merge <url> --squash --match-head-commit <sha>` per ready PR, rows that others depend on first. Then one persistent `Monitor` over the open PRs and re-ship reports, a line per change, ending at the first merge or close, since step 1 rebuilds the list:
+3. **Wait**: no row to fan, but rows are `review` or `ready` → their PRs gate what is left. Print the merge queue for the human: one `gh pr merge <url> --squash --match-head-commit <sha>` per ready PR, rows that others depend on first. Then one persistent `Monitor` over the open PRs and the rows being re-shipped, a line per change, ending at the first merge or close, since step 1 rebuilds the list:
 
    ```bash
-   cd "$FAN/reports"; urls="<url> <url>"
+   cd "$FAN"; urls="<url> <url>"; rows="<codes being re-shipped>"; since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
    while :; do
-     for f in *.shipped; do [ -e "$f" ] || continue; mv "$f" "$f.seen"; echo "REPORT ${f%.*} shipped"; done
+     for c in $rows; do
+       out=$(tasklog log "$PLAN" "$c" --since "$since") || continue
+       n=$(printf '%s\n' "$out" | grep -cE "^[^ ]+  $c  (handoff|blocked)( |\$)")
+       [ "$n" = "$(cat "run-$c" 2>/dev/null || echo 0)" ] || { echo "$n" > "run-$c"; echo "ROW $c"; }
+     done
      for u in $urls; do
        s=$(gh pr view "$u" --json state,mergeStateStatus,headRefOid -q '"\(.state) \(.mergeStateStatus) \(.headRefOid)"' 2>/dev/null) || continue
        case $s in MERGED*|CLOSED*) echo "PR $s $u"; exit ;; "OPEN DIRTY "*|"OPEN BEHIND "*) ;; *) continue ;; esac
@@ -277,7 +276,7 @@ One task, no worktree. Brief it (Fan out 2), claim it (3), `git switch -c <branc
    ```
 
    - `MERGED` → back to 1. `CLOSED` → ask about that row, then back to 1.
-   - `OPEN DIRTY` or `OPEN BEHIND` → `pr-wait <url>` in the background to confirm; on `1` or `2`, send `/ftl ship` to the row's pane as On each report 5 does, or, its pane closed, open one in the row's worktree as Fan out 5 does, seed it from `$SP/seed-NN.txt`, then send `/ftl ship`. Its new `shipped` is handled as On each report 5.
+   - `OPEN DIRTY` or `OPEN BEHIND` → `pr-wait <url>` in the background to confirm; on `1` or `2`, send `/ftl ship` to the row's pane, or, its pane closed, open one in the row's worktree as Fan out 6 does and send `/ftl --row $PLAN NN ship`. Add the code to `rows`; its `ROW` line is handled as On each event.
 4. **Stop** only when: every row is `merged` or `dropped` (§ Close); every row left is `blocked`, handed to the human, or waits on a decision; or the context budget is hit. Print what is left per row, and the merge queue.
 
 Never more workers live than the hard cap; a re-ship pane counts.

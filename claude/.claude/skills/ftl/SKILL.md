@@ -1,6 +1,6 @@
 ---
 name: ftl
-description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - for a change, first creates and enters a worktree when on the default branch or a detached HEAD, then indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, commit, then the push and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `pull --ff-only` in the default checkout and the rebase or merge itself, resolves conflicts, runs `claude-review` in a loop until it passes, then pushes, opens a PR ready for review, and waits until CI is green and GitHub would allow the squash merge, fixing what fails, then prints the squash-merge command for you to run. `/ftl <task> --ship` does all of it in one command - orient, build, then ship - stopping only for a decision the build cannot make alone. Local git writes run as the write gate allows; push and gh run only in Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl "fix the logout redirect #301" --ship, /ftl --help.
+description: Follow the leader. Working method for a repo someone else owns, derived from that repo at run time - its rules file, its docs, its CI, and the lead's own commits. `/ftl <task>` orients - for a change, first creates and enters a worktree when on the default branch or a detached HEAD, then indexes docs/ by heading, reads only the sections the task touches, measures the lead's commit and CHANGELOG conventions. `/ftl` alone is the pre-handoff checklist - definition of done, docs, CHANGELOG line, commit subject, commit, then the push and gh commands for the human to run. `/ftl ship` creates and enters a worktree when on the default branch or a detached HEAD, fetches, commits, runs `pull --ff-only` in the default checkout and the rebase or merge itself, resolves conflicts, runs `claude-review` in a loop until it passes, then pushes, opens a PR ready for review, and waits until CI is green and GitHub would allow the squash merge, fixing what fails, then prints the squash-merge command for you to run. `/ftl <task> --ship` does all of it in one command - orient, build, then ship - stopping only for a decision the build cannot make alone. Local git writes run as the write gate allows; push and gh run only in Ship. e.g. /ftl "zerto logout url #282", /ftl, /ftl ship, /ftl "fix the logout redirect #301" --ship, /ftl --row fan-a1b2 T3 --ship (a tasklog row), /ftl --help.
 ---
 
 ## Help
@@ -51,12 +51,16 @@ If `$ARGUMENTS` is exactly `--help`, `help`, or `-h`, print the block below verb
   /ftl <task> --ship
                   orient, build, then ship; stops only
                    for a decision the build cannot make alone
+  /ftl --row <plan> <code> [--ship | ship]
+                  the task is that tasklog row: its plan section
+                   and brief; writes stay inside its owns; every
+                   stop is logged to the row
   /ftl --help     show this help
 ```
 
 ---
 
-Run from the repo root. Every step prints the line that shows its result, so the next step can rely on what is on screen. `$ARGUMENTS` of exactly `ship`, or the retired `ship --integrate`, runs Ship; empty runs Check; anything else ending in ` --ship` runs Task to PR with the rest as the task; anything else is the task for Orient.
+Run from the repo root. Every step prints the line that shows its result, so the next step can rely on what is on screen. `$ARGUMENTS` starting `--row <plan> <code>` names a tasklog row as the task (§ 2b Row), and what follows is read as below: `--ship` runs Task to PR, `ship` runs Ship, nothing runs Orient. Otherwise, `$ARGUMENTS` of exactly `ship`, or the retired `ship --integrate`, runs Ship; empty runs Check; anything else ending in ` --ship` runs Task to PR with the rest as the task; anything else is the task for Orient.
 
 # Orient - `/ftl <task>`
 
@@ -100,9 +104,18 @@ What the reviewer will find, found first. Two lists, both printed:
 
 A plan of record lives outside the repo, and the task or a loaded memory names its path. Read that file's section for this task and nothing else; never list or glob `~/.claude/plans/`, which holds every repo's plans. Print `plan: <path>`, or `plan: none` when nothing names one.
 
-The task's status lives in `tasklog`, not in the plan file, so concurrent sessions append rows instead of rewriting one file. `<plan>` is the plan's slug and `<code>` the task's code in it, such as `P5`. When `tasklog plan list` has no row for the plan, `tasklog plan add <plan> --path <path>`; a plan listed with no path gets `tasklog plan set <plan> --path <path>`. Then `tasklog brief <plan> <code>` prints the task's plan section, state, row brief, latest progress, the plan's decisions, its last events and the repo's flakes. `tasklog state` refuses (exit 1) a row with no `ref` or no row brief: when `tasklog gaps <plan>` lists the code, write the brief first (`tasklog event <plan> <code> brief -`, as `/fan`'s § State words one) and pass `--ref '<the section's heading>'` on the first `state`. A change records `tasklog state <plan> <code> building --branch <branch> --worktree <worktree>` once step 0 has made the worktree, and the hand-offs record the rest with `tasklog state` and `tasklog event <plan> <code> <kind> -`. A text argument is always `-`, the text on stdin, so quotes never pass through the shell. When `tasklog` exits 2, no log owns this repo's origin: the hand-offs update the plan file's Status section instead.
+The task's status lives in `tasklog`, not in the plan file, so concurrent sessions append rows instead of rewriting one file. `<plan>` is the plan's slug and `<code>` the task's code in it, such as `P5`. When `tasklog plan list` has no row for the plan, `tasklog plan add <plan> --path <path>`; a plan listed with no path gets `tasklog plan set <plan> --path <path>`. Then `tasklog brief <plan> <code>` prints the task's plan section, state, row brief, latest progress, the plan's decisions, its last events and the repo's flakes. `tasklog state` refuses (exit 1) a row with no plan file, no `ref` matching one heading, or no row brief. A new row gets its brief first (`tasklog event <plan> <code> brief -`, as `/fan`'s § State words one) and `--ref '<the section's heading>'` on the first `state`. An existing row that `tasklog gaps <plan>` lists is never filled in after the fact: say what it lacks and stop; it can still close as `merged` or `dropped`. A change records `tasklog state <plan> <code> building --branch <branch> --worktree <worktree>` once step 0 has made the worktree, and the hand-offs record the rest with `tasklog state` and `tasklog event <plan> <code> <kind> -`. A text argument is always `-`, the text on stdin, so quotes never pass through the shell. When `tasklog` exits 2, no log owns this repo's origin: the hand-offs update the plan file's Status section instead.
 
 A memory holds the pointer to the plan and the human's decisions, and changes only on a new decision; status never goes in a memory, since two copies drift.
+
+**Row** - `--row <plan> <code>`. The row already exists, planned and briefed; this run never writes its ref or brief.
+
+- `tasklog gaps <plan>` lists the code, or `tasklog brief <plan> <code>` prints `No row yet.`: stop, naming what is missing.
+- Otherwise print `tasklog brief <plan> <code>`. Its plan section and brief are the task, with the latest progress as the resume point; `plan:` is the file it names.
+- `owns` is the write scope: write only inside its globs. A change needed outside them is a stop, not an edit. Before Ship's push, `git -C "$worktree" diff --name-only origin/HEAD...HEAD`; a file outside `owns` stops the push.
+- The branch is the row's `branch` when it has one; a worktree already on it is `worktree`. The row's `issue`, when set, is the issue the PR finishes; with none, the PR names no issue.
+- No human may be at this pane. Every stop - a question, a decision the build cannot make, a scope breach, a `NEW RED`, a refused `tasklog state` - writes `tasklog state <plan> <code> blocked`, then `tasklog event <plan> <code> blocked -` with the question or the reason on stdin, then waits; the answer arrives here, and the work resumes with `tasklog state <plan> <code> building`.
+- At 25% of the context window, wind down; at 30%, write `tasklog event <plan> <code> progress -` (done, next, stopped at, open) and stop as above with `context ceiling`. A fresh `/ftl --row <plan> <code> --ship` resumes from it.
 
 ## 3. The lead's conventions, measured
 

@@ -31,10 +31,12 @@
 # and plan set refuse a path that is not a file), the row names its section
 # in that file with --ref, text that matches exactly one of its headings, and
 # the row has a brief event. state refuses to create a row, or move one to an
-# open state, without all three; merged and dropped stay open to every row,
-# so old rows can close. brief prints the plan section whole, and gaps lists
-# every plan and open row that still lacks one. These refusals exit 1, never
-# 2, which callers read as "no log owns this repo" and skip.
+# open state, without all three, and re-reads the plan file each time, so a
+# ref whose heading was renamed or duplicated refuses too; merged and dropped
+# stay open to every row, so old rows can close. brief prints the plan
+# section whole, and gaps lists every plan and open row that still lacks one.
+# These refusals exit 1, never 2, which callers read as "no log owns this
+# repo" and skip.
 #
 # An event of kind progress is a handoff's state of play: what is done, what
 # is next, where it stopped, what is open. brief prints the latest whole, as
@@ -476,12 +478,15 @@ def cmd_state(db, ctx, argv):
 # its section there, and it has a brief. All of what is missing in one line.
 def refuse_unplanned(db, plan, code, ref, state, new):
     slug, missing = plan["slug"], []
+    lines = plan["path"] and read_plan(plan["path"])
     if not plan["path"]:
         missing.append(f"a plan file (plan set {slug} --path P)")
-    elif read_plan(plan["path"]) is None:
+    elif lines is None:
         missing.append(f"its plan file, gone from {plan['path']} (plan set {slug} --path P)")
     if not ref:
         missing.append("its section in the plan (--ref HEADING)")
+    elif lines is not None and len(ref_matches(lines, ref)) != 1:
+        missing.append(f"its section, since --ref {ref!r} no longer matches one heading of {plan['path']}")
     if not has_brief(db, plan, code):
         missing.append(f"a brief (event {slug} {code} brief -, text on stdin)")
     if missing:
