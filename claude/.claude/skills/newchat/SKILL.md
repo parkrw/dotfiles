@@ -3,7 +3,7 @@ name: newchat
 description: Compose a paste-ready prompt for starting a task in a fresh Claude session, centered on a "Context a fresh read won't give you" section. Use when asked to "prompt a new chat", "draft a prompt for a new session", or hand a task to another session. `--spawn` also saves the prompt to a file and opens it via /spawn in a new tmux window started in the work's checkout; `--spawn --replace` opens it in a new pane of this window instead and then ends this session, for a context handoff.
 ---
 
-Produce exactly one fenced code block the user can paste into a new session. Nothing after the block, except what `--spawn` adds below.
+Produce exactly one fenced code block the user can paste into a new session. Nothing after the block. Under `--spawn` the prompt goes to a file instead, never printed (below).
 
 Structure, in order:
 
@@ -27,12 +27,12 @@ Rules:
 
 ## `--spawn`
 
-When `$ARGUMENTS` starts with `--spawn`, drop the flag (and a following `--replace`) from the task text, compose the block as above, then:
+When `$ARGUMENTS` starts with `--spawn`, drop the flag (and a following `--replace`) from the task text, compose the prompt as above without printing it, then:
 
-1. Write the block's contents, without the fences, to `$HOME/.local/state/claude/newchat/<repo>-<YYYYMMDD-HHMMSS>.md` (`mkdir -p` the directory). `<repo>` is `basename "$(git rev-parse --show-toplevel)"`, or `basename "$PWD"` outside a repo. The file lives outside the repo so nothing lands in the tracked tree, and it survives a `/clear`.
+1. Write it, without fences, straight to `$HOME/.local/state/claude/newchat/<repo>-<YYYYMMDD-HHMMSS>.md` (`mkdir -p` the directory). `<repo>` is `basename "$(git rev-parse --show-toplevel)"`, or `basename "$PWD"` outside a repo. The file lives outside the repo so nothing lands in the tracked tree, and it survives a `/clear`.
 1a. When the prompt names `tasklog brief <plan> <code>`, record the move before spawning: `printf '%s\n' '<absolute file path>' | tasklog event <plan> <code> newchat -`. Its row carries this session's id and the successor's rows carry its own, so a `newchat` event with no later row from another session marks a task whose successor never started. An exit 2 means no log owns this repo: skip it. Any other failure: say so and go on.
 2. If `$TMUX` is set, invoke the `spawn` skill with the argument `--cwd "<Where's checkout path>" --fresh Read <absolute file path> and do the task in it.` `--cwd` starts the new `claude` in that checkout, so the tmux status line, which names each window by its `pane_current_path`, shows it; a `cd` in this session cannot move it. Drop `--cwd` when the block has no Where line. Under `--replace`, add `--pane` so the successor opens beside this pane, in the same window, and takes it over once this pane closes, and `--same` so it runs this session's exact model and effort. `--fresh` stops spawn from adding a handoff pickup that would compete with this task. Pass the path, never the prompt: spawn's seed must be one line, and a multi-line prompt either gets joined into one line or submits at its first newline. The spawned session counts toward the 6-worker cap.
-3. Print the block, then the file path, then spawn's report: its window target, or its failure. Without `$TMUX`, skip step 2 and print `@<absolute file path>` instead, for the user to send after `/clear`.
+3. Print the file path, then spawn's report: its window target, or its failure. Never print the prompt: the file is the hand-off, and echoing it doubles the output when context is fullest. Without `$TMUX`, skip step 2 and print `@<absolute file path>` instead, for the user to send after `/clear`.
 
 ## `--replace`
 
