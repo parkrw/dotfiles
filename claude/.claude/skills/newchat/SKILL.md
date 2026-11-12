@@ -16,7 +16,7 @@ Structure, in order:
    - file:line anchors for the places the work starts
    - invariants to preserve that aren't written down anywhere
 4. **Gates** — the tests/lint/checks that define done.
-5. **Standing rules** — keep output as concise as possible: lead with the result, no preamble, no recaps, shortest response that fully answers. Branch first, never work on main. git and gh reads are fine without asking; every git write and every mutating gh command needs the user's approval individually.
+5. **Standing rules** — exactly these, nothing added; commit and PR body conventions come from the repo and /ftl, never the brief: keep output as concise as possible: lead with the result, no preamble, no recaps, shortest response that fully answers. Branch first, never work on main. git and gh reads are fine without asking; every git write and every mutating gh command needs the user's approval individually.
 6. **After-merge reminders** — comments to post, people to ping, follow-up issues.
 
 Rules:
