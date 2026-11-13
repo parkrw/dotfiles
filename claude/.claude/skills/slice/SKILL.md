@@ -68,7 +68,9 @@ Discover the project's test and build/lint commands first (a Makefile,
 - Implement the change. Write tests if the repo has a test suite for the area
   you're touching.
 - Document exported symbols as you go, per the repo's conventions.
-- Run the full test/lint check and show it green before each commit.
+- Run the lint check and only the tests directly related to the change - the
+  test files it adds or changes and those covering the files it touches, never
+  the full suite, which CI runs - and show them green before each commit.
 - Propose the iteration commit (approval-gated). Subject per the repo's commit
   convention.
 
@@ -163,8 +165,8 @@ coin flip.
    > ONLY, verifying the task's observable behavior — results, exit codes,
    > side effects, never call shapes. Do NOT implement the feature. Every
    > test must fail (red) against the current branch; a test that passes
-   > before implementation tests nothing — delete and rewrite it. Run the
-   > suite and confirm all red. When done: commit (approval-gated), write
+   > before implementation tests nothing — delete and rewrite it. Run those
+   > tests and confirm all red. When done: commit (approval-gated), write
    > `<main-path>/.git/contest/spec.md` (test file paths, the exact command
    > that runs them, the red-run output), and only then
    > `touch <main-path>/.git/contest/spec.done`. Context budget: 15% nudge,
