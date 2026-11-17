@@ -226,6 +226,24 @@ git_local_ok(){ # $1 = segment
   esac
 }
 
+# `git config <key>` with a single name and no value is a read, as are
+# --get*/--list and the get/list subcommands; a second positional is the value
+# being set.
+git_config_read(){ # $1 = args after config
+  echo "$1" | awk '{
+    for (i = 1; i <= NF; i++) {
+      w = $i
+      if (w ~ /^(--add|--unset(-all)?|--replace-all|--rename-section|--remove-section|-e|--edit)$/) { bad = 1; exit }
+      if (w ~ /^(--get(-all|-regexp|-urlmatch|-color|-colorbool)?|--list|-l)$/) { get = 1; continue }
+      if (w ~ /^(-f|--file|--blob|--type|--default)$/) { i++; continue }
+      if (w ~ /^-/) continue
+      if (!n && w ~ /^(get|list)$/) { get = 1 }
+      else if (!n && w ~ /^(set|unset|rename-section|remove-section|edit)$/) { bad = 1; exit }
+      n++
+    }
+  } END { exit !(!bad && (get || n == 1)) }'
+}
+
 git_segment_ok(){
   local sub args
   sub=$(git_sub_of "$1"); args=$(git_args_of "$1")
@@ -240,7 +258,7 @@ git_segment_ok(){
     # Any positional word is a branch to create, move or delete.
     branch)   ! echo "$args" | grep -Eq -- '(^|[[:space:]])([^-[:space:]]|--edit-description|--unset-upstream)' ;;
     tag)      [[ -z "$args" ]] || echo "$args" | grep -Eq '^(-l|--list|-n)' ;;
-    config)   echo "$args" | grep -Eq -- '(^|[[:space:]])(--get(-all|-regexp)?|--list|-l|get|list)([[:space:]]|$)' ;;
+    config)   git_config_read "$args" ;;
     remote)   echo "$args" | grep -Eq '^(-v|show|get-url)?([[:space:]]|$)' ;;
     stash)    echo "$args" | grep -Eq '^(list|show)([[:space:]]|$)' ;;
     *)        return 1 ;;
