@@ -169,7 +169,7 @@ Guard: a `$FAN/plan.md` whose plan has any row not `landed`/`dropped` → stop a
    gh issue create --title "<title in voice>" --body-file "$SP/issue-NN.md" [--label <measured>]
    ```
 
-6. Write `plan.md` first, with `fan-<lane>` on Refs' `tasklog` line, the `issues:` line, and a `## Tasks` section holding one `### <code> <slug>` heading per row, its goal and why in a line each under it: each row's `ref` is its `<code> <slug>`. Then `tasklog plan add fan-<lane> --path $FAN/plan.md --title "<goal>"` unless `tasklog plan list` already lists `fan-<lane>`, a lane's earlier goal, which this one reuses; `<lane>` is `${FAN##*/}`, whole, so no two lanes share a plan. Write each row into it, briefed, then sized with its `--ref` (§ State), code `T1`, `T2`, … (the issue number when `issues: yes`). `tasklog` exits 2 when no log owns this repo's origin: stop and say so; fan runs only on tasklog rows. Fall through to Fan out.
+6. Write `plan.md` first, with `fan-<lane>` on Refs' `tasklog` line, the `issues:` line, and a `## Tasks` section holding one `### <code> <slug>` heading per row, its goal and why in a line each under it: each row's `ref` is its `<code> <slug>`. Then `tasklog plan add fan-<lane> --path $FAN/plan.md --title "<goal>"` unless `tasklog plan list all` already lists `fan-<lane>`, a lane's earlier goal, which this one reuses; `<lane>` is `${FAN##*/}`, whole, so no two lanes share a plan. Write each row into it, briefed, then sized with its `--ref` (§ State), code `T1`, `T2`, … (the issue number when `issues: yes`). `tasklog` exits 2 when no log owns this repo's origin: stop and say so; fan runs only on tasklog rows. Fall through to Fan out.
 
 ## Adopt - `/fan --plan <slug>`, or `/fan` with no `$FAN/plan.md`
 
