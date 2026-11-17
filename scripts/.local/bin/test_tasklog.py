@@ -186,6 +186,35 @@ class State(Case):
         self.assertIn("P3", out)
         self.assertIn("platform-overview  2     Platform overview", self.ok("plan", "list"))
 
+    def test_plan_list_filters_by_open_rows(self):
+        self.seed()
+        self.plan("finished")
+        self.row("finished", "P2", "merged")
+        self.plan("empty")
+        slugs = lambda *argv: re.findall(r"(?m)^(\S+) +\d", self.ok("plan", "list", *argv))
+        self.assertEqual(slugs(), ["platform-overview"])
+        self.assertEqual(slugs("all"), ["empty", "finished", "platform-overview"])
+        self.assertEqual(slugs("open"), ["platform-overview"])
+        self.assertEqual(slugs("done"), ["empty", "finished"])
+        self.assertIn("open|all|done", self.fails(1, "plan", "list", "closed"))
+        self.fails(1, "plan", "list", "open", "done")
+
+    def test_plan_rm_deletes_a_closed_plan_and_its_history(self):
+        self.seed()
+        self.ok("decide", "platform-overview", "ship it")
+        self.row("platform-overview", "P4", "merged")
+        self.assertIn("open rows: P5", self.fails(1, "plan", "rm", "platform-overview"))
+        self.assertIn("platform-overview", self.ok("plan", "list"))
+        self.ok("state", "platform-overview", "P5", "dropped")
+        self.assertEqual(self.ok("plan", "rm", "platform-overview"), "plan platform-overview removed\n")
+        self.assertEqual(self.ok("plan", "list", "all"), "")
+        c = self.db()
+        for t in ("plans", "prs", "events", "decisions"):
+            self.assertEqual(c.execute(f"SELECT count(*) FROM {t}").fetchone()[0], 0, t)
+        self.fails(1, "plan", "rm", "platform-overview")
+        self.plan("platform-overview")
+        self.assertEqual(self.ok("log", "platform-overview"), "")
+
     def test_log_since(self):
         self.seed()
         self.fails(1, "log", "platform-overview", "--since", "soon")
@@ -228,7 +257,7 @@ class Concurrency(Case):
     def test_20_concurrent_plan_adds_all_land(self):
         runs = self.race([("plan", "add", f"race-{i}", "--path", "PLAN.md") for i in range(20)])
         self.assertEqual([p.stderr for p in runs if p.returncode], [])
-        self.assertEqual(len(re.findall(r"(?m)^race-", self.ok("plan", "list"))), 20)
+        self.assertEqual(len(re.findall(r"(?m)^race-", self.ok("plan", "list", "all"))), 20)
 
     def test_20_concurrent_events_all_land(self):
         runs = self.race([("event", "race", "R1", "note", f"writer {i}") for i in range(20)])
@@ -386,7 +415,7 @@ class Usage(Case):
     def test_bad_commands_fail_with_usage(self):
         self.fails(1, "frob")
         self.fails(1, "toString")
-        self.assertIn("plan add <slug> --path P | plan set <slug> | plan list", self.fails(1, "plan", "frob"))
+        self.assertIn("plan add <slug> --path P | plan set <slug> | plan list [open|all|done] | plan rm <slug>", self.fails(1, "plan", "frob"))
         self.assertIn("flake add <test_id> [note] | list | rm <test_id> | match", self.fails(1, "flake", "frob"))
         self.fails(1, "show", "--frob")
 
@@ -400,7 +429,7 @@ class Help(Case):
     def test_top_level_help_lists_every_command(self):
         for argv in ([], ["--help"], ["help"]):
             starts = [line.split()[1] for line in self.ok(*argv).splitlines() if line.startswith("cklog ")]
-            self.assertEqual(starts, ["plan", "plan", "plan", "state", "event", "decide", "show", "log", "flake",
+            self.assertEqual(starts, ["plan", "plan", "plan", "plan", "state", "event", "decide", "show", "log", "flake",
                                       "brief", "gaps", "suite-run"], argv)
 
     def test_command_help_prints_only_its_lines(self):
@@ -410,7 +439,8 @@ class Help(Case):
         self.assertEqual(len(out.splitlines()), 3, out)
         self.assertEqual(self.ok("plan", "--help").splitlines(),
                          ["cklog plan add <slug> --path PLAN.md [--title T]",
-                          "cklog plan set <slug> [--path PLAN.md] [--title T]", "cklog plan list"])
+                          "cklog plan set <slug> [--path PLAN.md] [--title T]", "cklog plan list [open|all|done]",
+                          "cklog plan rm <slug>"])
 
     def test_help_needs_no_owned_repo_and_opens_no_db(self):
         for tool, repo in (("cklog", "noorigin"), ("cklog", "van"), ("vanlog", "core")):

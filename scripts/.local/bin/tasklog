@@ -10,7 +10,8 @@
 #
 #   plan add <slug> --path PLAN.md [--title T]
 #   plan set <slug> [--path PLAN.md] [--title T]
-#   plan list
+#   plan list [open|all|done]
+#   plan rm <slug>
 #   state <plan> <code> <state> [--ref HEADING --pr N --head sha --branch B --worktree W
 #                                --subject S --issue N --est S|M|L --owns GLOBS --deps CODES
 #                                --model opus|fable --effort high|xhigh]
@@ -60,6 +61,11 @@
 # whole, ahead of the events, so later events never push it out. A planned
 # row without one gets a stderr line, as a row missing est or owns does.
 #
+# plan list shows the plans with an open row by default; all shows every
+# plan, done those with none, a plan that never had a row among them. plan rm
+# deletes a plan with its rows, events and decisions, and refuses while it
+# has an open row: close each as merged or dropped first.
+#
 # A text argument of "-" is read from stdin, so text never passes through the
 # shell, where quotes break it and the write gate reads it as a command.
 #
@@ -96,6 +102,7 @@ OPEN_STATES = [s for s in STATES if s not in ("merged", "dropped")]
 # Kept in step with the header's kinds line, which help prints.
 KINDS = ["brief", "progress", "handoff", "report", "newchat", "note", "scope", "seed", "blocked", "review",
          "proof", "finding", "checkpoint"]
+PLAN_FILTERS = {"open": "open > 0", "all": "1", "done": "open = 0"}
 WHOLE_KINDS = ("model", "brief", "progress")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 FENCE = re.compile(r"^\s*(```|~~~)")
@@ -411,13 +418,28 @@ def cmd_plan(db, ctx, argv):
                    (a.path and plan_file(ctx, a.path), a.title, plan["id"]))
         return ""
     if sub == "list":
-        args(rest)
+        which = args(rest, hi=1).positionals[0] or "open"
+        if which not in PLAN_FILTERS:
+            raise Usage(f"plan list takes {'|'.join(PLAN_FILTERS)}, not {which!r}")
         rows = db.execute(
-            f"""SELECT slug, title, path,
+            f"""SELECT * FROM (SELECT slug, title, path,
                   (SELECT count(*) FROM prs WHERE prs.plan = plans.id AND state NOT IN ({CLOSED_SQL})) AS open
-                FROM plans WHERE repo = ? ORDER BY slug""", (ctx["repo"],)).fetchall()
+                FROM plans WHERE repo = ?) WHERE {PLAN_FILTERS[which]} ORDER BY slug""", (ctx["repo"],)).fetchall()
         return table(rows, ["slug", "open", "title", "path"])
-    raise Usage("plan add <slug> --path P | plan set <slug> | plan list")
+    if sub == "rm":
+        slug = args(rest, lo=1).positionals[0]
+        with transaction(db):
+            plan = plan_row(db, ctx["repo"], slug)
+            still = [r["code"] for r in db.execute(
+                f"SELECT code FROM prs WHERE plan = ? AND state NOT IN ({CLOSED_SQL}) ORDER BY code", (plan["id"],))]
+            if still:
+                raise Usage(f"plan {slug} has open rows: {' '.join(still)}; close each first with: "
+                            f"state {slug} <code> merged|dropped")
+            for t in ("events", "decisions", "prs"):
+                db.execute(f"DELETE FROM {t} WHERE plan = ?", (plan["id"],))
+            db.execute("DELETE FROM plans WHERE id = ?", (plan["id"],))
+        return f"plan {slug} removed\n"
+    raise Usage("plan add <slug> --path P | plan set <slug> | plan list [open|all|done] | plan rm <slug>")
 
 
 def cmd_state(db, ctx, argv):
