@@ -57,6 +57,8 @@ Write `<dir>/review-insights-notes.json`:
 
 Rerun step 2's command with `--notes <dir>/review-insights-notes.json`. The digest is unchanged; skip it.
 
+Then archive the notes: write the same JSON, with `"args"` set to `$ARGUMENTS` (empty string when none), to `~/.claude/review-ledger/insights/<YYYY-MM-DD>.json`, today's date. The scratchpad copy does not outlive the session and the artifact keeps only the latest run; this is the history. A second run the same day overwrites that day's file.
+
 ## 5. Publish
 
 `render.mjs` wrote the page from this skill's `page.html` and step 1's ledger; the digest is its content as text.
