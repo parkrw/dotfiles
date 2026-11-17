@@ -186,6 +186,19 @@ class State(Case):
         self.assertIn("P3", out)
         self.assertIn("platform-overview  2     Platform overview", self.ok("plan", "list"))
 
+    def test_plan_list_filters_by_open_rows(self):
+        self.seed()
+        self.plan("finished")
+        self.row("finished", "P2", "merged")
+        self.plan("empty")
+        slugs = lambda *argv: re.findall(r"(?m)^(\S+) +\d", self.ok("plan", "list", *argv))
+        self.assertEqual(slugs(), ["empty", "finished", "platform-overview"])
+        self.assertEqual(slugs("all"), ["empty", "finished", "platform-overview"])
+        self.assertEqual(slugs("open"), ["platform-overview"])
+        self.assertEqual(slugs("done"), ["empty", "finished"])
+        self.assertIn("all|open|done", self.fails(1, "plan", "list", "closed"))
+        self.fails(1, "plan", "list", "open", "done")
+
     def test_log_since(self):
         self.seed()
         self.fails(1, "log", "platform-overview", "--since", "soon")
@@ -386,7 +399,7 @@ class Usage(Case):
     def test_bad_commands_fail_with_usage(self):
         self.fails(1, "frob")
         self.fails(1, "toString")
-        self.assertIn("plan add <slug> --path P | plan set <slug> | plan list", self.fails(1, "plan", "frob"))
+        self.assertIn("plan add <slug> --path P | plan set <slug> | plan list [all|open|done]", self.fails(1, "plan", "frob"))
         self.assertIn("flake add <test_id> [note] | list | rm <test_id> | match", self.fails(1, "flake", "frob"))
         self.fails(1, "show", "--frob")
 
@@ -410,7 +423,7 @@ class Help(Case):
         self.assertEqual(len(out.splitlines()), 3, out)
         self.assertEqual(self.ok("plan", "--help").splitlines(),
                          ["cklog plan add <slug> --path PLAN.md [--title T]",
-                          "cklog plan set <slug> [--path PLAN.md] [--title T]", "cklog plan list"])
+                          "cklog plan set <slug> [--path PLAN.md] [--title T]", "cklog plan list [all|open|done]"])
 
     def test_help_needs_no_owned_repo_and_opens_no_db(self):
         for tool, repo in (("cklog", "noorigin"), ("cklog", "van"), ("vanlog", "core")):
