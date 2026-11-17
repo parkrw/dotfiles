@@ -251,6 +251,9 @@
     },
     "claude-sonnet-5-5": {
       "effortLevel": "high"
+    },
+    "claude-fable-5-2": {
+      "effortLevel": "high"
     }
   },
   "askUserQuestionTimeout": "never",

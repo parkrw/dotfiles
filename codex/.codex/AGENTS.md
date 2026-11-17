@@ -2,24 +2,19 @@
 
 ## Subagents
 
-- Default model for all Agent tool calls: `claude-sonnet-4-6[1m]`. Always pass `model: "sonnet"` unless a specific task demands a stronger model and I approve the upgrade.
+- Default model for all Agent tool calls: `claude-sonnet[1m]`. Always pass `model: "sonnet"` unless a specific task demands a stronger model and I approve the upgrade.
 - Never more than 6 agents/workers total per session — subagents, tmux workers, and spawned sessions combined. If the work doesn't fit in 6, do it yourself or ask me.
 - Never launch anything with `--effort max`. Workers and spawned sessions run at this session's effort (omit the flag if unknown) on this session's exact model, never a tier lower, because correctness beats cost; Opus when this session runs Fable.
 - A task with a tasklog row runs at the row's `model` and `effort`, which `tasklog state` sets on every write from the row's size (S: opus/high; M, L, unsized: opus/xhigh; never below opus/high). Change them only with `tasklog state … --model/--effort`, never as a suggestion in a plan, task list or event.
 
 ## Working agreement
 
+- **Repo rules win.** When a project's CLAUDE.md/AGENTS.md conflicts with this file, follow the repo.
 - Do only what was asked. When you spot an adjacent bug or smell, surface it and ask before expanding scope.
-- Don't be sycophantic, it's annoying.
-- Don't flatter, it's patronizing.
-- Avoid happy talk and useless words. Get directly to the point.
 - When asked whether a plan or idea is good, give a verdict. Name its load-bearing assumption and say whether it holds; quantify the gap between claimed and real effort; then propose a runnable 1-hour version that tests the value proposition before the full build. A plan I wrote gets no deference for that.
 - **Inspect the machine before trusting the plan's framing of what's missing.** Check running processes, installed binaries, and existing hooks/config. The cheap solution is often already installed and unmentioned in the doc.
-- We're engineers, keep it succinct, imperative mood
-- Don't repeat yourself.
 - Before starting a task, read the docs whose trigger matches the work. Do not read all docs up front unless the repo explicitly requires it.
 - When citing repo files, include relative file paths with exact line numbers whenever possible. Prefer `path/to/file.ext:123` and use line ranges only when they add clarity.
-- **Repo rules win.** When a project's CLAUDE.md/AGENTS.md conflicts with this file, follow the repo.
 - When blocked, hand back one command block to run or one yes/no question — not a menu.
 
 ## Visual work
@@ -89,19 +84,3 @@ Switching or creating a branch with a dirty tree drags the uncommitted changes o
 - Do not hard-wrap prose. Write one paragraph per line, with a semantic line break only at a real paragraph boundary, and let the reader's editor soft-wrap at whatever width they choose. This applies to Markdown docs, chat replies, commit messages, and PR bodies.
 - A fixed wrap column like 72, 80, or 100 bakes in one width and reads awkwardly at every other one. Never insert newlines mid-sentence to hit a column.
 - Exceptions that legitimately keep newlines: fenced code blocks, tables, and list items, one line per item.
-
-## Read These Docs — When Triggered
-
-Do not read all docs up front unless the repo explicitly says to. Read the specific doc when its trigger matches.
-
-| When you are... | Read first |
-| --- | --- |
-| Starting a numbered task from `docs/todo/` | `docs/todo/README.md`, then the task file |
-| Writing code in a language with local examples or conventions | The repo's code examples, style guide, or language-specific doc |
-| Working on schema, types, files, formats, or state transitions | The repo's schema, data-model, or state-machine doc |
-| Writing or modifying error handling | The repo's error-handling doc |
-| Writing, sequencing, or debugging tests | The repo's TDD, testing, or build-sequence doc |
-| Unsure how to test something | The repo's testing guide for that language or subsystem |
-| Questioning whether architecture should change | The repo's architecture, scaling-threshold, or design-decision doc |
-| Working on Docker, CI/CD, release, hosting, or deployment | The repo's deployment, operations, or CI/CD doc |
-| Working inside a documented subsystem | That subsystem's README or architecture doc |
