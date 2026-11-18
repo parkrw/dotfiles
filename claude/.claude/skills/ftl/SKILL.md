@@ -77,10 +77,11 @@ Read `AGENTS.md`, `CLAUDE.md`, and `CONTRIBUTING.md`, whichever exist. A repo ru
 ## 2. Docs index
 
 ```
-grep -n -E '^#{1,3} ' README.md docs/*.md 2>/dev/null
+grep -rIn -E '^#{1,3} ' README.md docs/ 2>/dev/null
+grep -rIL -E '^#{1,3} ' docs/ 2>/dev/null
 ```
 
-The index is a few percent of the docs' size. Then:
+The first walks every file in docs/ and its subdirectories, skipping binaries. The second lists the text files there with no `#` heading (`.rst`, `.txt`, specs); judge those by path. The index is a few percent of the docs' size. Then:
 
 - If a doc opens with a table mapping docs to subsystems, read the table.
 - Select the docs whose headings or table rows name the task's nouns or the paths it will touch. Read a selected section from its heading line to the line before the next heading of the same or higher level, with `sed -n '<from>,<to>p'`. Read a whole doc only when most of its headings match.
