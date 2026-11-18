@@ -10,7 +10,7 @@
 #
 #   plan add <slug> --path PLAN.md [--title T]
 #   plan set <slug> [--path PLAN.md] [--title T]
-#   plan list [open|all|done]
+#   plan list [open|all|done] [--path]
 #   plan rm <slug>
 #   state <plan> <code> <state> [--ref HEADING --pr N --head sha --branch B --worktree W
 #                                --subject S --issue N --est S|M|L --owns GLOBS --deps CODES
@@ -19,7 +19,7 @@
 #         kinds: brief progress handoff report newchat note scope seed blocked review proof
 #                finding checkpoint
 #   decide <plan> <text|-> [--by who --quote Q]
-#   show [plan] [--all] [--json]
+#   show [plan] [--all] [--json] [--path]
 #   log <plan> [code] [--since date]
 #   flake add <test_id> [note] | list | rm <test_id> | match
 #   brief <plan> <code>
@@ -64,7 +64,8 @@
 # plan list shows the plans with an open row by default; all shows every
 # plan, done those with none, a plan that never had a row among them. plan rm
 # deletes a plan with its rows, events and decisions, and refuses while it
-# has an open row: close each as merged or dropped first.
+# has an open row: close each as merged or dropped first. plan list and show
+# print the plan file's path only with --path.
 #
 # A text argument of "-" is read from stdin, so text never passes through the
 # shell, where quotes break it and the write gate reads it as a command.
@@ -418,14 +419,15 @@ def cmd_plan(db, ctx, argv):
                    (a.path and plan_file(ctx, a.path), a.title, plan["id"]))
         return ""
     if sub == "list":
-        which = args(rest, hi=1).positionals[0] or "open"
+        a = args(rest, flags=("path",), hi=1)
+        which = a.positionals[0] or "open"
         if which not in PLAN_FILTERS:
             raise Usage(f"plan list takes {'|'.join(PLAN_FILTERS)}, not {which!r}")
         rows = db.execute(
             f"""SELECT * FROM (SELECT slug, title, path,
                   (SELECT count(*) FROM prs WHERE prs.plan = plans.id AND state NOT IN ({CLOSED_SQL})) AS open
                 FROM plans WHERE repo = ?) WHERE {PLAN_FILTERS[which]} ORDER BY slug""", (ctx["repo"],)).fetchall()
-        return table(rows, ["slug", "open", "title", "path"])
+        return table(rows, ["slug", "open", "title"] + (["path"] if a.path else []))
     if sub == "rm":
         slug = args(rest, lo=1).positionals[0]
         with transaction(db):
@@ -553,7 +555,7 @@ def cmd_decide(db, ctx, argv):
 
 
 def cmd_show(db, ctx, argv):
-    a = args(argv, flags=("all", "json"), lo=0, hi=1)
+    a = args(argv, flags=("all", "json", "path"), lo=0, hi=1)
     slug = a.positionals[0]
     where, params = ["plans.repo = ?"], [ctx["repo"]]
     if slug:
@@ -562,17 +564,21 @@ def cmd_show(db, ctx, argv):
     if not a.all:
         where.append(f"prs.state NOT IN ({CLOSED_SQL})")
     rows = [dict(r) for r in db.execute(
-        f"""SELECT plans.slug AS plan, prs.code, prs.ref, prs.state, prs.pr, prs.branch, prs.head, prs.subject,
+        f"""SELECT plans.slug AS plan, plans.path, prs.code, prs.ref, prs.state, prs.pr, prs.branch, prs.head, prs.subject,
                    prs.worktree, prs.issue, prs.est, prs.owns, prs.deps, prs.model, prs.effort, prs.updated
             FROM prs JOIN plans ON plans.id = prs.plan
             WHERE {" AND ".join(where)} ORDER BY plans.slug, prs.code""", params)]
+    if not a.path:
+        for r in rows:
+            del r["path"]
     if a.json:
         return json.dumps(rows, indent=2, ensure_ascii=False) + "\n"
     for r in rows:
         r["head"] = r["head"] and r["head"][:12]
         r["updated"] = r["updated"][:16]
         r["run"] = r["model"] and f"{r['model']}/{r['effort']}"
-    return table(rows, ["plan", "code", "state", "issue", "est", "run", "pr", "branch", "head", "updated", "subject"])
+    return table(rows, ["plan", "code", "state", "issue", "est", "run", "pr", "branch", "head", "updated", "subject"]
+                 + (["path"] if a.path else []))
 
 
 def cmd_log(db, ctx, argv):

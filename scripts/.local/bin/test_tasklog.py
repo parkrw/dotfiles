@@ -159,6 +159,19 @@ class State(Case):
         self.assertRegex(out, r"(?m)^platform-overview +P5 +ready +opus/xhigh +412 +overview-p5 +abc123def456 +"
                               r"\d{4}-\d\d-\d\dT\d\d:\d\d +web: glance row$")
 
+    def test_path_prints_only_with_the_flag(self):
+        self.seed()
+        plan_file = os.path.join(self.repos["core"], "PLAN.md")
+        for argv in (("plan", "list"), ("show",)):
+            with self.subTest(argv=argv):
+                self.assertNotIn("PLAN.md", self.ok(*argv))
+                self.assertNotIn("path", self.ok(*argv).splitlines()[0])
+                out = self.ok(*argv, "--path")
+                self.assertRegex(out.splitlines()[0], r" path$")
+                self.assertIn(plan_file, out)
+        self.assertNotIn("path", json.loads(self.ok("show", "--json"))[0])
+        self.assertEqual(json.loads(self.ok("show", "--json", "--path"))[0]["path"], plan_file)
+
     def test_every_clone_of_core_sees_the_same_plan(self):
         self.seed()
         for repo in ("core-ssh", "core-sshurl", "core-token"):
@@ -439,7 +452,7 @@ class Help(Case):
         self.assertEqual(len(out.splitlines()), 3, out)
         self.assertEqual(self.ok("plan", "--help").splitlines(),
                          ["cklog plan add <slug> --path PLAN.md [--title T]",
-                          "cklog plan set <slug> [--path PLAN.md] [--title T]", "cklog plan list [open|all|done]",
+                          "cklog plan set <slug> [--path PLAN.md] [--title T]", "cklog plan list [open|all|done] [--path]",
                           "cklog plan rm <slug>"])
 
     def test_help_needs_no_owned_repo_and_opens_no_db(self):
