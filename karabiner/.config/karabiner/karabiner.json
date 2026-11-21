@@ -4713,14 +4713,14 @@
             ]
           },
           {
-            "description": "Layer 3: right_control+a/b/c/f/i/m/p/s (Colemak) -> open Music/Brave/Chrome/Firefox/Messages/Slack/Passwords/Safari",
+            "description": "Layer 3: right_option+a/b/c/f/i/m/p/s (Colemak) -> open Music/Brave/Chrome/Firefox/Messages/Slack/Passwords/Safari",
             "manipulators": [
               {
                 "from": {
                   "key_code": "a",
                   "modifiers": {
                     "mandatory": [
-                      "right_control"
+                      "right_option"
                     ],
                     "optional": [
                       "caps_lock"
@@ -4743,7 +4743,7 @@
                   "key_code": "b",
                   "modifiers": {
                     "mandatory": [
-                      "right_control"
+                      "right_option"
                     ],
                     "optional": [
                       "caps_lock"
@@ -4766,7 +4766,7 @@
                   "key_code": "c",
                   "modifiers": {
                     "mandatory": [
-                      "right_control"
+                      "right_option"
                     ],
                     "optional": [
                       "caps_lock"
@@ -4789,7 +4789,7 @@
                   "key_code": "e",
                   "modifiers": {
                     "mandatory": [
-                      "right_control"
+                      "right_option"
                     ],
                     "optional": [
                       "caps_lock"
@@ -4812,7 +4812,7 @@
                   "key_code": "l",
                   "modifiers": {
                     "mandatory": [
-                      "right_control"
+                      "right_option"
                     ],
                     "optional": [
                       "caps_lock"
@@ -4835,7 +4835,7 @@
                   "key_code": "m",
                   "modifiers": {
                     "mandatory": [
-                      "right_control"
+                      "right_option"
                     ],
                     "optional": [
                       "caps_lock"
@@ -4858,7 +4858,7 @@
                   "key_code": "r",
                   "modifiers": {
                     "mandatory": [
-                      "right_control"
+                      "right_option"
                     ],
                     "optional": [
                       "caps_lock"
@@ -4881,7 +4881,7 @@
                   "key_code": "d",
                   "modifiers": {
                     "mandatory": [
-                      "right_control"
+                      "right_option"
                     ],
                     "optional": [
                       "caps_lock"
